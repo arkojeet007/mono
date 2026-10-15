@@ -404,7 +404,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("com.google.protobuf:protobuf-kotlin-lite:4.35.1")
+    implementation("com.google.protobuf:protobuf-kotlin-lite:4.36.2")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("androidx.credentials:credentials:1.6.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
