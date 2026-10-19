@@ -2364,13 +2364,20 @@ pub enum Key {
     TelemetryConsentBody,
     TelemetryConsentAccept,
     TelemetryConsentDecline,
+
+    // ------------------------------------------ the document's context menu
+    // The two rows a code block's menu shares with every other block. The
+    // menu's other rows (*Cut*, *Paste*, …) are still English literals and
+    // come here as they are touched.
+    MenuCopy,
+    MenuSaveAs,
 }
 
 impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1613] = [
+    pub const ALL: [Key; 1615] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -3984,6 +3991,8 @@ impl Key {
         Key::TelemetryConsentBody,
         Key::TelemetryConsentAccept,
         Key::TelemetryConsentDecline,
+        Key::MenuCopy,
+        Key::MenuSaveAs,
     ];
 }
 
@@ -12365,4 +12374,7 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     Row { key: Key::TelemetryConsentBody, en: "Koru can send anonymous usage data from this device: which features are used, how well the app runs, and basic facts about this computer such as its operating system and screen size. It's similar to what most websites collect when you visit them, and it never includes your documents, their names or anything you type.\n\nKoru is a desktop app that respects your privacy, so nothing is sent unless you say yes. If you like Koru, please consider turning it on: it shows us what matters most to you, so we can focus there. You can change this at any time in Settings.", es: "Koru puede enviar datos de uso anónimos desde este dispositivo: qué funciones se usan, cómo funciona la aplicación y datos básicos del equipo, como su sistema operativo y el tamaño de pantalla. Es parecido a lo que recopilan la mayoría de los sitios web cuando los visitas, y nunca incluye tus documentos, sus nombres ni nada de lo que escribes.\n\nKoru es una aplicación de escritorio que respeta tu privacidad, así que no se envía nada a menos que digas que sí. Si te gusta Koru, considera activarlo: nos muestra lo que más te importa para que podamos centrarnos en ello. Puedes cambiarlo en cualquier momento en Ajustes.", pt_br: "O Koru pode enviar dados de uso anônimos deste dispositivo: quais recursos são usados, como o aplicativo funciona e informações básicas do computador, como o sistema operacional e o tamanho da tela. É parecido com o que a maioria dos sites coleta quando você os visita, e nunca inclui seus documentos, os nomes deles nem nada que você digita.\n\nO Koru é um aplicativo para desktop que respeita sua privacidade, então nada é enviado a menos que você diga sim. Se você gosta do Koru, considere ativar: isso nos mostra o que mais importa para você, para que possamos focar nisso. Você pode mudar isso a qualquer momento em Configurações.", de: "Koru kann anonyme Nutzungsdaten von diesem Gerät senden: welche Funktionen genutzt werden, wie gut die App läuft und grundlegende Angaben zu diesem Computer wie Betriebssystem und Bildschirmgröße. Das ähnelt dem, was die meisten Websites bei einem Besuch erfassen, und Ihre Dokumente, deren Namen oder etwas, das Sie eingeben, sind niemals enthalten.\n\nKoru ist eine Desktop-App, die Ihre Privatsphäre respektiert, daher wird nichts gesendet, solange Sie nicht zustimmen. Wenn Ihnen Koru gefällt, schalten Sie es bitte ein: So sehen wir, was Ihnen am wichtigsten ist, und können uns darauf konzentrieren. Sie können das jederzeit in den Einstellungen ändern.", fr: "Koru peut envoyer des données d'utilisation anonymes depuis cet appareil : les fonctions utilisées, le bon fonctionnement de l'application et des informations de base sur cet ordinateur, comme son système d'exploitation et la taille de l'écran. C'est comparable à ce que collectent la plupart des sites web lors d'une visite, et cela n'inclut jamais vos documents, leurs noms ni ce que vous tapez.\n\nKoru est une application de bureau qui respecte votre vie privée : rien n'est envoyé sans votre accord. Si vous aimez Koru, pensez à l'activer : cela nous montre ce qui compte le plus pour vous, pour que nous puissions nous y consacrer. Vous pouvez changer d'avis à tout moment dans les Réglages.", ar: "يمكن لـ Koru إرسال بيانات استخدام مجهولة من هذا الجهاز: الميزات المستخدمة، ومدى جودة عمل التطبيق، ومعلومات أساسية عن هذا الكمبيوتر مثل نظام التشغيل وحجم الشاشة. وهي مشابهة لما تجمعه معظم المواقع الإلكترونية عند زيارتها، ولا تتضمن أبدًا مستنداتك أو أسماءها أو أي شيء تكتبه.\n\nKoru تطبيق لسطح المكتب يحترم خصوصيتك، لذلك لا يُرسل أي شيء ما لم توافق. إذا أعجبك Koru، فننصحك بتفعيل هذا الخيار: فهو يُظهر لنا ما يهمك أكثر حتى نركز عليه. يمكنك تغيير ذلك في أي وقت من الإعدادات.", zh_hans: "Koru 可以从此设备发送匿名使用数据：使用了哪些功能、应用的运行情况，以及这台电脑的基本信息，例如操作系统和屏幕尺寸。这与大多数网站在你访问时收集的数据类似，绝不包含你的文档、文档名称或你输入的任何内容。\n\nKoru 是一款尊重你隐私的桌面应用，因此除非你同意，否则不会发送任何数据。如果你喜欢 Koru，欢迎开启此选项：它能让我们了解你最看重什么，从而专注于此。你可以随时在设置中更改。", ja: "Koru はこの端末から匿名の使用状況データを送信できます。使われている機能、アプリの動作状況、OS や画面サイズなどこのコンピューターの基本情報です。多くのウェブサイトが訪問時に収集するものと同程度で、文書やその名前、入力した内容は一切含みません。\n\nKoru はプライバシーを尊重するデスクトップアプリなので、同意しない限り何も送信されません。Koru を気に入っていただけたら、ぜひオンにしてください。あなたにとって何が大切かがわかり、そこに力を注げます。設定でいつでも変更できます。" },
     Row { key: Key::TelemetryConsentAccept, en: "Share usage data", es: "Compartir datos de uso", pt_br: "Compartilhar dados de uso", de: "Nutzungsdaten teilen", fr: "Partager les données", ar: "مشاركة بيانات الاستخدام", zh_hans: "共享使用数据", ja: "使用状況データを共有" },
     Row { key: Key::TelemetryConsentDecline, en: "Don't share", es: "No compartir", pt_br: "Não compartilhar", de: "Nicht teilen", fr: "Ne pas partager", ar: "عدم المشاركة", zh_hans: "不共享", ja: "共有しない" },
+    // ------------------------------------------ the document's context menu
+    Row { key: Key::MenuCopy, en: "Copy", es: "Copiar", pt_br: "Copiar", de: "Kopieren", fr: "Copier", ar: "نسخ", zh_hans: "复制", ja: "コピー" },
+    Row { key: Key::MenuSaveAs, en: "Save as…", es: "Guardar como…", pt_br: "Salvar como…", de: "Speichern unter…", fr: "Enregistrer sous…", ar: "حفظ باسم…", zh_hans: "另存为…", ja: "名前を付けて保存…" },
 ];

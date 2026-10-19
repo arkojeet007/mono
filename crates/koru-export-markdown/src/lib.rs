@@ -380,14 +380,13 @@ fn emit_node(
         Kind::Code => {
             let lang = node.meta.language.as_deref().unwrap_or("");
             let body = node.content.as_text().unwrap_or("");
-            out.push_str("```");
-            out.push_str(lang);
-            out.push('\n');
-            out.push_str(body);
-            if !body.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str("```\n\n");
+            // The model spells the fence, and the clipboard's plain-text
+            // flavor spells it the same way, so a block exported and a block
+            // copied read alike elsewhere. It lengthens past any backtick run
+            // the body holds; three was once written unconditionally, and a
+            // body quoting a fence ended the block early.
+            out.push_str(&koru_core::markdown::fenced_code(lang, body));
+            out.push_str("\n\n");
         }
         Kind::Table => {
             let body = node.content.as_text().unwrap_or("").trim_end();

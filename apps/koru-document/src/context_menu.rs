@@ -652,7 +652,8 @@ fn full_rows(
                     .with_icon(icons::FILE)
                     .with_shortcut(click_hint()),
                 menu::Row::item("Reveal in File Explorer").with_icon(icons::FOLDER),
-                menu::Row::item("Save as\u{2026}").with_icon(icons::FILE_ARROW_UP),
+                menu::Row::item(koru_i18n::t(lang, koru_i18n::Key::MenuSaveAs))
+                    .with_icon(icons::FILE_ARROW_UP),
                 menu::Row::Divider,
                 menu::Row::item("Remove").with_icon(icons::TRASH),
             ];
@@ -672,7 +673,7 @@ fn full_rows(
             .with_icon(icons::CUT)
             .with_shortcut(menu::Chord::Id(koru_keys::ShortcutId::Cut))
             .enabled(has_target),
-        menu::Row::item("Copy")
+        menu::Row::item(koru_i18n::t(lang, koru_i18n::Key::MenuCopy))
             .with_icon(icons::COPY)
             .with_shortcut(menu::Chord::Id(koru_keys::ShortcutId::Copy))
             .enabled(has_target),

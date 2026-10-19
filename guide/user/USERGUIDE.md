@@ -1828,6 +1828,17 @@ copied, exactly where they were in the text.
 Inside Koru you get everything back exactly. Leaving through the system
 clipboard, plain text is the universal half; documents also write HTML Format
 so Word, OneNote and Google Docs keep headings, marks and embedded pictures.
+
+A **code block** leaves whole. In the plain text it is a fenced Markdown block
+— three backticks and its language on one line, every line of the block as
+written, three backticks again — so the next editor reads a code block rather
+than loose lines, and pasting that text back into Koru gives the same block
+with the same language. A block that itself contains three backticks gets a
+longer fence, so it still ends where it should. Where Koru writes HTML Format,
+the block is a `<pre><code>` element naming the language. Inside Koru, a copied
+code block keeps its language wherever it lands, alone or in the middle of a
+selection of paragraphs.
+
 Ordinary `Ctrl+V` also reads that rich HTML on the way in: semantic bold,
 italic, underline, strikethrough and inline-code spans become Koru marks, while
 headings, lists and quotes keep their block structure. Semantic HTML links

@@ -1425,6 +1425,29 @@ mod tests {
         );
     }
 
+    /// The other half of a round trip through another application: a code
+    /// block leaves Koru as the fence `koru_core::markdown::fenced_code`
+    /// writes (the editor's clipboard test pins that), and that fence parses
+    /// back into one code block with the same language and the same body —
+    /// including a body that itself quotes a fence, which is what the
+    /// lengthened fence is for.
+    #[test]
+    fn a_fenced_block_as_the_clipboard_writes_it_parses_back_whole() {
+        for (language, body) in [
+            ("rust", "fn main() {\n    println!(\"hi\");\n}"),
+            ("md", "a\n```\nb"),
+            ("", "x = 1"),
+        ] {
+            let blocks = parse(&koru_core::markdown::fenced_code(language, body));
+            assert_eq!(blocks.len(), 1, "{language:?} {body:?}: {blocks:?}");
+            let expected = (!language.is_empty()).then(|| language.to_owned());
+            assert!(
+                matches!(&blocks[0], Block::Text(TextBlock { kind: TextKind::Code { language }, text, .. }) if *language == expected && text == body),
+                "{language:?} {body:?}: {blocks:?}"
+            );
+        }
+    }
+
     #[test]
     fn local_image_paths_are_relative_and_percent_decoded() {
         assert_eq!(

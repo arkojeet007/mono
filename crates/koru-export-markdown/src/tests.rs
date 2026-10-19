@@ -56,6 +56,42 @@ fn heading_quote_code_divider_and_table() {
     assert!(md.contains("| a | b |"));
 }
 
+/// A code block whose body quotes a three-backtick fence is wrapped in a
+/// four-backtick one, or the body would close the block on its own line.
+#[test]
+fn a_code_body_holding_a_fence_gets_a_longer_fence() {
+    let (mut ws, root) = with_doc("Doc");
+    let mut code = Node::code("a\n```\nb").unwrap();
+    code.meta.language = Some("md".into());
+    ws.insert(Parent::Node(root), code).unwrap();
+
+    let md = render_document(&ws, &NoBlobs, "x.assets").unwrap().markdown;
+    // The same bytes the clipboard's plain-text flavor writes for this body:
+    // both come from `koru_core::markdown::fenced_code`, and the editor's
+    // clipboard test pins this literal too.
+    assert!(md.contains("````md\na\n```\nb\n````\n"), "{md}");
+    assert_eq!(
+        md.matches("````").count(),
+        2,
+        "exactly one opening and one closing fence of four: {md}"
+    );
+}
+
+/// ...and a four-backtick run in the body needs five.
+#[test]
+fn a_code_body_holding_four_backticks_gets_five() {
+    let (mut ws, root) = with_doc("Doc");
+    ws.insert(Parent::Node(root), Node::code("````\nraw\n````").unwrap())
+        .unwrap();
+
+    let md = render_document(&ws, &NoBlobs, "x.assets").unwrap().markdown;
+    assert!(md.contains("`````\n````\nraw\n````\n`````\n"), "{md}");
+    assert!(
+        md.contains(&koru_core::markdown::fenced_code("", "````\nraw\n````")),
+        "the exporter writes exactly the shared helper's block: {md}"
+    );
+}
+
 #[test]
 fn checkbox_list_and_task_tree() {
     let (mut ws, root) = with_doc("Tasks");
