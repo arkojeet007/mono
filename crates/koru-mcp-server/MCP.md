@@ -141,7 +141,7 @@ and as a test held them against real values. A failure is
 | `list_files`, `search_files` | `{ files: [file] }`, a file being `{ file_id, name, mime, size?, hash, root_node_id, note_id? }` |
 | `get_file` | a file |
 | `read_file` | `{ file, offset, length, total_bytes, eof, base64 }` |
-| `read_document`, `create_document` | `{ document_id, root_node_id, revision, schema_version, nodes }` — `nodes` in preorder, each with identity, parent, ordinal, depth, kind, typed metadata and typed content |
+| `read_document`, `create_document` | `{ document_id, root_node_id, revision, schema_version, nodes }` — `nodes` in preorder, each with identity, parent, ordinal, depth, kind, typed metadata and typed content; a `code` node whose language is `mermaid` also carries `diagram` ([Diagrams](#diagrams)) |
 | `ensure_file_note` | `{ note_id, created }` |
 | `edit_document`, `restore_document_version` | `{ revision, history: entry }`, an entry being `{ id, document, version, reason, recorded_at, label?, message?, boundary?, pinned }` |
 | `extract_to_document` | `{ document_id, document_revision, source_revision, source_link_node_id, history: { document: entry, source: entry } }` |
@@ -266,7 +266,9 @@ exists after a concurrent split but now names the other half: Koru returns
 
 Reads return an exhaustive preorder tree. Each row carries its node id, parent,
 derived ordinal, depth, kind, metadata, typed content, attributes, and text
-runs. The opaque `revision` is the precondition for a later mutation.
+runs; a `mermaid` code block also carries `diagram`, whether its text draws
+([Diagrams](#diagrams)). The opaque `revision` is the precondition for a later
+mutation.
 
 `schema_version` is the document's Koru schema version as a reader should treat
 it: an integer, always, and `1` for a document that records none. Recording none
@@ -346,7 +348,9 @@ including nesting and inline objects.
 `set_language` sets a code block's grammar (`"rust"`, `"py"`, …) and takes
 `null` to restore auto-detect; on any kind other than `code` it is refused
 rather than silently ignored, because an agent that believed it had labelled a
-block would otherwise have no way to learn otherwise.
+block would otherwise have no way to learn otherwise. `"mermaid"` is the one
+language that changes what a block *is*: the block becomes a diagram, drawn
+from its text ([Diagrams](#diagrams)).
 
 **Seeding takes no attribute operation.** `set_attribute`, `clear_attribute`,
 `add_tag` and `remove_tag` are live-edit operations only. This is a decision,
@@ -370,6 +374,72 @@ has since changed. Reusing the key for different input returns
 `idempotency_conflict`; after expiry the key may name a new request. Omitting
 the key is convenient for interactive use but a caller retry after an unknown
 transport outcome can create a duplicate.
+
+## Diagrams
+
+A diagram is a `code` block whose language is `mermaid`. To write one, `insert`
+a `code` block whose text is the Mermaid source, then `set_language` it with
+`"mermaid"` — in one `edit_document` batch, or in `create_document`'s
+`initial_operations`. Nothing else is needed and there is no diagram tool: the
+text is the diagram, it draws in every open view as it arrives, and a read
+tells you whether it drew.
+
+**What draws today.** Flowcharts — a `flowchart` or `graph` header, in any
+direction, `subgraph` groups included — and sequence diagrams, with their
+notes, activations and `loop`, `alt`/`else` and `opt` frames. Every other
+Mermaid kind (`pie`, `gantt`, `classDiagram`, …) keeps its text and is shown as
+text, with a note that it is not drawn. A flowchart draws up to **500 nodes**
+and a sequence diagram up to **500 messages**; over that the block shows its
+text. Those two numbers are working values that measurement may change; the
+status below reports the count, so a client never has to know them.
+
+**Koru's theme and font decide how a diagram looks.** Styling and interaction
+directives — `%%{init: …}%%`, `classDef`, `class`, `style`, `linkStyle` and
+`click` — are ignored for drawing but preserved verbatim in the text, so a
+source brought from elsewhere round-trips unchanged. Do not write them to
+change the look; they have no effect on it.
+
+### Reading whether a diagram draws
+
+Every node projection this surface returns — `read_document`, the result of
+`create_document`, and the `before`/`after` nodes in a
+`compare_document_versions` change — carries one more field on a `code` node
+whose `language` is `mermaid`: **`diagram`**, computed from the node's text as
+read. No other node has it. It is a parse and a count, never a layout: it says
+whether the block draws, not how large it is drawn. `edit_document` returns no
+nodes, so read the document after an edit to see whether the change drew.
+
+`diagram.status` is one of five values; the other fields depend on it:
+
+| `status` | beside it | meaning, and what to do |
+| --- | --- | --- |
+| `draws` | `kind` — `flowchart` or `sequence` — and its counts: `nodes`, `edges`, `groups` for a flowchart; `participants`, `messages`, `notes` for a sequence diagram | The block draws. Nothing to do. |
+| `not_parsed` | `line`, `message`, `code` | The parser could not read the text. `line` is the 1-based line of the error in the text as read, front matter included — for a missing `end`, the last non-empty line; `message` is the parser's own English; `code` is its stable diagnostic code. Fix that line with `replace_text` and read again. |
+| `kind_not_drawn` | `kind` — the Mermaid type id, or `null` when the text opens with no diagram keyword | Not a kind Koru draws yet. The text stays and is shown as text; leave it, or rewrite it as a flowchart or a sequence diagram. |
+| `too_large` | `kind`, `count` | Over the size limit. `count` is the nodes of a flowchart or the messages of a sequence diagram, and `0` when the source was too large to parse at all. Draw fewer boxes or messages, or split the diagram across blocks. |
+| `empty` | — | The block has no text yet. Write the Mermaid source with `replace_text`. |
+
+```jsonc
+{"status":"draws","kind":"flowchart","nodes":10,"edges":12,"groups":2}
+{"status":"draws","kind":"sequence","participants":4,"messages":12,"notes":2}
+{"status":"not_parsed","line":7,"message":"Diagram parse error …","code":"merman.parse.diagram_parse"}
+{"status":"kind_not_drawn","kind":"pie"}
+{"status":"kind_not_drawn","kind":null}
+{"status":"too_large","kind":"flowchart","count":1000}
+{"status":"empty"}
+```
+
+The values are codes, not sentences — `status`, `kind` and `code` are stable
+tokens to branch on — and only `message` is prose, the parser's own, because
+it names the token the parser tripped on and nothing else could. A block with
+`language` other than `mermaid` is never inspected, whatever its text holds:
+to draw a flowchart that sits in a `code` block today, `set_language` it.
+
+`draws` is a statement about the text: it parsed, it is a kind Koru draws, and
+it is within the limits. One case lies outside it — a diagram within the limits
+whose layout still takes longer than Koru allows shows as too large in the view
+while this field says `draws`. The status is computed without laying out, which
+is what keeps a read cheap, so that case is reported by the view alone.
 
 ## Inline objects
 

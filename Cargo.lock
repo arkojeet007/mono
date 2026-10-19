@@ -6332,6 +6332,7 @@ dependencies = [
  "koru-api-client",
  "koru-channel",
  "koru-core",
+ "koru-diagram",
  "koru-history",
  "koru-store-core",
  "koru-store-wire",

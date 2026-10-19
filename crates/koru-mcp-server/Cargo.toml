@@ -26,6 +26,9 @@ koru-store-wire = { path = "../koru-store-wire" }
 chrono = { workspace = true }
 koru-core = { path = "../koru-core" }
 koru-workspace = { path = "../koru-workspace" }
+# Whether a `mermaid` code block draws, for the `diagram` field a read carries.
+# It inspects without laying out, so a read stays cheap; no renderer is linked.
+koru-diagram = { path = "../koru-diagram" }
 base64 = "0.22"
 
 [dev-dependencies]

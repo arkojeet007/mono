@@ -2664,6 +2664,8 @@ enum EditOperation {
     },
     /// Set the grammar a code block highlights as (`"rust"`, `"py"`, …).
     /// `null` restores auto-detect. The target must be a code block.
+    /// `"mermaid"` makes the block a diagram, drawn from its text; a read then
+    /// carries `diagram`, whether it draws (`MCP.md`, Diagrams).
     SetLanguage {
         node_id: String,
         /// Exact current text returned by `read_document`.
@@ -2805,7 +2807,7 @@ enum InitialOperation {
         done: bool,
     },
     /// Set the grammar of a code block inserted earlier in this batch.
-    /// `null` restores auto-detect.
+    /// `null` restores auto-detect; `"mermaid"` makes the block a diagram.
     SetLanguage {
         node_id: String,
         expected: String,
@@ -3978,7 +3980,7 @@ fn node_json(
         } => json!({"type":"blob", "hash":&hash.0, "mime":mime, "width":width, "height":height}),
         Content::Embed { target } => json!({"type":"embed", "target":ref_json(target)}),
     };
-    json!({
+    let mut value = json!({
         "node_id":node.id.to_storage(),
         "parent_id":match parent { Parent::Root => None, Parent::Node(p) => Some(p.to_storage()) },
         "ordinal":ordinal,
@@ -4002,7 +4004,43 @@ fn node_json(
             "restored_by":node.meta.restored_by,
         },
         "content":content,
-    })
+    });
+    if let Some(diagram) = diagram_json(node) {
+        value["diagram"] = diagram;
+    }
+    value
+}
+
+/// The `language` of a code block that is a diagram. Compared exactly, case
+/// included, because it is what `set_language` stores and nothing normalises
+/// it on the way in.
+const MERMAID_LANGUAGE: &str = "mermaid";
+
+/// The `diagram` field of a `mermaid` code block: whether its text draws, in
+/// the shape `koru_diagram::Status` serialises to — `draws` with its counts,
+/// or `not_parsed` at a line, `kind_not_drawn`, `too_large` or `empty`
+/// (`MCP.md`, Diagrams). `None` for every other node, so the field is absent
+/// rather than `null` where it does not apply.
+///
+/// It is a parse and a count against the default limits, never a layout,
+/// which is what makes it affordable once per mermaid block on every read.
+/// `node_json` serves `read_document`, `create_document`'s result and the
+/// nodes of a `compare_document_versions` change, and each of them gets the
+/// field for the same reason: an agent that wrote a diagram learns whether it
+/// drew from the read it was going to make anyway. Serialising a `Status`
+/// cannot fail, so the `ok()` is a type conversion, not a swallowed error.
+fn diagram_json(node: &Node) -> Option<Value> {
+    if node.kind != Kind::Code || node.meta.language.as_deref() != Some(MERMAID_LANGUAGE) {
+        return None;
+    }
+    let Content::Text { text, .. } = &node.content else {
+        return None;
+    };
+    serde_json::to_value(koru_diagram::inspect(
+        text,
+        &koru_diagram::Limits::default(),
+    ))
+    .ok()
 }
 
 /// One page of `list_tasks`, from the store's answer.
@@ -5422,6 +5460,33 @@ mod tests {
         }
     }
 
+    /// The contract teaches diagrams where an agent writing content looks: a
+    /// Diagrams section that names the language which makes a block one, and
+    /// every status a read can carry, so a client reading `diagram` finds each
+    /// value it may branch on explained.
+    #[test]
+    fn the_model_contract_explains_every_diagram_status() {
+        let guide = read_model_document().expect("canonical MCP guide");
+        let start = guide
+            .find("## Diagrams")
+            .expect("crates/koru-mcp-server/MCP.md must have a Diagrams section");
+        let section = &guide[start..];
+        assert!(section.contains("`\"mermaid\"`"), "the language is named");
+        assert!(section.contains("`diagram`"), "the field is named");
+        for status in [
+            "draws",
+            "not_parsed",
+            "kind_not_drawn",
+            "too_large",
+            "empty",
+        ] {
+            assert!(
+                section.contains(&format!("`{status}`")),
+                "crates/koru-mcp-server/MCP.md must explain the diagram status `{status}`"
+            );
+        }
+    }
+
     #[test]
     fn tool_results_have_text_and_structured_content() {
         let server = KoruMcp::new(Arc::new(Fake), RequestContext::local());
@@ -5887,6 +5952,271 @@ mod tests {
         assert!(error.message.contains("earlier insert"));
     }
 
+    // -------------------------------------------------------------- diagrams
+    //
+    // A `mermaid` code block reads back with `diagram`: whether its text
+    // draws, in the shape `koru_diagram::Status` serialises to and `MCP.md`
+    // explains under Diagrams. The texts are koru-diagram's own fixtures,
+    // included rather than copied, so the two crates cannot drift apart on
+    // what a showcase contains. Nothing here touches a disk, a store or a
+    // renderer: a document in memory, projected the way a tool projects it.
+
+    const FLOWCHART_SHOWCASE: &str =
+        include_str!("../../koru-diagram/tests/fixtures/flowchart-showcase.mmd");
+    const SEQUENCE_SHOWCASE: &str =
+        include_str!("../../koru-diagram/tests/fixtures/sequence-showcase.mmd");
+    const BAD_ARROW_LINE7: &str =
+        include_str!("../../koru-diagram/tests/fixtures/bad-arrow-line7.mmd");
+    const PIE: &str = include_str!("../../koru-diagram/tests/fixtures/pie.mmd");
+    const EMPTY_DIAGRAM: &str = include_str!("../../koru-diagram/tests/fixtures/empty.mmd");
+
+    /// One node **as `read_document` publishes it** — through `document_json`,
+    /// so an assertion is about the projection a tool sees rather than a
+    /// second reading of the model.
+    fn published_node(doc: &WorkspaceDoc, node: NodeId) -> Value {
+        let published = document_json(StoreDocumentId::new(), doc).unwrap();
+        published["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["node_id"] == node.to_storage())
+            .expect("the node is in the projection")
+            .clone()
+    }
+
+    /// The `diagram` field of a code block holding `text` under `language`,
+    /// or `None` when the projection carries no such field.
+    fn published_diagram(language: Option<&str>, text: &str) -> Option<Value> {
+        let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
+        let root = doc
+            .insert(Parent::Root, Node::document("Diagrams").unwrap())
+            .unwrap();
+        let block = doc
+            .insert(Parent::Node(root), Node::code(text).unwrap())
+            .unwrap();
+        doc.set_language(block, language).unwrap();
+        published_node(&doc, block).get("diagram").cloned()
+    }
+
+    /// `flowchart TD` with `n` boxes in one chain, one arrow per line.
+    fn chain(n: usize) -> String {
+        let mut text = String::from("flowchart TD\n");
+        for i in 1..n {
+            text.push_str(&format!("    N{} --> N{i}\n", i - 1));
+        }
+        text
+    }
+
+    #[test]
+    fn a_flowchart_that_draws_reads_back_with_its_counts() {
+        assert_eq!(
+            published_diagram(Some("mermaid"), FLOWCHART_SHOWCASE),
+            Some(json!({
+                "status": "draws", "kind": "flowchart", "nodes": 10, "edges": 12, "groups": 2
+            }))
+        );
+    }
+
+    #[test]
+    fn a_sequence_diagram_that_draws_reads_back_with_its_counts() {
+        assert_eq!(
+            published_diagram(Some("mermaid"), SEQUENCE_SHOWCASE),
+            Some(json!({
+                "status": "draws", "kind": "sequence",
+                "participants": 4, "messages": 12, "notes": 2
+            }))
+        );
+    }
+
+    /// The line and the code are pinned. The message is the parser's own
+    /// English, relayed and not owned here, so it is held to being present
+    /// rather than to its wording.
+    #[test]
+    fn a_diagram_that_does_not_parse_names_its_line() {
+        let diagram = published_diagram(Some("mermaid"), BAD_ARROW_LINE7).expect("a mermaid block");
+        assert_eq!(diagram["status"], "not_parsed");
+        assert_eq!(diagram["line"], 7);
+        assert_eq!(diagram["code"], "merman.parse.diagram_parse");
+        assert!(
+            diagram["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty()),
+            "{diagram}"
+        );
+        assert_eq!(diagram.as_object().unwrap().len(), 4, "{diagram}");
+    }
+
+    #[test]
+    fn a_kind_koru_does_not_draw_reads_back_as_such() {
+        assert_eq!(
+            published_diagram(Some("mermaid"), PIE),
+            Some(json!({"status": "kind_not_drawn", "kind": "pie"}))
+        );
+        // Prose under the mermaid label: no diagram keyword at all.
+        assert_eq!(
+            published_diagram(Some("mermaid"), "hello world"),
+            Some(json!({"status": "kind_not_drawn", "kind": null}))
+        );
+    }
+
+    #[test]
+    fn a_diagram_over_the_limit_reads_back_too_large() {
+        assert_eq!(
+            published_diagram(Some("mermaid"), &chain(1000)),
+            Some(json!({"status": "too_large", "kind": "flowchart", "count": 1000}))
+        );
+    }
+
+    #[test]
+    fn an_empty_diagram_block_reads_back_empty() {
+        assert_eq!(EMPTY_DIAGRAM, "");
+        assert_eq!(
+            published_diagram(Some("mermaid"), EMPTY_DIAGRAM),
+            Some(json!({"status": "empty"}))
+        );
+    }
+
+    /// Only a code block labelled exactly `mermaid` is inspected: not another
+    /// grammar holding a flowchart, not an unlabelled block, not a differently
+    /// cased label — `set_language` stores what it is given — and never a
+    /// paragraph or the title, whatever their text says.
+    #[test]
+    fn only_a_mermaid_code_block_carries_a_diagram() {
+        assert_eq!(published_diagram(Some("rust"), FLOWCHART_SHOWCASE), None);
+        assert_eq!(published_diagram(None, FLOWCHART_SHOWCASE), None);
+        assert_eq!(published_diagram(Some("Mermaid"), FLOWCHART_SHOWCASE), None);
+
+        let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
+        let root = doc
+            .insert(Parent::Root, Node::document("flowchart LR").unwrap())
+            .unwrap();
+        let paragraph = doc
+            .insert(Parent::Node(root), Node::paragraph("flowchart LR").unwrap())
+            .unwrap();
+        assert!(published_node(&doc, root).get("diagram").is_none());
+        assert!(published_node(&doc, paragraph).get("diagram").is_none());
+    }
+
+    /// A seed batch is the other way a diagram is written, and
+    /// `create_document` answers with the same projection a read does, so the
+    /// status is in the creation result before any read.
+    #[test]
+    fn a_seeded_diagram_is_in_the_creation_projection() {
+        let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
+        let root = doc
+            .insert(Parent::Root, Node::document("Seeded").unwrap())
+            .unwrap();
+        let block = NodeId::new();
+        let context = InlineContext {
+            profile: CoreProfileId::new(),
+            workspace: CoreWorkspaceId::new(),
+            documents: HashMap::new(),
+            files: HashMap::new(),
+            attrs: AttrContext::default(),
+        };
+        apply_initial_ops(
+            &mut doc,
+            root,
+            &[
+                InitialOperation::Insert {
+                    node_id: block.to_storage(),
+                    parent_id: root.to_storage(),
+                    after_node_id: None,
+                    kind: InsertKind::Code,
+                    text: PIE.into(),
+                },
+                InitialOperation::SetLanguage {
+                    node_id: block.to_storage(),
+                    expected: PIE.into(),
+                    language: Some("mermaid".into()),
+                },
+            ],
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            published_node(&doc, block)["diagram"],
+            json!({"status": "kind_not_drawn", "kind": "pie"})
+        );
+    }
+
+    /// The whole path an agent takes, through the embedded store: `insert` a
+    /// code block and `set_language` it `mermaid` in one `edit_document`
+    /// batch, then read. The status rides on the read; nothing is written
+    /// back, and the nodes beside the block stay as they were.
+    #[test]
+    fn a_diagram_written_through_edit_document_reads_back_drawing() {
+        let store = MemoryStore::new();
+        let page = store.add_page("Diagrams");
+        let backend = store.backend();
+        let workspace_id = store.workspace.to_storage();
+        let document_id = page.to_storage();
+
+        let read = call(
+            &backend,
+            "read_document",
+            json!({"workspace_id": workspace_id, "document_id": document_id}),
+        )
+        .unwrap();
+        let block = NodeId::new().to_storage();
+        call(
+            &backend,
+            "edit_document",
+            json!({
+                "workspace_id": workspace_id,
+                "document_id": document_id,
+                "base_revision": read["revision"],
+                "operations": [
+                    {
+                        "op": "insert",
+                        "node_id": block,
+                        "parent_id": read["root_node_id"],
+                        "after_node_id": null,
+                        "kind": "code",
+                        "text": SEQUENCE_SHOWCASE,
+                    },
+                    {
+                        "op": "set_language",
+                        "node_id": block,
+                        "expected": SEQUENCE_SHOWCASE,
+                        "language": "mermaid",
+                    },
+                ]
+            }),
+        )
+        .unwrap();
+
+        let reread = call(
+            &backend,
+            "read_document",
+            json!({"workspace_id": workspace_id, "document_id": document_id}),
+        )
+        .unwrap();
+        let nodes = reread["nodes"].as_array().unwrap();
+        let node = nodes
+            .iter()
+            .find(|node| node["node_id"] == block)
+            .expect("the block is in the read");
+        assert_eq!(node["kind"], "code");
+        assert_eq!(node["metadata"]["language"], "mermaid");
+        assert_eq!(node["content"]["text"], SEQUENCE_SHOWCASE);
+        assert_eq!(
+            node["diagram"],
+            json!({
+                "status": "draws", "kind": "sequence",
+                "participants": 4, "messages": 12, "notes": 2
+            })
+        );
+        for other in nodes.iter().filter(|node| node["node_id"] != block) {
+            assert!(other.get("diagram").is_none(), "{other}");
+        }
+        // The store holds exactly what was written: the block and its
+        // language, and no status.
+        let stored = WorkspaceDoc::from_snapshot(&store.snapshots.lock().unwrap()[&page]).unwrap();
+        let stored_block = stored.read(NodeId::parse(&block).unwrap()).unwrap();
+        assert_eq!(stored_block.meta.language.as_deref(), Some("mermaid"));
+    }
+
     // ------------------------------------------------------------ attributes
 
     /// A document holding one task, and an empty resolution context. Every
@@ -5925,13 +6255,7 @@ mod tests {
     /// whole point of the round trip: the two functions have to agree, so the
     /// assertion must go through the projection a tool actually sees.
     fn published_attributes(doc: &WorkspaceDoc, node: NodeId) -> Vec<Value> {
-        let published = document_json(StoreDocumentId::new(), doc).unwrap();
-        published["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|value| value["node_id"] == node.to_storage())
-            .expect("the node is in the projection")["content"]["attributes"]
+        published_node(doc, node)["content"]["attributes"]
             .as_array()
             .cloned()
             .unwrap_or_default()
@@ -8108,6 +8432,13 @@ mod tests {
             resource_json[0]["text"]
                 .as_str()
                 .is_some_and(|text| text.contains("# MCP semantics"))
+        );
+        // The section an agent writing a diagram reads reaches it over the
+        // wire, not only from the checked-out file.
+        assert!(
+            resource_json[0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("## Diagrams"))
         );
 
         let documentation = client
