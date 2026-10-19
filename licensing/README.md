@@ -31,6 +31,7 @@ the MPL-2.0 crates among them.
 | **Koru Cloud services**: the hosted API, account, storage and metrics services | **Proprietary**, © Koru Works, Inc., all rights reserved | Not in this repository; Koru Works keeps them in a private one |
 | `third-party/patches/onenote_parser.patch` (to `onenote_parser` 2.0.0, fetched from crates.io) | MPL-2.0, © Markus Siemens and contributors; what Koru changes in `onenote_parser.md` | The crate's own license; the source is fetched, not committed ([third-party/](../third-party/README.md)); not headed by us |
 | `third-party/patches/sherpa-onnx*.patch` (to `sherpa-onnx`, `sherpa-onnx-sys` 1.13.6, fetched from crates.io) | Apache-2.0, © the sherpa-onnx authors; Koru's TTS removal in `sherpa-onnx.md` | Each crate's own `LICENSE`, which its `.crate` carries; not headed by us |
+| `third-party/patches/merman-render.patch` (to `merman-render` 0.9.0, fetched from crates.io) | MIT OR Apache-2.0, © the merman authors; the sequence geometry Koru adds to the layout JSON in `merman-render.md` | The crate's own `LICENSE-MIT` and `LICENSE-APACHE`, which its `.crate` carries; not headed by us |
 | `crates/koru-blocks/assets/TypeScript.sublime-syntax` (fetched, not committed) | Apache-2.0, © Microsoft (TypeScript-Sublime-Plugin, converted by `bat`) | `README.md` beside it; the text is `crates/koru-release/licences/bundled/typescript-grammar.txt` |
 | The Koru name, logo and icons | Not licensed; trademarks | [TRADEMARKS.md](../TRADEMARKS.md) |
 
@@ -82,7 +83,8 @@ cargo test -p koru-release generates_the -- --ignored
 ### A crate without a license file
 
 Sixty-seven shipped crates, across every platform, publish no license file in
-their crates.io package.
+their crates.io package, and so does `selectors` 0.37.0, which ships once
+something links `koru-diagram`.
 Each has `crates/koru-release/licences/crates/<crate>.txt`: a header
 (`Crate`, `Checked` — the version looked at, `License` — one the crate declares,
 `Disposition`, `Source`, and `File` or `Issue`), `---`, then the text the
@@ -96,7 +98,7 @@ notices print.
   directory up to the repository root). A note says so when the published
   commit is not public or not recorded and an older, unchanged revision of the
   file was used.
-- **`Disposition: judgment`** (10 crates): upstream has no license file at all.
+- **`Disposition: judgment`** (11 crates): upstream has no license file at all.
   The text is the standard one, with the holder from the best evidence (a
   `COPYING` line, the Cargo authors, the repository owner), and `Issue` points
   at a request for a license file drafted in

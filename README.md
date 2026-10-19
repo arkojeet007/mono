@@ -113,7 +113,7 @@ You need:
 
 - **Rust**, from [rustup](https://rustup.rs). The checked-in
   `rust-toolchain.toml` selects Rust 1.99.0 for development and release builds;
-  rustup installs it automatically. The minimum supported version is 1.92,
+  rustup installs it automatically. The minimum supported version is 1.95,
   declared in `Cargo.toml` and tested in CI. Windows also needs the MSVC build
   tools.
 - **sccache**, which is not optional: `.cargo/config.toml` sets it as the

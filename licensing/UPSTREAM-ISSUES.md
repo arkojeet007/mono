@@ -108,6 +108,25 @@ license text and was closed without adding it, so this is a new issue. File at
 > publish a release that includes it? Until then we reproduce the standard MIT
 > text with "Copyright (c) Steven Sheldon", from the Cargo authors.
 
+## stylo
+
+Crate `selectors` 0.37.0 (reached through `lol_html`, from `merman-core`; the
+0.38.0 package is the same). File at
+<https://github.com/servo/stylo/issues/new>.
+
+> **Title:** Add the MPL-2.0 license text to the repository and the `selectors` package
+>
+> Hello, and thank you for stylo. We ship `selectors` (through lol_html) in a
+> desktop app and reproduce the license of every crate we distribute.
+>
+> `selectors/Cargo.toml` declares MPL-2.0, but neither the repository at the
+> revisions published as selectors 0.37.0 (6cfce6f) and 0.38.0 (572ecba), nor
+> its head, nor the crates.io packages contain a license file — not at the
+> root and not in `selectors/` or `servo_arc/`. Would you add the MPL 2.0 text
+> as `LICENSE` at the root (as servo/servo has it) and include it in the
+> published packages (`include` in each crate's `Cargo.toml`)? Until then we
+> reproduce the standard MPL 2.0 text on the strength of the declaration.
+
 ### Not requested: objc2
 
 The `objc2-*`, `block2` and `dispatch2` crates Koru links were published from

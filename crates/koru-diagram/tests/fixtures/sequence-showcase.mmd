@@ -1,0 +1,30 @@
+sequenceDiagram
+    accTitle: Sign-in with a passkey
+    accDescr: The app asks the server for a challenge, the device signs it, and the server issues a session.
+    autonumber
+    actor P as Person
+    participant App as Koru app
+    participant Server
+    participant DB as Session store
+
+    P->>+App: Sign in
+    App->>+Server: Request challenge
+    Server-->>-App: Challenge
+    Note over App,Server: The challenge expires after 60 s
+    loop Until the person confirms or cancels
+        App->>P: Ask for passkey
+        P-->>App: Touch sensor
+    end
+    alt Signature valid
+        App->>+Server: Signed challenge
+        Server->>DB: Create session
+        DB-->>Server: Session id
+        Server-->>-App: Session token
+    else Signature rejected
+        Server--xApp: Rejected
+        Note right of App: Shows "Try again"
+    end
+    opt Remember this device
+        App-)Server: Register device
+    end
+    App-->>-P: Signed in

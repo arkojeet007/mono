@@ -27,8 +27,9 @@ The shipped binaries reach **647 third-party crates** on Windows, 656 on macOS
 (Apple silicon; 658 on Intel) and 496 in the iOS app, through normal
 dependencies (2026-10-14). Proc-macros are excluded because they run in the
 compiler and none of their code is in a binary. No crate comes from git; all
-come from crates.io, `onenote_parser`, `sherpa-onnx` and `sherpa-onnx-sys` with
-Koru's patches applied ([third-party/](../third-party/README.md)).
+come from crates.io, `onenote_parser`, `sherpa-onnx`, `sherpa-onnx-sys` and
+`merman-render` with Koru's patches applied
+([third-party/](../third-party/README.md)).
 
 | License (as declared) | What a binary distribution owes | Handled by |
 | --- | --- | --- |
@@ -40,12 +41,14 @@ Koru's patches applied ([third-party/](../third-party/README.md)).
 **Some crates ship no license file in their package** — 35 on Windows, 61
 on macOS and 27 on iOS, mostly the `objc2-*`, `iroh-*` and `accesskit*`
 families. ✅ **Every one, on every platform, now has a record** in
-`crates/koru-release/licences/crates/` (67 records; Windows and Android
-2026-10-13, macOS and iOS 2026-10-14): 57 carry the license file from the
-crate's repository at the published revision (or, where that revision named
-its license without the text, the text upstream added later, noted in the
-record), and 10 whose upstream has no license file at all carry the standard
-text under a recorded judgment, with a request drafted in
+`crates/koru-release/licences/crates/` (68 records; Windows and Android
+2026-10-13, macOS and iOS 2026-10-14, and `selectors` 0.37.0 for the graph
+`koru-diagram` brings, ahead of anything shipping it, 2026-10-19): 57 carry
+the license file from the crate's repository at the published revision (or,
+where that revision named its license without the text, the text upstream
+added later, noted in the record), and 11 whose upstream has no license file
+at all carry the standard text under a recorded judgment, with a request
+drafted in
 [UPSTREAM-ISSUES.md](UPSTREAM-ISSUES.md). A shipped crate with neither a file
 nor a record refuses the release on every platform
 ([README.md](README.md#a-crate-without-a-license-file)), and `koru-release

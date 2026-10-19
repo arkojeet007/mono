@@ -1,0 +1,23 @@
+[package]
+rust-version.workspace = true
+name = "koru-diagram"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Mermaid diagrams for Koru: the one crate that links the merman engine. It takes the text of a code block and will answer in Koru's own vocabulary — what kind of diagram it is, whether it draws, and a theme-free, font-free layout for Koru to paint — so that nothing above it ever sees a merman type. Today it is the skeleton that puts merman in the dependency graph; the API follows."
+
+# **The dependencies are the charter.** `merman` is the engine and
+# `merman-render` holds the layout structs the facade does not re-export; both
+# come from the workspace table, which states their features and the reason for
+# them once. They appear in this crate and nowhere else in the workspace — that
+# is the point of the crate. No koru-draw, no vello, no fonts: the MCP server
+# and the AI tools will link this crate to ask whether a diagram draws, and
+# neither has a renderer.
+[dependencies]
+merman = { workspace = true }
+merman-render = { workspace = true }
+
+[dev-dependencies]
+# The smoke tests read merman's layout JSON.
+serde_json = { workspace = true }

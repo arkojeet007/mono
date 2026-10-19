@@ -21,6 +21,7 @@ for someone reviewing the code who has not used the library before.
 | [WRY.md](WRY.md) | a native WebView as a child of our window: creation blocks, data directories, what IPC carries, what the page-load events cannot say |
 | [INTERCOM.md](INTERCOM.md) | the Web Messenger inside a WebView: the domain allowlist fails silently, the 450 px layout switch, the JavaScript object is swapped after boot, hiding is what keeps a badge |
 | [CRON.md](CRON.md) | cron's seven-field parser behind Koru's bounded five-field recurrence language |
+| [MERMAN.md](MERMAN.md) | Mermaid parsing and layout behind one sealing crate: the features and the licenses they carry, the host text measurer, what the layout JSON leaves out and the patch that adds it, the config keys that pass through |
 
 The language itself: [Rust through Koru examples](../RUST.md).
 

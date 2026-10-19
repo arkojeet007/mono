@@ -1,0 +1,658 @@
+diff --git a/src/model.rs b/src/model.rs
+index 64a1a12..a6e3ae7 100644
+--- a/src/model.rs
++++ b/src/model.rs
+@@ -933,6 +933,87 @@ pub struct SequenceBlockLayout {
+     pub section_ys_by_id: FxHashMap<String, f64>,
+ }
+ 
++/// One `else`, `and` or `option` divider inside a sectioned control frame.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[cfg(feature = "diagram-sequence")]
++pub struct SequenceFrameSectionLayout {
++    /// Id of the control message that opens the section.
++    pub id: String,
++    /// The section's label as written in the source, before Mermaid's `[…]` decoration.
++    pub label: String,
++    /// Y of the dashed divider that opens the section.
++    pub y: f64,
++}
++
++/// A control frame (`loop`, `opt`, `alt`, `par`, `par_over`, `critical` or `break`) with the
++/// geometry the SVG renderer draws: the frame rectangle and its dividers.
++///
++/// Frames are listed in source order, so a nested frame follows the frame that encloses it. A
++/// frame that encloses no message or note is not drawn by Mermaid and is not listed.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[cfg(feature = "diagram-sequence")]
++pub struct SequenceFrameLayout {
++    /// Id of the control message that opens the block (the block's key in
++    /// `SequenceDiagramLayout::block_layouts_by_id`).
++    pub id: String,
++    /// The control keyword (`SequenceControlKind::keyword()`): `loop`, `opt`, `alt`, `par`,
++    /// `par_over`, `critical` or `break`.
++    pub kind: String,
++    /// The label written after the keyword (a loop condition, the first `alt` guard), before
++    /// Mermaid's `[…]` decoration; empty when the source has none.
++    pub label: String,
++    pub x: f64,
++    pub y: f64,
++    pub width: f64,
++    pub height: f64,
++    /// The `else`/`and`/`option` dividers in source order; empty for `loop`, `opt` and `break`.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub sections: Vec<SequenceFrameSectionLayout>,
++}
++
++/// One activation bar on a participant's lifeline, as `activate`/`deactivate` (or `+`/`-` on a
++/// message) produce it.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[cfg(feature = "diagram-sequence")]
++pub struct SequenceActivationLayout {
++    /// The participant's id (its key in the model's `actor_order`), not its display name.
++    pub actor: String,
++    pub x: f64,
++    pub y: f64,
++    pub width: f64,
++    pub height: f64,
++    /// How many bars of the same participant were already open when this one started: `0` for
++    /// a bar on the lifeline itself, `1` for the first nested bar, and so on. Mermaid offsets
++    /// each level by half the activation width.
++    pub depth: usize,
++}
++
++/// A piece of text with the position Mermaid gives it.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[cfg(feature = "diagram-sequence")]
++pub struct SequenceTextLayout {
++    pub text: String,
++    pub x: f64,
++    pub y: f64,
++}
++
++/// A `box` participant group as the SVG renderer draws it.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[cfg(feature = "diagram-sequence")]
++pub struct SequenceParticipantBoxLayout {
++    pub x: f64,
++    pub y: f64,
++    pub width: f64,
++    pub height: f64,
++    /// The fill the model carries for the box: the color written in the source, or
++    /// `transparent` when it names none.
++    pub fill: String,
++    /// The box title, when the source gives one. `x` is the title's horizontal centre and `y`
++    /// the vertical centre of its first line.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub title: Option<SequenceTextLayout>,
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[cfg(feature = "diagram-sequence")]
+ pub struct SequenceDiagramLayout {
+@@ -945,6 +1026,20 @@ pub struct SequenceDiagramLayout {
+     /// This remains outside compatibility layout JSON because it is renderer-owned phase data.
+     #[serde(skip)]
+     pub block_layouts_by_id: FxHashMap<String, SequenceBlockLayout>,
++    /// The control frames the SVG renderer draws, derived from `block_layouts_by_id` and the
++    /// control messages. Absent from the JSON when the diagram has none.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub frames: Vec<SequenceFrameLayout>,
++    /// Activation bars, in the order their activations start. Absent when there are none.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub activations: Vec<SequenceActivationLayout>,
++    /// `box` participant groups in source order. Absent when there are none.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub boxes: Vec<SequenceParticipantBoxLayout>,
++    /// The diagram title (`title …` in the source, or the front-matter title), with the `x`
++    /// and `y` attributes Mermaid gives its `<text>` element. Absent when there is none.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub title: Option<SequenceTextLayout>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+diff --git a/src/sequence/activation.rs b/src/sequence/activation.rs
+index 594969e..1dff85b 100644
+--- a/src/sequence/activation.rs
++++ b/src/sequence/activation.rs
+@@ -1,4 +1,10 @@
+-use merman_core::diagrams::sequence::{SequenceMessage, SequenceMessageKind};
++use super::SequenceLayoutCheckpoints;
++use crate::Result;
++use crate::model::{LayoutEdge, LayoutNode, SequenceActivationLayout};
++use merman_core::diagrams::sequence::{
++    SequenceDiagramRenderModel, SequenceMessage, SequenceMessageKind,
++};
++use rustc_hash::FxHashMap;
+ use std::collections::BTreeMap;
+ 
+ pub(crate) fn sequence_activation_start_x(center_x: f64, stacked_size: usize, width: f64) -> f64 {
+@@ -86,6 +92,113 @@ impl SequenceActivationState {
+     }
+ }
+ 
++struct OpenActivationLayout {
++    x: f64,
++    y: f64,
++    /// Slot in the output, so bars keep the order their activations started in.
++    slot: usize,
++}
++
++/// The activation bars as the SVG renderer draws them, replayed from the laid-out messages and
++/// lifelines the same way `svg::parity::sequence::activation::build_sequence_activation_plan`
++/// does. Mermaid opens a bar at the last message line before `activate` and closes it at the
++/// last message line before `deactivate`, forcing a minimum height of 18 px. An activation that
++/// is never deactivated draws nothing and is not listed.
++pub(super) fn sequence_activation_layouts(
++    model: &SequenceDiagramRenderModel,
++    nodes: &[LayoutNode],
++    edges: &[LayoutEdge],
++    activation_width: f64,
++    checkpoints: SequenceLayoutCheckpoints<'_>,
++) -> Result<Vec<SequenceActivationLayout>> {
++    let mut nodes_by_id: FxHashMap<&str, &LayoutNode> =
++        FxHashMap::with_capacity_and_hasher(nodes.len(), Default::default());
++    for (index, node) in nodes.iter().enumerate() {
++        checkpoints.checkpoint_loop(index)?;
++        nodes_by_id.insert(node.id.as_str(), node);
++    }
++    let mut edges_by_id: FxHashMap<&str, &LayoutEdge> =
++        FxHashMap::with_capacity_and_hasher(edges.len(), Default::default());
++    for (index, edge) in edges.iter().enumerate() {
++        checkpoints.checkpoint_loop(index)?;
++        edges_by_id.insert(edge.id.as_str(), edge);
++    }
++    let first_point_y = |edge_id: String| -> Option<f64> {
++        Some(edges_by_id.get(edge_id.as_str())?.points.first()?.y)
++    };
++
++    let mut last_line_y: Option<f64> = None;
++    let mut open_by_actor: BTreeMap<&str, Vec<OpenActivationLayout>> = BTreeMap::new();
++    let mut bars: Vec<Option<SequenceActivationLayout>> = Vec::new();
++
++    for (message_index, msg) in model.messages.iter().enumerate() {
++        checkpoints.checkpoint_loop(message_index)?;
++        if let Some(y) = first_point_y(format!("msg-{}", msg.id)) {
++            last_line_y = Some(y);
++        }
++
++        match msg.semantic_kind() {
++            SequenceMessageKind::ActivationStart => {
++                let Some(actor_id) = msg.from.as_deref() else {
++                    continue;
++                };
++                let Some(center_x) = nodes_by_id
++                    .get(format!("actor-top-{actor_id}").as_str())
++                    .map(|node| node.x)
++                else {
++                    continue;
++                };
++                // Mermaid nudges every bar but the diagram's first one down by 2 px.
++                let has_any_activation = !open_by_actor.is_empty();
++                let open = open_by_actor.entry(actor_id).or_default();
++                let x = sequence_activation_start_x(center_x, open.len(), activation_width);
++                let y = last_line_y
++                    .or_else(|| first_point_y(format!("lifeline-{actor_id}")))
++                    .unwrap_or(0.0);
++                let y = if last_line_y.is_some() && has_any_activation {
++                    y + 2.0
++                } else {
++                    y
++                };
++                let slot = bars.len();
++                bars.push(None);
++                open.push(OpenActivationLayout { x, y, slot });
++            }
++            SequenceMessageKind::ActivationEnd => {
++                let Some(actor_id) = msg.from.as_deref() else {
++                    continue;
++                };
++                let Some(open) = open_by_actor.get_mut(actor_id) else {
++                    continue;
++                };
++                let Some(start) = open.pop() else {
++                    continue;
++                };
++                let mut y = start.y;
++                let mut bottom = last_line_y.unwrap_or(y);
++                if y + 18.0 > bottom {
++                    y = bottom - 6.0;
++                    bottom += 12.0;
++                }
++                if let Some(slot) = bars.get_mut(start.slot) {
++                    *slot = Some(SequenceActivationLayout {
++                        actor: actor_id.to_string(),
++                        x: start.x,
++                        y,
++                        width: activation_width,
++                        height: (bottom - y).max(0.0),
++                        depth: open.len(),
++                    });
++                }
++            }
++            _ => {}
++        }
++    }
++
++    checkpoints.checkpoint()?;
++    Ok(bars.into_iter().flatten().collect())
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::{sequence_activation_stack_bounds, sequence_activation_start_x};
+diff --git a/src/sequence/block_steps.rs b/src/sequence/block_steps.rs
+index 8f3818e..ead2ac1 100644
+--- a/src/sequence/block_steps.rs
++++ b/src/sequence/block_steps.rs
+@@ -98,6 +98,18 @@ pub(super) fn is_block_start(message: &SequenceMessage) -> bool {
+     is_block_role(message, SequenceControlRole::Start)
+ }
+ 
++/// The kind of control frame `message` opens, or `None` when it opens none (a `rect` is a
++/// content block without a frame).
++pub(super) fn block_start_kind(message: &SequenceMessage) -> Option<SequenceControlKind> {
++    message
++        .control_semantics()
++        .filter(|semantics| {
++            semantics.kind != SequenceControlKind::Rect
++                && semantics.role == SequenceControlRole::Start
++        })
++        .map(|semantics| semantics.kind)
++}
++
+ pub(super) fn is_block_section(message: &SequenceMessage) -> bool {
+     is_block_role(message, SequenceControlRole::Separator)
+ }
+diff --git a/src/sequence/orchestration.rs b/src/sequence/orchestration.rs
+index db6f3e0..a2272d2 100644
+--- a/src/sequence/orchestration.rs
++++ b/src/sequence/orchestration.rs
+@@ -5,7 +5,7 @@ use super::actors::{
+     sequence_actor_is_type_width_limited,
+ };
+ use super::block_steps::{
+-    BlockStepPlanContext, SequenceBlockPlan, is_block_end, is_block_section, is_block_start,
++    BlockStepPlanContext, SequenceBlockPlan, block_start_kind, is_block_end, is_block_section,
+     plan_sequence_blocks,
+ };
+ use super::message_metrics::{SequenceMessageMetricView, SequenceMessageOwner};
+@@ -15,7 +15,9 @@ use super::rect::SequenceRectOpen;
+ use super::{SEQUENCE_FRAME_SIDE_PAD_PX, SequenceLayoutCheckpoints};
+ use crate::Result;
+ use crate::math::MathRenderer;
+-use crate::model::{LayoutEdge, LayoutNode, SequenceBlockLayout};
++use crate::model::{
++    LayoutEdge, LayoutNode, SequenceBlockLayout, SequenceFrameLayout, SequenceFrameSectionLayout,
++};
+ use crate::text::{TextMeasurer, TextStyle};
+ use merman_core::MermaidConfig;
+ use merman_core::diagrams::sequence::{
+@@ -59,6 +61,8 @@ pub(super) struct SequenceLayoutGraph {
+     pub(super) nodes: Vec<LayoutNode>,
+     pub(super) edges: Vec<LayoutEdge>,
+     pub(super) block_layouts_by_id: rustc_hash::FxHashMap<String, SequenceBlockLayout>,
++    /// The frames the SVG renderer draws, in source order.
++    pub(super) frames: Vec<SequenceFrameLayout>,
+     pub(super) bottom_box_top_y: f64,
+     pub(super) box_height: f64,
+     pub(super) bounds_start_x: f64,
+@@ -67,12 +71,48 @@ pub(super) struct SequenceLayoutGraph {
+ 
+ struct OpenSequenceBlockLayout {
+     id: String,
++    /// Index of the opening control message in the model, which orders the frames.
++    message_index: usize,
++    kind: SequenceControlKind,
++    label: String,
+     start_y: f64,
+     /// Position of this control block in Mermaid's active `sequenceItems` stack.
+     sequence_item_index: usize,
+     start_x: Option<f64>,
+     stop_x: Option<f64>,
+     section_ys_by_id: rustc_hash::FxHashMap<String, f64>,
++    sections: Vec<SequenceFrameSectionLayout>,
++    /// Left edge of the leftmost participant that a message or note inside the block touches.
++    /// Mermaid widens a `critical` frame with `option` sections to the left of it.
++    min_actor_left_x: f64,
++}
++
++impl OpenSequenceBlockLayout {
++    /// The frame the SVG renderer draws for this block once it closes at `stop_y`, or `None`
++    /// when the block encloses no message or note: Mermaid draws nothing for such a block.
++    fn frame(&self, stop_y: f64) -> Option<SequenceFrameLayout> {
++        let (start_x, stop_x) = self.start_x.zip(self.stop_x)?;
++        // `svg::parity::sequence::blocks::render_critical_sequence_block` widens the frame to
++        // 9 px left of the leftmost participant when the block has `option` sections.
++        let x = if self.kind == SequenceControlKind::Critical
++            && !self.sections.is_empty()
++            && self.min_actor_left_x.is_finite()
++        {
++            start_x.min(self.min_actor_left_x - 9.0)
++        } else {
++            start_x
++        };
++        Some(SequenceFrameLayout {
++            id: self.id.clone(),
++            kind: self.kind.keyword().to_string(),
++            label: self.label.clone(),
++            x,
++            y: self.start_y,
++            width: stop_x - x,
++            height: stop_y - self.start_y,
++            sections: self.sections.clone(),
++        })
++    }
+ }
+ 
+ struct SequenceLayoutLoopState<'a> {
+@@ -80,6 +120,8 @@ struct SequenceLayoutLoopState<'a> {
+     block_stopy_stack: Vec<Option<f64>>,
+     open_sequence_blocks: Vec<OpenSequenceBlockLayout>,
+     block_layouts_by_id: rustc_hash::FxHashMap<String, SequenceBlockLayout>,
++    /// Closed frames with the index of their opening message, sorted into source order at the end.
++    frames: Vec<(usize, SequenceFrameLayout)>,
+     rect_stack: Vec<SequenceRectOpen>,
+     activation_state: SequenceActivationState,
+     actor_lifecycle: SequenceActorLifecycle<'a>,
+@@ -127,6 +169,7 @@ impl<'a> SequenceLayoutLoopState<'a> {
+             block_stopy_stack: Vec::new(),
+             open_sequence_blocks: Vec::new(),
+             block_layouts_by_id: rustc_hash::FxHashMap::default(),
++            frames: Vec::new(),
+             rect_stack: Vec::new(),
+             activation_state,
+             actor_lifecycle,
+@@ -140,22 +183,46 @@ impl<'a> SequenceLayoutLoopState<'a> {
+         self.block_stopy_stack.push(None);
+     }
+ 
+-    fn open_sequence_block(&mut self, id: &str, start_y: f64) {
++    fn open_sequence_block(
++        &mut self,
++        msg: &SequenceMessage,
++        message_index: usize,
++        kind: SequenceControlKind,
++        start_y: f64,
++    ) {
+         let sequence_item_index = self.block_stopy_stack.len();
+         self.open_content_block();
+         self.open_sequence_blocks.push(OpenSequenceBlockLayout {
+-            id: id.to_string(),
++            id: msg.id.clone(),
++            message_index,
++            kind,
++            label: msg.message_text().to_string(),
+             start_y,
+             sequence_item_index,
+             start_x: None,
+             stop_x: None,
+             section_ys_by_id: rustc_hash::FxHashMap::default(),
++            sections: Vec::new(),
++            min_actor_left_x: f64::INFINITY,
+         });
+     }
+ 
+-    fn add_sequence_section(&mut self, id: &str, y: f64) {
++    fn add_sequence_section(&mut self, msg: &SequenceMessage, y: f64) {
+         if let Some(open) = self.open_sequence_blocks.last_mut() {
+-            open.section_ys_by_id.insert(id.to_string(), y);
++            open.section_ys_by_id.insert(msg.id.clone(), y);
++            open.sections.push(SequenceFrameSectionLayout {
++                id: msg.id.clone(),
++                label: msg.message_text().to_string(),
++                y,
++            });
++        }
++    }
++
++    /// Records the left edge of the leftmost participant a message or note touches, for every
++    /// frame open around it.
++    fn include_inserted_actor_left(&mut self, left_x: f64) {
++        for block in &mut self.open_sequence_blocks {
++            block.min_actor_left_x = block.min_actor_left_x.min(left_x);
+         }
+     }
+ 
+@@ -197,6 +264,9 @@ impl<'a> SequenceLayoutLoopState<'a> {
+     fn close_sequence_block(&mut self, box_margin: f64) {
+         self.close_content_block(box_margin);
+         if let Some(open) = self.open_sequence_blocks.pop() {
++            if let Some(frame) = open.frame(self.cursor_y) {
++                self.frames.push((open.message_index, frame));
++            }
+             self.block_layouts_by_id.insert(
+                 open.id,
+                 SequenceBlockLayout {
+@@ -239,8 +309,25 @@ fn close_block_cursor(
+     }
+ }
+ 
++/// The left edge of the leftmost participant `msg` connects, when it names both ends: the same
++/// participants `svg::parity::sequence::block_geometry` measures a frame's content by.
++fn message_actor_left_x(
++    msg: &SequenceMessage,
++    ctx: &SequenceLayoutGraphContext<'_>,
++) -> Option<f64> {
++    let (from, to) = msg.from.as_deref().zip(msg.to.as_deref())?;
++    [from, to]
++        .into_iter()
++        .filter_map(|actor_id| {
++            let index = *ctx.actor_index.get(actor_id)?;
++            Some(ctx.actor_centers_x.get(index)? - ctx.actor_widths.get(index)? / 2.0)
++        })
++        .reduce(f64::min)
++}
++
+ fn handle_sequence_directive<'a>(
+     msg: &'a SequenceMessage,
++    msg_idx: usize,
+     directive_steps: &HashMap<String, f64>,
+     state: &mut SequenceLayoutLoopState<'a>,
+     ctx: &SequenceLayoutGraphContext<'a>,
+@@ -252,9 +339,9 @@ fn handle_sequence_directive<'a>(
+         return true;
+     }
+ 
+-    if is_block_start(msg) {
++    if let Some(kind) = block_start_kind(msg) {
+         let start_y = state.cursor_y + ctx.box_margin;
+-        state.open_sequence_block(&msg.id, start_y);
++        state.open_sequence_block(msg, msg_idx, kind, start_y);
+         state.cursor_y += directive_steps
+             .get(msg.id.as_str())
+             .copied()
+@@ -267,7 +354,7 @@ fn handle_sequence_directive<'a>(
+     }
+     if is_block_section(msg) {
+         let section_y = state.cursor_y + ctx.box_margin + ctx.box_text_margin;
+-        state.add_sequence_section(&msg.id, section_y);
++        state.add_sequence_section(msg, section_y);
+         state.cursor_y += directive_steps
+             .get(msg.id.as_str())
+             .copied()
+@@ -364,6 +451,9 @@ fn handle_sequence_note(
+         note.node.x + note.node.width / 2.0,
+         ctx.box_margin,
+     );
++    if let Some(left_x) = message_actor_left_x(msg, ctx) {
++        state.include_inserted_actor_left(left_x);
++    }
+     state.include_inserted_bottom(note.rect_max_y, ctx.box_margin);
+ 
+     nodes.push(note.node);
+@@ -438,6 +528,9 @@ fn handle_sequence_message(
+         inserted_bottom_y,
+     );
+     state.include_inserted_horizontal(inserted_min_x, inserted_max_x, ctx.box_margin);
++    if let Some(left_x) = message_actor_left_x(msg, ctx) {
++        state.include_inserted_actor_left(left_x);
++    }
+     state.cursor_y += cursor_step;
+     let lifecycle_adjustment = state
+         .actor_lifecycle
+@@ -502,7 +595,7 @@ pub(super) fn build_sequence_layout_graph(
+ 
+     for (msg_idx, msg) in ctx.model.messages.iter().enumerate() {
+         ctx.checkpoints.checkpoint_loop(msg_idx)?;
+-        if handle_sequence_directive(msg, &directive_steps, &mut state, &ctx) {
++        if handle_sequence_directive(msg, msg_idx, &directive_steps, &mut state, &ctx) {
+             continue;
+         }
+ 
+@@ -568,10 +661,13 @@ pub(super) fn build_sequence_layout_graph(
+     } else {
+         state.cursor_y
+     };
++    let mut frames = state.frames;
++    frames.sort_by_key(|(message_index, _)| *message_index);
+     Ok(SequenceLayoutGraph {
+         nodes,
+         edges,
+         block_layouts_by_id: state.block_layouts_by_id,
++        frames: frames.into_iter().map(|(_, frame)| frame).collect(),
+         bottom_box_top_y,
+         box_height,
+         bounds_start_x: state.bounds_start_x,
+diff --git a/src/sequence.rs b/src/sequence.rs
+index 92e8653..9250880 100644
+--- a/src/sequence.rs
++++ b/src/sequence.rs
+@@ -1,6 +1,9 @@
+ use crate::Result;
+ use crate::math::MathRenderer;
+-use crate::model::{LayoutCluster, LayoutNode, SequenceDiagramLayout};
++use crate::model::{
++    Bounds, LayoutCluster, LayoutNode, SequenceDiagramLayout, SequenceParticipantBoxLayout,
++    SequenceTextLayout,
++};
+ use crate::resources::OperationWorkMeter;
+ #[cfg(all(test, feature = "diagram-sequence"))]
+ use crate::resources::RenderResourcePolicy;
+@@ -33,6 +36,7 @@ mod orchestration;
+ mod rect;
+ mod root_bounds;
+ 
++use activation::sequence_activation_layouts;
+ pub(crate) use activation::{sequence_activation_stack_bounds, sequence_activation_start_x};
+ pub(crate) use constants::{
+     SEQUENCE_FRAME_GEOM_PAD_PX, SEQUENCE_FRAME_SIDE_PAD_PX, SEQUENCE_GLYPH_BAND_HEIGHT,
+@@ -455,6 +459,7 @@ pub(crate) fn prepare_sequence_diagram_typed_with_title_and_work_meter(
+         mut nodes,
+         edges,
+         block_layouts_by_id,
++        frames,
+         bottom_box_top_y,
+         box_height,
+         bounds_start_x,
+@@ -544,6 +549,29 @@ pub(crate) fn prepare_sequence_diagram_typed_with_title_and_work_meter(
+     })?);
+     checkpoints.checkpoint()?;
+ 
++    let activations = sequence_activation_layouts(
++        model,
++        &nodes,
++        &edges,
++        settings.activation_width,
++        checkpoints,
++    )?;
++    let boxes = sequence_participant_box_layouts(
++        model,
++        &box_layouts,
++        box_title_height,
++        box_height,
++        settings.box_margin,
++        settings.box_text_margin,
++        checkpoints,
++    )?;
++    let title = sequence_title_layout(
++        model,
++        diagram_title,
++        bounds.as_ref(),
++        settings.diagram_margin_x,
++    );
++
+     Ok(SequencePreparedArtifact {
+         layout: SequenceDiagramLayout {
+             nodes,
+@@ -551,6 +579,10 @@ pub(crate) fn prepare_sequence_diagram_typed_with_title_and_work_meter(
+             clusters,
+             bounds,
+             block_layouts_by_id,
++            frames,
++            activations,
++            boxes,
++            title,
+         },
+         message_metrics,
+         box_layouts,
+@@ -559,6 +591,69 @@ pub(crate) fn prepare_sequence_diagram_typed_with_title_and_work_meter(
+     })
+ }
+ 
++/// The `box` participant groups as `svg::parity::sequence::frames` draws them: the actor-layout
++/// box widened by two box margins each side, from a quarter of that padding above the actors to
++/// three quarters of it below the footer, with the title centred under Mermaid's `drawBox`
++/// formula.
++fn sequence_participant_box_layouts(
++    model: &SequenceDiagramRenderModel,
++    box_layouts: &[SequenceBoxLayout],
++    box_title_height: f64,
++    box_height: f64,
++    box_margin: f64,
++    box_text_margin: f64,
++    checkpoints: SequenceLayoutCheckpoints<'_>,
++) -> Result<Vec<SequenceParticipantBoxLayout>> {
++    let mut boxes = Vec::with_capacity(box_layouts.len());
++    for (index, (sequence_box, box_layout)) in model.boxes.iter().zip(box_layouts).enumerate() {
++        checkpoints.checkpoint_loop(index)?;
++        let Some(box_x) = box_layout.x else {
++            continue;
++        };
++        let padding = box_margin * 2.0;
++        let x = box_x - padding;
++        let width = box_layout.width + padding * 2.0;
++        let title = box_layout
++            .label
++            .as_deref()
++            .filter(|name| !name.is_empty())
++            .map(|name| SequenceTextLayout {
++                text: name.to_string(),
++                x: x + width / 2.0,
++                y: box_text_margin + box_title_height / 2.0,
++            });
++        boxes.push(SequenceParticipantBoxLayout {
++            x,
++            y: -padding * 0.25,
++            width,
++            height: box_height + padding * 0.75,
++            fill: sequence_box.fill.clone(),
++            title,
++        });
++    }
++    checkpoints.checkpoint()?;
++    Ok(boxes)
++}
++
++/// The diagram title where `svg::parity::sequence::render` writes it: Mermaid's
++/// `sequenceRenderer` sets `x = (box.stopx - box.startx) / 2 - 2 * diagramMarginX` from the
++/// viewBox width and `y = -25`.
++fn sequence_title_layout(
++    model: &SequenceDiagramRenderModel,
++    diagram_title: Option<&str>,
++    bounds: Option<&Bounds>,
++    diagram_margin_x: f64,
++) -> Option<SequenceTextLayout> {
++    let text = sequence_render_title(model.title.as_deref(), diagram_title)?;
++    let bounds = bounds?;
++    let viewbox_width = bounds.max_x - bounds.min_x;
++    Some(SequenceTextLayout {
++        text: text.to_string(),
++        x: (viewbox_width - 2.0 * diagram_margin_x) / 2.0 - 2.0 * diagram_margin_x,
++        y: -25.0,
++    })
++}
++
+ pub(crate) fn sequence_render_title<'a>(
+     model_title: Option<&'a str>,
+     diagram_title: Option<&'a str>,

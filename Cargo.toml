@@ -26,7 +26,9 @@ default-members = ["apps/koru"]
 # `every_platform_carries_the_workspace_version` in koru-release fails otherwise.
 version = "0.0.3"
 edition = "2024"
-rust-version = "1.92"
+# merman's floor (guide/contributing/deps/MERMAN.md). The pinned toolchain in
+# rust-toolchain.toml is well above it; CI's MSRV job reads this value.
+rust-version = "1.95"
 # Koru is MPL-2.0 (LICENSE). Every package inherits this with
 # `license.workspace = true`. The hosted Koru Cloud services are proprietary
 # and are not in this repository (licensing/README.md).
@@ -102,6 +104,27 @@ arboard = { version = "3", default-features = false }
 # Pure-Rust syntax highlighting (`default-fancy` → fancy-regex, no C dependency)
 # for code blocks. Contained in `koru-blocks`; nothing else links it.
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# **Mermaid diagrams: parsing and layout, and only in `koru-diagram`.** merman
+# turns the text of a `mermaid` code block into a typed layout; Koru measures
+# the text with its own font and paints that layout itself, so no merman type
+# leaves that one crate and the engine stays replaceable behind it
+# (guide/contributing/deps/MERMAN.md). Pinned exactly: pre-1.0, its layout JSON
+# has no schema version, and APIs are removed without aliases.
+#
+# `default-features = false` on purpose. The defaults are every diagram family
+# plus `complete-svg-elk`, and two of those features carry licenses deny.toml
+# does not allow: `layout-elk` is the ELK port under EPL-2.0, `math` bundles
+# fonts under OFL-1.1. `native-fonts` and `png` are left off too, not for their
+# license but because they draw with merman's own fonts and cannot be combined
+# with a host text measurer, and Koru does the drawing. On: the two families
+# Koru draws and `svg`, the leaf that compiles the layout engine. cargo-deny
+# runs with every feature, so no workspace feature may forward to the others.
+#
+# `merman-render` is named too because the facade does not re-export the
+# layout structs; it is the crate Koru patches (third-party/patches/merman-render.md),
+# taken from third-party/crates through `[patch.crates-io]` below.
+merman = { version = "=0.9.0", default-features = false, features = ["diagram-flowchart", "diagram-sequence", "svg"] }
+merman-render = { version = "=0.9.0", default-features = false, features = ["diagram-flowchart", "diagram-sequence"] }
 emojis = "0.9.0"
 nucleo = "0.5.0"
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -341,3 +364,11 @@ debug = false
 [patch.crates-io]
 sherpa-onnx = { path = "third-party/crates/sherpa-onnx" }
 sherpa-onnx-sys = { path = "third-party/crates/sherpa-onnx-sys" }
+# **merman-render with the sequence geometry its layout JSON leaves out.**
+# crates.io's 0.9.0 serialises a sequence diagram's participants, lifelines,
+# notes and messages, but not the control frames (`loop`, `alt`, …), the
+# activation bars, the `box` groups or the title, which Koru needs to draw the
+# picture itself. The patch adds those as new, optional fields and changes no
+# existing output: third-party/patches/merman-render.md. Offered upstream; the
+# patch goes when a release carries it.
+merman-render = { path = "third-party/crates/merman-render" }
