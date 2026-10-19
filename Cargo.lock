@@ -5920,6 +5920,7 @@ version = "0.0.3"
 dependencies = [
  "merman",
  "merman-render",
+ "serde",
  "serde_json",
 ]
 

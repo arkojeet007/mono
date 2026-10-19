@@ -1,0 +1,31 @@
+%%{init: {"theme": "forest"}}%%
+flowchart LR
+    accTitle: Checkout flow
+    accDescr: How an order moves from the cart to a confirmed payment, with retries and a fallback provider.
+
+    %% comments are ignored
+    Cart([Cart]) -> Validate{Valid order?}
+    Validate -- no --> Fix[/Fix the order/]
+    Fix -.-> Cart
+    Validate -- yes --> Pay
+
+    subgraph Payments [Payment service]
+        direction TB
+        Pay[[Charge card]] ==> Gateway[(Payment gateway)]
+        Gateway -->|declined| Retry((Retry))
+        Retry --> Pay
+        subgraph Fallback [Fallback provider]
+            Alt{{"Second provider (EU)"}}
+        end
+        Gateway -.->|timeout| Alt
+    end
+
+    Gateway -->|approved| Done>Order confirmed]
+    Alt --> Done
+    Done <--> Notify["Email & push — café ☕"]
+    Payments --> Audit[(Audit log)]
+
+    classDef warn fill:#f96,stroke:#333
+    class Retry warn
+    style Done stroke-width:4px
+    click Done "https://example.com" "ignored by Koru"

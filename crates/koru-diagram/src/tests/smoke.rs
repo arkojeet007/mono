@@ -4,7 +4,8 @@
 //! engine detects the two families Koru draws, and the patched `merman-render`
 //! reports the sequence geometry the unpatched layout JSON leaves out
 //! (`third-party/patches/merman-render.md`), with the same numbers its own
-//! SVG renderer draws.
+//! SVG renderer draws. These pin the patch against merman's SVG and run on
+//! merman's default engine, not the crate's.
 
 use merman::{
     Engine, MermaidConfig, OperationControl, RenderOutput, RenderRequest, Renderer, SvgRequest,
@@ -13,10 +14,7 @@ use merman::{
 use merman_render::model::SequenceDiagramLayout;
 use serde_json::Value;
 
-/// The sequence showcase a later change reuses as a drawing fixture: every
-/// kind of frame but `par` and `critical`, three activations, two notes,
-/// autonumbering, no `box` and no title.
-const SEQUENCE_SHOWCASE: &str = include_str!("../tests/fixtures/sequence-showcase.mmd");
+use super::SEQUENCE_SHOWCASE;
 
 /// What the showcase lacks: a title, a `box` group, and a `critical` frame
 /// with an `option`, which Mermaid widens to the left.
