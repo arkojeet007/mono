@@ -8,10 +8,10 @@
 //! here the way `koru-blocks` seals the syntax highlighter and `koru-spell`
 //! seals the spell engine, so it can be replaced without the editor, the host
 //! or the MCP server noticing. Its API speaks Koru's vocabulary — the kind of
-//! diagram, whether it draws and why not, a layout made of shapes and laid-out
+//! diagram, whether it draws and why not, a scene made of shapes and laid-out
 //! labels — and **no merman type crosses it**.
 //!
-//! What it answers today, for the editor and for the MCP server:
+//! What it answers, for the editor, the host and the MCP server:
 //!
 //! - [`detect`] names the [`Kind`] of diagram a text declares, from its
 //!   header, without reading the body.
@@ -22,17 +22,34 @@
 //!   detects, parses and counts against [`Limits`]; it never lays out and
 //!   never measures text, so the MCP server can afford it once per code block
 //!   on every read.
+//! - [`layout`] lays the text out as a [`DiagramScene`]: merman's geometry,
+//!   every label measured by the host's own [`TextMeasure`] at [`TEXT_PX`],
+//!   built into shapes, arrows and placed lines with no theme and no font in
+//!   them. It runs the steps of [`inspect`] first, under
+//!   [`Limits::deadline`], and stops when its [`Cancel`] is pulled; it
+//!   answers a [`Fail`] otherwise.
+//! - [`narrate`] turns a scene into what a screen reader says, as a
+//!   [`Narration`] the caller localises.
 //! - [`line_of`] is the one way a byte offset becomes a line number here, so
 //!   the editor and the tests agree with the status.
-//! - [`Counters`] keeps process-wide totals of what was asked and answered.
+//! - [`Counters`] keeps process-wide totals of what was asked and answered,
+//!   and how long layouts took.
 //!
-//! The layout — merman's geometry handed to Koru to paint — follows in a later
-//! change, on the engine this crate configures in `engine.rs`.
+//! The host's measurer and the painter of a scene live in koru-draw; this
+//! crate has neither a font nor a renderer.
 
 mod counters;
+mod edges;
 mod engine;
+mod flowchart;
 mod inspect;
+mod layout;
 mod line;
+mod measure;
+mod narrate;
+mod scene;
+mod sequence;
+mod shapes;
 
 #[cfg(test)]
 mod tests;
@@ -43,7 +60,15 @@ use serde::{Deserialize, Serialize};
 
 pub use counters::{Counters, CountersSnapshot};
 pub use inspect::{detect, inspect};
+pub use layout::{Cancel, Fail, layout};
 pub use line::line_of;
+pub use measure::{MeasuredLine, TEXT_PX, TextMeasure, TextMetrics};
+pub use narrate::{Narration, NarrationItem, narrate};
+pub use scene::{
+    DiagramScene, FlowchartScene, Frame, FrameSection, Label, LabelLine, Lifeline, Marker, Message,
+    NodeShape, Note, Participant, ParticipantBox, ParticipantKind, Role, SceneBody, SceneCluster,
+    SceneEdge, SceneNode, SequenceScene, StrokeKind,
+};
 
 /// The family of a diagram, in Koru's vocabulary.
 ///
@@ -67,10 +92,15 @@ pub enum Kind {
 /// How large a diagram Koru draws, and how long it waits for one.
 ///
 /// The host and the MCP server pass one in; nothing here reads the
-/// environment. The counts are **working defaults** — 500 nodes, 500
-/// messages — until the layout work measures what draws within a page's open
-/// time and replaces them. `deadline` bounds a layout; [`inspect`] does no
-/// layout and does not read it.
+/// environment. `max_nodes` was **measured**: 800 is the largest round
+/// hundred of generated flowchart boxes, in a chain and in a grid alike,
+/// that lays out in under 200 ms on a development machine — a 1,000-box
+/// grid is refused by merman's own layout work budget before the clock
+/// matters (`guide/contributing/deps/MERMAN.md`, *How large a diagram
+/// draws*; the ignored test `measure_how_large_a_diagram_draws` reproduces
+/// the table). `max_messages` is a working default the same measurement
+/// found no reason to move: 600 messages lay out in 5 ms. `deadline` bounds
+/// a [`layout`]; [`inspect`] does no layout and does not read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Most nodes (boxes) a flowchart may have; groups are not counted.
@@ -84,7 +114,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_nodes: 500,
+            max_nodes: 800,
             max_messages: 500,
             deadline: Duration::from_secs(2),
         }

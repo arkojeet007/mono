@@ -2,16 +2,25 @@
 
 //! The crate's tests, one file per concern, sharing the fixtures below.
 //!
-//! Nothing here touches the disk beyond `include_str!`, opens a store or
-//! reaches the network: text in, status out.
+//! Nothing here touches the disk beyond `include_str!` of the fixtures —
+//! and the one golden rewritten when `UPDATE_DIAGRAM_GOLDENS` is set — opens
+//! a store or reaches the network: text in, status or scene out.
 
 mod counters;
 mod engine;
 mod inspect;
 mod json;
+mod layout;
 mod line;
+mod measure;
+mod narrate;
 mod robustness;
+mod size;
 mod smoke;
+
+use std::sync::Arc;
+
+use crate::{MeasuredLine, TextMeasure, TextMetrics};
 
 /// The flowchart showcase: every box shape in common use, every arrow style,
 /// labels on arrows, nested groups with their own direction, an arrow to a
@@ -66,6 +75,23 @@ pub(crate) fn chain(n: usize) -> String {
     text
 }
 
+/// `flowchart TD` with `rows × columns` boxes `R<r>C<c>`, an arrow right and
+/// an arrow down from each.
+pub(crate) fn grid(rows: usize, columns: usize) -> String {
+    let mut text = String::from("flowchart TD\n");
+    for r in 0..rows {
+        for c in 0..columns {
+            if c + 1 < columns {
+                text.push_str(&format!("    R{r}C{c} --> R{r}C{}\n", c + 1));
+            }
+            if r + 1 < rows {
+                text.push_str(&format!("    R{r}C{c} --> R{}C{c}\n", r + 1));
+            }
+        }
+    }
+    text
+}
+
 /// A sequence diagram with two participants and `n` messages between them.
 pub(crate) fn sequence_with_messages(n: usize) -> String {
     let mut text = String::from("sequenceDiagram\n    participant A\n    participant B\n");
@@ -77,4 +103,51 @@ pub(crate) fn sequence_with_messages(n: usize) -> String {
         }
     }
     text
+}
+
+/// The deterministic measurer: every character advances half the size, a
+/// line is 1.2 sizes tall with the baseline 0.9 down, and words wrap by that
+/// advance. No font, so the same on every machine.
+pub(crate) struct Stub;
+
+impl TextMeasure for Stub {
+    fn measure(&self, text: &str, px: f32) -> TextMetrics {
+        TextMetrics {
+            width: text.chars().count() as f32 * 0.5 * px,
+            height: 1.2 * px,
+            ascent: 0.9 * px,
+        }
+    }
+
+    fn wrap(&self, text: &str, px: f32, max_width: f32) -> Vec<MeasuredLine> {
+        let mut lines: Vec<MeasuredLine> = Vec::new();
+        let mut current = String::new();
+        for word in text.split(' ').filter(|w| !w.is_empty()) {
+            let candidate = if current.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{current} {word}")
+            };
+            if current.is_empty() || self.measure(&candidate, px).width <= max_width {
+                current = candidate;
+            } else {
+                lines.push(MeasuredLine {
+                    width: self.measure(&current, px).width,
+                    text: std::mem::replace(&mut current, word.to_owned()),
+                });
+            }
+        }
+        if !current.is_empty() || lines.is_empty() {
+            lines.push(MeasuredLine {
+                width: self.measure(&current, px).width,
+                text: current,
+            });
+        }
+        lines
+    }
+}
+
+/// The stub, shared the way the host shares its measurer.
+pub(crate) fn stub() -> Arc<dyn TextMeasure> {
+    Arc::new(Stub)
 }

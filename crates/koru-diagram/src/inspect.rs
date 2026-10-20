@@ -8,8 +8,8 @@ use std::panic::{self, AssertUnwindSafe};
 use merman::diagrams::sequence::SequenceMessageKind;
 use merman::resources::InputResourcePolicy;
 use merman::{
-    Engine, Error, MermaidConfig, OperationControl, ParseOptions, RenderSemanticModel,
-    TerminalDiagnostic, diagram_type_family_id,
+    Engine, Error, MermaidConfig, OperationCancelled, OperationControl, ParseOptions,
+    ParsedDiagramRender, RenderSemanticModel, TerminalDiagnostic, diagram_type_family_id,
 };
 
 use crate::counters::Counters;
@@ -17,9 +17,10 @@ use crate::engine::engine;
 use crate::line::line_for_span;
 use crate::{Counts, Kind, Limits, Status};
 
-/// The diagnostic code of a [`Status::NotParsed`] that stands for a panic
-/// inside the engine, caught so that Koru keeps running. The message is the
-/// panic's own.
+/// The diagnostic code of a [`Status::NotParsed`], or of a
+/// [`Fail::Internal`](crate::Fail::Internal), that stands for a panic inside
+/// the engine, caught so that Koru keeps running. The message is the panic's
+/// own.
 pub(crate) const PANIC_CODE: &str = "koru.diagram.panic";
 
 /// The kind of diagram `text` declares, or `None` when no diagram keyword is
@@ -72,7 +73,8 @@ fn kind_of(type_id: &'static str) -> Kind {
 /// **No layout and no text measurement happen here.** The cost is a parse and
 /// a count — a fraction of a millisecond for a showcase diagram — so the MCP
 /// server asks once per code block on every read, and the editor asks before
-/// it requests a layout.
+/// it requests a layout. [`layout`](crate::layout) runs the same steps on
+/// its own parse, so a text that does not draw never reaches merman's layout.
 ///
 /// The line of a [`Status::NotParsed`] is the 1-based line, in the text as
 /// given, of the start of merman's span; merman maps spans back through the
@@ -93,20 +95,13 @@ pub fn inspect(text: &str, limits: &Limits) -> Status {
 
 /// [`inspect`] without the counting, for the counters' own tests.
 pub(crate) fn inspect_uncounted(text: &str, limits: &Limits) -> Status {
-    if text.trim().is_empty() {
-        return Status::Empty;
-    }
-    let kind = match detect(text) {
-        None => return Status::KindNotDrawn { kind: None },
-        Some(Kind::Other(type_id)) => {
-            return Status::KindNotDrawn {
-                kind: Some(type_id),
-            };
-        }
-        Some(kind) => kind,
-    };
-    match panic::catch_unwind(AssertUnwindSafe(|| parse_and_count(text, &kind, limits))) {
-        Ok(status) => status,
+    let control = OperationControl::new();
+    match panic::catch_unwind(AssertUnwindSafe(|| check(text, limits, &control))) {
+        Ok(Ok(checked)) => Status::Draws(checked.counts),
+        Ok(Err(Refused::Status(status))) => status,
+        // Nobody else holds the control and it has no deadline, so this does
+        // not happen; it is answered the way a cancelled layout is.
+        Ok(Err(Refused::Cancelled(kind, _))) => too_large_uncounted(&kind),
         Err(payload) => Status::NotParsed {
             line: 1,
             message: panic_message(&*payload),
@@ -115,27 +110,67 @@ pub(crate) fn inspect_uncounted(text: &str, limits: &Limits) -> Status {
     }
 }
 
+/// A text that draws: its counts, and the parse the layout continues from.
+pub(crate) struct Checked {
+    pub counts: Counts,
+    pub parsed: ParsedDiagramRender,
+}
+
+/// Why a text was not checked as drawing.
+pub(crate) enum Refused {
+    /// Any answer but [`Status::Draws`].
+    Status(Status),
+    /// merman stopped the parse at `control`'s request or deadline; the kind
+    /// detected is carried for the caller's wording.
+    Cancelled(Kind, OperationCancelled),
+}
+
+/// The steps of [`inspect`] — empty, kind, parse, count, limits — on
+/// `control`, returning the parse for a layout to continue from. May panic
+/// in the engine; the callers catch it.
+pub(crate) fn check(
+    text: &str,
+    limits: &Limits,
+    control: &OperationControl,
+) -> Result<Checked, Refused> {
+    if text.trim().is_empty() {
+        return Err(Refused::Status(Status::Empty));
+    }
+    let kind = match detect(text) {
+        None => return Err(Refused::Status(Status::KindNotDrawn { kind: None })),
+        Some(Kind::Other(type_id)) => {
+            return Err(Refused::Status(Status::KindNotDrawn {
+                kind: Some(type_id),
+            }));
+        }
+        Some(kind) => kind,
+    };
+    parse_checked(text, kind, limits, control)
+}
+
 /// Parses `text`, already detected as `kind`, and counts it against `limits`.
-fn parse_and_count(text: &str, kind: &Kind, limits: &Limits) -> Status {
+fn parse_checked(
+    text: &str,
+    kind: Kind,
+    limits: &Limits,
+    control: &OperationControl,
+) -> Result<Checked, Refused> {
     // merman's engine takes no resource policy; its renderer applies this one
     // around the same parse — the source budget before, the model budget
     // after — and so does this.
     let policy = InputResourcePolicy::default();
     if policy.check_source_bytes(text).is_err() {
-        return too_large_uncounted(kind);
+        return Err(Refused::Status(too_large_uncounted(&kind)));
     }
-    let control = OperationControl::new();
     let parsed = match engine().parse_diagram_for_render_model_controlled_sync(
         text,
         ParseOptions::strict(),
-        &control,
+        control,
     ) {
-        // Nobody else holds the control and it has no deadline, so this does
-        // not happen; it is answered the way a cancelled layout is.
-        Err(_cancelled) => return too_large_uncounted(kind),
-        Ok(Err(error)) => return status_for_error(text, kind, error),
+        Err(cancelled) => return Err(Refused::Cancelled(kind, cancelled)),
+        Ok(Err(error)) => return Err(Refused::Status(status_for_error(text, &kind, error))),
         // Nothing was left after preprocessing; detection says so first.
-        Ok(Ok(None)) => return Status::KindNotDrawn { kind: None },
+        Ok(Ok(None)) => return Err(Refused::Status(Status::KindNotDrawn { kind: None })),
         Ok(Ok(Some(parsed))) => parsed,
     };
     let counts = match parsed.model() {
@@ -166,9 +201,9 @@ fn parse_and_count(text: &str, kind: &Kind, limits: &Limits) -> Status {
         },
         // A header detected as a kind Koru draws, parsed into something else.
         _ => {
-            return Status::KindNotDrawn {
+            return Err(Refused::Status(Status::KindNotDrawn {
                 kind: Some(parsed.metadata().diagram_type.clone()),
-            };
+            }));
         }
     };
     let (count, max) = match counts {
@@ -176,12 +211,12 @@ fn parse_and_count(text: &str, kind: &Kind, limits: &Limits) -> Status {
         Counts::Sequence { messages, .. } => (messages, limits.max_messages),
     };
     if count > max || policy.check_parsed_render(&parsed).is_err() {
-        return Status::TooLarge {
+        return Err(Refused::Status(Status::TooLarge {
             kind: counts.kind(),
             count,
-        };
+        }));
     }
-    Status::Draws(counts)
+    Ok(Checked { counts, parsed })
 }
 
 /// Too large before anything was counted.
@@ -216,7 +251,7 @@ fn status_for_error(text: &str, kind: &Kind, error: Error) -> Status {
 }
 
 /// The text of a panic payload: what `panic!` was given, when that was text.
-fn panic_message(payload: &(dyn Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_owned()
     } else if let Some(message) = payload.downcast_ref::<String>() {

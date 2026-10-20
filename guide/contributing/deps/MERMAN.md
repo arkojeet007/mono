@@ -130,6 +130,103 @@ so the choice stays reversible. The same pattern seals `syntect` in
   `apps/koru`, which does not link `koru-diagram` yet, so without
   `--workspace` the command reports nothing for every merman crate — present
   or not.
+- **The typed layout is reachable only as JSON.** `family::prepare(parsed,
+  &LayoutOptions, session)` gives a `FamilyRenderArtifact` whose typed
+  layout is private; `layout_json()` is the one way out, and
+  `serde_json::from_value::<FlowchartLayout>(json["layout"]["FlowchartV2"])`
+  (`SequenceDiagramLayout` under `"SequenceDiagram"`) the way back in. The
+  session comes from `merman_render::environment::RenderEnvironment::deterministic()
+  .with_text_measurement_policy(..).begin_session_with_control(control)`;
+  `prepare` consumes the parse, so anything wanted from the semantic model
+  (shapes, markers, the parser's render context with the labels as measured)
+  is cloned out first.
+- **A host measurer must be `Arc<dyn HostTextMeasurer>` and `'static`.**
+  `TextMeasurementPolicy::host_display` stores the `Arc`, so a measurer
+  borrowed for one call cannot be installed; the host shares its measurer
+  as an `Arc`. The flowchart layout asks it two operations only —
+  `computed-length` (`getComputedTextLength`, a growing prefix of a label as
+  it wraps) and `wrapped` (a block of lines at its `\n`s) — and the sequence
+  layout five: `mermaid-calculate-text-dimensions`, `raw-bbox-width`,
+  `raw-bbox-height`, `tspan-bbox-width`, `tspan-bbox-height`. Every request
+  arrives with the diagram's own style (16 px, a sans stack, a weight);
+  `koru-diagram` answers at its fixed size and ignores it.
+- **`flowchart.wrappingWidth` is 120 in merman's pinned Mermaid config**,
+  not the 200 of merman's own fallback constant, so node labels wrap at 120 px
+  of the measurer's advance; edge labels wrap at a fixed 200 px and plain
+  group titles only at `<br>`. The wrapping of an SVG label (Mermaid's
+  `createText`) is private to merman — `koru-diagram` replays the same
+  algorithm and its tests hold the result to the lines merman asked the
+  measurer to size.
+- **An SVG label is measured as Mermaid's sanitizer wrote it.** The parser's
+  render context (`ParsedDiagramRender::flowchart_render_context()`,
+  `node_label_for_render` and friends) carries `&amp;`, `&quot;`, `&#35;`
+  for `&`, `"`, a `#35;` code; tags stay as text; an authored `&#9829;`
+  gains a second ampersand. Mermaid's SVG decodes `&lt;`, `&gt;` and
+  `&amp;` and shows every other entity literally — `#quot;` reads as
+  `&quot;` on screen — and merman measures exactly that text. The semantic
+  `FlowNode::label` is the decoded, sanitized text (unknown tags removed)
+  and is not what was measured.
+- **The `interactive` resource policy caps layout work, not only time.**
+  `max_layout_work_units` is 14,100,000; a 25 × 40 grid of 1,000 boxes with
+  1,935 arrows charges 14,129,825 and is refused after 38 ms as
+  `ResourceLimitExceeded` — which `koru-diagram` shows as *too large*, the
+  same as a deadline. The budget is a function of the graph's edges and
+  ranks as much as its nodes, which is why the node limit below leaves
+  headroom under it.
+
+## How large a diagram draws
+
+`Limits::default().max_nodes` is **800**: the largest round hundred of
+generated flowchart boxes, in a chain and in a grid alike, whose layout
+completes in under 200 ms through `koru_diagram::layout` with the
+deterministic test measurer. Measured on an Apple M4 (10 cores, 16 GiB)
+with `cargo test`'s profile, which in this workspace is `dev` at
+`opt-level = 1` for workspace crates and `opt-level = 3` for dependencies
+(merman included) — the table reports `optimized + debuginfo`, and a
+`--release` run gave the same numbers within a few milliseconds. Each row is
+one layout, timed around the call; the engine was warmed first. The ignored
+test `measure_how_large_a_diagram_draws` in `crates/koru-diagram/src/tests/size.rs`
+prints it: `cargo test -p koru-diagram -- --ignored measure --nocapture`.
+
+| shape | nodes | layout |
+| --- | ---: | ---: |
+| chain `N0 --> N1 --> …` | 100 | 3 ms |
+| grid 10 × 10, arrows right and down | 100 | 4 ms |
+| chain | 200 | 5 ms |
+| grid 10 × 20 | 200 | 10 ms |
+| chain | 300 | 8 ms |
+| grid 15 × 20 | 300 | 15 ms |
+| chain | 500 | 13 ms |
+| grid 20 × 25 | 500 | 29 ms |
+| chain | 800 | 21 ms |
+| grid 20 × 40 | 800 | 56 ms |
+| chain | 900 | 24 ms |
+| grid 30 × 30 | 900 | 58 ms |
+| chain | 1,000 | 25 ms |
+| grid 25 × 40 | 1,000 | refused: `max_layout_work_units` 14,129,825 of 14,100,000, after 38 ms |
+
+Time is not what bounds the size: at 1,000 boxes the grid is refused by
+merman's `interactive` work budget while the chain still lays out in 25 ms.
+Of the sizes measured (100, 200, 300, 500, 800, 1,000), 800 is the largest at
+which both shapes complete; 900 was measured as well and also completes, and
+800 is kept because a 1,000-box grid already exceeds the budget by 0.2 %, so
+a graph denser than a grid can be refused by merman below 1,000 boxes
+whatever the clock says. A diagram under the limit that merman still refuses
+shows as *too large* after a layout attempt rather than before it.
+
+`max_messages` stays at the working default of **500**. A two-participant
+sequence diagram lays out in 1 ms at 100 messages and 5 ms at 600, so the
+measurement found no reason to move it; the number is a product choice about
+what a page can usefully hold, not a cost.
+
+| shape | messages | layout |
+| --- | ---: | ---: |
+| sequence, 2 participants, alternating `->>` and `-->>` | 100 | 1 ms |
+| sequence | 200 | 1 ms |
+| sequence | 300 | 2 ms |
+| sequence | 400 | 3 ms |
+| sequence | 500 | 4 ms |
+| sequence | 600 | 5 ms |
 
 ## New transitive dependencies
 
@@ -162,19 +259,26 @@ None of them is linked by a shipped binary until something links
   gives a diagram type (`flowchart-v2`, `sequence`, `pie`, …) without parsing
   the body; `merman::diagram_type_family_id` maps it to a family
   (`flowchart`, `sequence`).
-- layout: `Renderer::new().render(RenderRequest::layout_json(text,
-  OperationControl::new(), SvgRequest::default()))` → `RenderOutput::LayoutJson`
-  → `{ meta, semantic, layout: { "FlowchartV2" | "SequenceDiagram": … } }`,
-  deserialised into `merman_render::model::FlowchartLayout` /
-  `SequenceDiagramLayout`.
+- layout: the parse of `inspect` continued — `engine().parse_diagram_for_render_model_controlled_sync`
+  under a child of the host's `OperationControl` carrying the deadline, then
+  `RenderEnvironment::deterministic().with_text_measurement_policy(host)
+  .begin_session_with_control(control)`, `merman_render::family::prepare`,
+  `layout_json()` → `{ meta, semantic, layout: { "FlowchartV2" |
+  "SequenceDiagram": … } }`, deserialised into
+  `merman_render::model::FlowchartLayout` / `SequenceDiagramLayout` and built
+  into a `DiagramScene` with the semantic model cloned out before the
+  layout. `merman::Renderer` is used only by the tests, as the independent
+  path the scene's bounds are checked against.
 
 Nothing above `koru-diagram` sees either type.
 
 ## Where to look
 
-- `crates/koru-diagram/src/lib.rs` — the crate's charter;
-  `src/tests.rs` — the smoke tests that hold the patched layout to merman's
-  own SVG
+- `crates/koru-diagram/src/lib.rs` — the crate's charter; `src/layout.rs`
+  the merman session and the failure mapping; `src/measure.rs` the host
+  measurer's adapter; `src/flowchart.rs` the scene builder and the label
+  wrapping; `src/tests/smoke.rs` — the smoke tests that hold the patched
+  layout to merman's own SVG; `src/tests/size.rs` — the measurement above
 - `third-party/patches/merman-render.md` — the patch and the JSON it adds
 - [merman on docs.rs](https://docs.rs/merman) and
   [merman-render](https://docs.rs/merman-render) — upstream

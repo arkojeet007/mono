@@ -128,18 +128,18 @@ fn a_chain_over_the_node_limit_is_too_large() {
         }
     );
     assert_eq!(
-        inspect(&chain(500), &limits()),
+        inspect(&chain(800), &limits()),
         Status::Draws(Counts::Flowchart {
-            nodes: 500,
-            edges: 499,
+            nodes: 800,
+            edges: 799,
             groups: 0,
         })
     );
     assert_eq!(
-        inspect(&chain(501), &limits()),
+        inspect(&chain(801), &limits()),
         Status::TooLarge {
             kind: Kind::Flowchart,
-            count: 501,
+            count: 801,
         }
     );
     // The limit is the caller's.

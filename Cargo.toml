@@ -60,6 +60,11 @@ parley = { version = "0.11.0", features = ["complex-scripts", "accesskit"] }
 vello = "0.8.0"
 winit = "0.30.13"
 peniko = "0.6.1"
+# The geometry vocabulary of a diagram scene (`koru-diagram`): paths, rects and
+# points that the painter hands to vello, which already depends on this exact
+# kurbo. `serde` is on so a scene is comparable as JSON in the tests; nothing
+# persists one.
+kurbo = { version = "0.13.1", features = ["serde"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # Cron expression parsing and candidate exploration. Contained in
 # `koru-recurrence`: the stored language and public types remain Koru-owned,
