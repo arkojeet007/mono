@@ -332,7 +332,10 @@ pub fn draw_source_control(
     );
 }
 
-fn draw_control(
+/// One floating block control: a rounded chip with a glyph, faded in by the
+/// shared tooltip clock's `alpha`. A table's two controls and a diagram's
+/// *Edit text* are all this, so a control looks the same on every block.
+pub(crate) fn draw_control(
     scene: &mut Scene,
     root: Affine,
     engine: &mut TextEngine,

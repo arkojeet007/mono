@@ -118,6 +118,11 @@ pub struct Paragraph {
     /// its derived grid. Local projection state, refreshed from `ViewState`
     /// before reflow so the row reserves height for the thing actually drawn.
     pub table_source_visible: bool,
+    /// What this frame shows for a `mermaid` code block: the drawing, the
+    /// placeholder, or the text with its reason. `None` on every other row.
+    /// Mirrored from `ViewState::diagrams` by `crate::diagram::sync` before
+    /// reflow, the way `table_source_visible` is; `adopt` leaves it alone.
+    pub diagram: Option<crate::diagram::DiagramRowState>,
     /// The width of the language chip for *this* row's label, measured in
     /// `build_row` so the hit-test rect and the drawn rect agree — the chip
     /// wraps its text with padding rather than a fixed width.
@@ -284,6 +289,7 @@ impl Paragraph {
             table_layout: node.meta.table_layout.unwrap_or_default(),
             table: None,
             table_source_visible: false,
+            diagram: None,
             lang_chip_w: 0.0,
             text: node.content.as_text().unwrap_or_default().to_string(),
             runs,
@@ -315,6 +321,15 @@ impl Paragraph {
     /// interacts with `done` state.
     pub fn is_task(&self) -> bool {
         self.kind.is_task_like() || self.list_style == Some(ListStyle::Checkbox)
+    }
+
+    /// This row is a diagram showing its picture — the drawing, or the
+    /// placeholder waiting for one — rather than its text. Selected like an
+    /// image, opened with Enter, no caret, no chips.
+    pub fn diagram_shows_picture(&self) -> bool {
+        self.diagram
+            .as_ref()
+            .is_some_and(crate::diagram::DiagramRowState::shows_picture)
     }
 
     /// Where this row's text column begins, in logical pixels.

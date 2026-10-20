@@ -1438,6 +1438,10 @@ pub trait Editing {
                 && (view.table_source == Some(row.id)
                     || row.table.as_ref().is_some_and(|table| table.grid.is_none()));
         }
+        // The same mirror for diagram rows — what each shows this frame — and
+        // the requests for any text the view has no answer for yet. One hash
+        // and one lookup per diagram row; nothing is laid out here.
+        crate::diagram::sync(body, view);
         // Rows wrap to the page width in Page/Narrow, not the raw viewport —
         // see `set_viewport` for why this is the effective width.
         let layout_w = view.view_mode.effective_w(view.viewport.0);
@@ -2296,6 +2300,11 @@ pub trait Editing {
         self.body_mut().clear_selection();
         self.view_mut().overlay = Overlay::None;
         self.view_mut().desired_x = None;
+        // Leaving a diagram's text closes it: the block goes back to being a
+        // picture (or its text and reason) as the caret lands below.
+        if self.view().diagram_text_open == Some(code) {
+            self.view_mut().diagram_text_open = None;
+        }
         // Move into an existing following row if there is one; otherwise make
         // one. Creating only when needed keeps the document from accumulating
         // empty paragraphs every time you leave a block.
@@ -2358,6 +2367,17 @@ pub trait Editing {
     /// and the caller should split it. The mirror, for *above*, is
     /// [`enter_block_above`](Self::enter_block_above) (Shift+Enter).
     fn enter_on_block(&mut self, ws: &mut WorkspaceDoc) -> bool {
+        // A drawn diagram is the one block Enter opens rather than steps past:
+        // its text is what a person wants next, and it is one Enter away.
+        // Shift+Enter above it stays the structural insert every block has.
+        if let Some(diagram) = self
+            .body()
+            .focused()
+            .filter(|row| row.diagram_shows_picture())
+            .map(|row| row.id)
+        {
+            return self.open_diagram_text(diagram);
+        }
         let Some(block_id) = self.focused_block_id() else {
             return false;
         };
@@ -2450,8 +2470,158 @@ pub trait Editing {
         let row = self.body().focused()?;
         let is_block = row.image.is_some()
             || row.kind == koru_core::node::Kind::Divider
-            || (row.kind == Kind::Table && !row.table_source_visible);
+            || (row.kind == Kind::Table && !row.table_source_visible)
+            || row.diagram_shows_picture();
         is_block.then_some(row.id)
+    }
+
+    // ------------------------------------------------------------- diagrams
+    //
+    // A `mermaid` code block drawn in place (`crate::diagram`). The editor
+    // keeps the state per view and asks the host for every layout; these are
+    // the seam the host calls and the two gestures a person has.
+
+    /// The layouts the editor is waiting for, in the order it asked, taken
+    /// off the queue. The host lays each text out on a worker of its own and
+    /// answers through [`diagram_result`](Self::diagram_result). Empty on
+    /// almost every call: a request is pushed once per distinct text.
+    fn take_diagram_requests(&mut self) -> Vec<crate::diagram::DiagramRequest> {
+        std::mem::take(&mut self.view_mut().diagram_requests)
+    }
+
+    /// The host's answer for `node`'s text `text_hash`: the prepared drawing,
+    /// or the status that says why there is none (every failure mapped to a
+    /// `Status` by the host — a timeout as too large, an internal error as a
+    /// line that could not be read).
+    ///
+    /// Ignored unless that hash is the one in flight for the node, so a stale
+    /// answer never puts a drawing of other text on screen. `true` means the
+    /// view changed and a redraw is owed: the host returns it from its
+    /// `maintain`, and the next frame's reflow takes the new height from the
+    /// entry without reshaping any text.
+    fn diagram_result(
+        &mut self,
+        node: NodeId,
+        text_hash: u64,
+        result: Result<std::sync::Arc<koru_draw::diagram::PreparedDiagram>, koru_diagram::Status>,
+    ) -> bool {
+        crate::diagram::land(self.view_mut(), node, text_hash, result)
+    }
+
+    /// Open a diagram's text for editing in this view, with the caret on the
+    /// line its status names — the unreadable line of a `NotParsed`, line 1
+    /// otherwise. Enter on the selected drawing, the *Edit text* control and
+    /// the menu row all come here. `false` when `node` is not a diagram row.
+    ///
+    /// On a block whose text is already showing (closed and not drawing) this
+    /// is a caret placement: the text was never hidden, so there is nothing
+    /// to reveal, and marking it open means the drawing returns *below* the
+    /// text once the line is fixed rather than replacing it mid-edit.
+    fn open_diagram_text(&mut self, node: NodeId) -> bool {
+        let Some(row) = self
+            .body()
+            .row(node)
+            .filter(|row| crate::diagram::is_diagram_row(row))
+        else {
+            return false;
+        };
+        let line = match self.view().diagrams.get(&node).map(|entry| &entry.state) {
+            Some(crate::diagram::DiagramState::Failed(koru_diagram::Status::NotParsed {
+                line,
+                ..
+            })) => *line,
+            _ => 1,
+        };
+        let at = crate::diagram::line_start(&row.text, line);
+        self.body_mut().clear_selection();
+        self.body_mut().focus_on(node);
+        let view = self.view_mut();
+        view.diagram_text_open = Some(node);
+        view.active = true;
+        view.overlay = Overlay::None;
+        view.drag_row = None;
+        view.desired_x = None;
+        // The control's job is done; the text under the pointer is the
+        // answer now.
+        if view.table_controls_node == Some(node) {
+            view.table_controls.clear();
+            view.table_controls_node = None;
+        }
+        self.place_caret(at);
+        self.reflow();
+        self.scroll_to_caret();
+        true
+    }
+
+    /// Close the open diagram text, if any, so the block shows its picture
+    /// again (or its text and reason, when the text does not draw). The
+    /// drawing of the last text that worked stays in the entry for the next
+    /// time the text is opened. `true` when something was open.
+    fn close_diagram_text(&mut self) -> bool {
+        if self.view_mut().diagram_text_open.take().is_none() {
+            return false;
+        }
+        self.reflow();
+        true
+    }
+
+    /// Show a selected drawing's *Edit text* control the moment the keyboard
+    /// lands on it, through the clock hover uses — `set_focus` neither waits
+    /// nor fades in, because arrowing onto a block has already said what the
+    /// person wants to know. Leaving the drawing by keyboard lets it fade; a
+    /// control the pointer revealed on some other block is left alone.
+    fn sync_diagram_controls_focus(&mut self, now: Instant) {
+        let focused = self
+            .body()
+            .focused()
+            .filter(|row| row.diagram_shows_picture() && self.view().active)
+            .map(|row| (row.id, self.diagram_control_content(row)));
+        let shown = self.view().table_controls_node;
+        match focused {
+            Some((id, content)) => {
+                if shown != Some(id) || !self.view().table_controls.is_present() {
+                    let view = self.view_mut();
+                    view.table_controls_node = Some(id);
+                    view.table_controls.set_focus(Some(content), now);
+                }
+            }
+            None => {
+                let on_diagram = shown.is_some_and(|id| {
+                    self.body()
+                        .row(id)
+                        .is_some_and(Paragraph::diagram_shows_picture)
+                });
+                // The pointer resting on that very row still wants it.
+                let pointer_on_it = self
+                    .view()
+                    .hover
+                    .and_then(Hover::row)
+                    .and_then(|index| self.body().rows.get(index))
+                    .map(|row| row.id)
+                    == shown;
+                if on_diagram && !pointer_on_it {
+                    let view = self.view_mut();
+                    if view.table_controls.set_focus(None, now) && !view.table_controls.is_present()
+                    {
+                        view.table_controls_node = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the controls clock carries for a drawn diagram: its one control's
+    /// name, anchored on the row. The key is the node, so moving between two
+    /// drawings restarts the reveal rather than sliding one.
+    fn diagram_control_content(&self, row: &Paragraph) -> koru_ui::TooltipContent {
+        let raw = row.id.as_uuid().as_u128();
+        let key = raw as u64 ^ (raw >> 64) as u64;
+        let anchor = Rect::new(row.text_x(), row.y, self.view().viewport.0, row.height);
+        koru_ui::TooltipContent::new(
+            key,
+            anchor,
+            koru_i18n::t(koru_i18n::current(), koru_i18n::Key::DiagramEditText),
+        )
     }
 
     /// Follow a step through history, offering the caret offset the edit took
@@ -2814,16 +2984,15 @@ pub trait Editing {
         // An image row has no text to delete within and no neighbour to merge
         // with, so Backspace/Delete remove the block itself — delegating to the
         // whole-row path, which already handles a focused image and repositions
-        // the caret. A divider is the same: no text, no merge.
-        if self
-            .body()
-            .focused()
-            .is_some_and(|r| r.kind == koru_core::node::Kind::Image)
-            || self
-                .body()
-                .focused()
-                .is_some_and(|r| r.kind == koru_core::node::Kind::Divider)
-        {
+        // the caret. A divider is the same: no text, no merge. A diagram
+        // showing its picture is selected like an image and goes like one —
+        // the whole block, in one undoable step — rather than losing a
+        // character of text nobody can see.
+        if self.body().focused().is_some_and(|r| {
+            r.kind == koru_core::node::Kind::Image
+                || r.kind == koru_core::node::Kind::Divider
+                || r.diagram_shows_picture()
+        }) {
             self.delete_rows(ws, true);
             return;
         }
@@ -4277,6 +4446,13 @@ pub trait Editing {
                 }
             }
             Action::CollapseSelection => {
+                // Escape in an open diagram text closes it first: the block
+                // is a picture again (or its text and reason), still focused.
+                if self.view().diagram_text_open.is_some()
+                    && self.view().diagram_text_open == self.body().focused_id()
+                {
+                    self.close_diagram_text();
+                }
                 if let Some(row) = self.body_mut().focused_mut() {
                     row.selection = row.selection.collapse();
                 }
@@ -4569,15 +4745,16 @@ pub trait Editing {
         self.reflow();
         let (body, view) = self.parts();
         view.overlay.refresh(body);
-        if self
-            .body()
-            .focused()
-            .is_some_and(|row| row.image.is_some() || row.kind == koru_core::node::Kind::Divider)
-        {
+        if self.body().focused().is_some_and(|row| {
+            row.image.is_some()
+                || row.kind == koru_core::node::Kind::Divider
+                || row.diagram_shows_picture()
+        }) {
             self.scroll_row_into_view(self.body().focus);
         } else {
             self.scroll_to_caret();
         }
+        self.sync_diagram_controls_focus(Instant::now());
     }
 
     /// Refresh a live typed trigger's CRDT endpoints after a local edit. The
@@ -4882,11 +5059,14 @@ pub trait Editing {
             }
         }
         // A divider carries no text: keystrokes that reach it do nothing rather
-        // than silently logging a `NonEmptyText` rejection from the model.
+        // than silently logging a `NonEmptyText` rejection from the model. A
+        // diagram showing its picture has text, but none a person can see:
+        // typing into it blind would change a drawing's source without
+        // showing a letter, so it does nothing too — Enter opens the text.
         if self
             .body()
             .focused()
-            .is_some_and(|r| r.kind == koru_core::node::Kind::Divider)
+            .is_some_and(|r| r.kind == koru_core::node::Kind::Divider || r.diagram_shows_picture())
         {
             return;
         }
@@ -7310,6 +7490,11 @@ pub trait Editing {
     fn update_table_controls_hover(&mut self, hover: Option<Hover>, now: Instant) -> bool {
         let target = hover.and_then(Hover::row).and_then(|index| {
             let row = self.body().rows.get(index)?;
+            if row.diagram_shows_picture() {
+                // A drawn diagram's one control rides the same clock, so the
+                // reveal feels the same on every block.
+                return Some((row.id, self.diagram_control_content(row)));
+            }
             (row.kind == Kind::Table).then(|| {
                 let raw = row.id.as_uuid().as_u128();
                 let key = raw as u64 ^ (raw >> 64) as u64;
@@ -7610,6 +7795,18 @@ pub trait Editing {
         if row.image.is_some() || row.kind == koru_core::node::Kind::Divider {
             // A non-text block belongs to its row for hover and dragging, but
             // wears the grab hand rather than an I-beam (reuses `Hover::Image`).
+            return Some(Hover::Image(i));
+        }
+        // A drawn diagram is a picture too — except for its *Edit text*
+        // control, once the clock has revealed it. Asked before the code
+        // block's chips, which a picture does not wear.
+        if row.diagram_shows_picture() {
+            let layout_w = self.view().view_mode.effective_w(self.view().viewport.0);
+            if self.table_controls_alpha(row.id, Instant::now()) > 0.0
+                && rowlayout::diagram_control_rect(row, layout_w).contains(x, doc_y)
+            {
+                return Some(Hover::DiagramEdit(i));
+            }
             return Some(Hover::Image(i));
         }
         if row.kind == Kind::Table
@@ -7941,6 +8138,43 @@ pub trait Editing {
         // x — so the hit-test matches what `draw_document` draws and `hover_at`
         // reports, rather than disagreeing by `content_x` in Page/Narrow.
         let layout_w = self.view().view_mode.effective_w(self.view().viewport.0);
+        // A diagram showing its picture is selected, not edited — the image
+        // pattern: focus it, arm a drag from the drawing, place no caret. Its
+        // one control opens the text; its chips are not drawn, so they are
+        // not asked. The caret the picture hid is collapsed, so a Copy takes
+        // the whole block rather than a range nobody can see.
+        if self.body().rows[i].diagram_shows_picture() {
+            let row = &self.body().rows[i];
+            let id = row.id;
+            if self.table_controls_alpha(id, Instant::now()) > 0.0
+                && rowlayout::diagram_control_rect(row, layout_w).contains(cx, doc_y)
+            {
+                return self.open_diagram_text(id);
+            }
+            if self.grip_rect(i).is_some_and(|r| r.contains(cx, doc_y)) {
+                self.view_mut().drag_row = Some(DragRow { from: i, to: i });
+                return true;
+            }
+            let on_block = match row.diagram.as_ref().and_then(|state| {
+                rowlayout::diagram_layout(row, state, row.height, layout_w).drawing
+            }) {
+                Some(drawing) => Rect::new(drawing.x, row.y + drawing.y, drawing.w, drawing.h)
+                    .contains(cx, doc_y),
+                // The placeholder is the whole block, like a divider.
+                None => true,
+            };
+            self.body_mut().clear_selection();
+            {
+                let row = &mut self.body_mut().rows[i];
+                row.selection = row.selection.collapse();
+            }
+            self.view_mut().active = true;
+            if on_block {
+                self.view_mut().drag_row = Some(DragRow { from: i, to: i });
+            }
+            self.reflow();
+            return true;
+        }
         if self.body().rows[i].kind == Kind::Code
             && rowlayout::copy_chip_rect(&self.body().rows[i], layout_w).contains(cx, doc_y)
         {

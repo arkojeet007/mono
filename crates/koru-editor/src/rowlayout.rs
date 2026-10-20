@@ -99,7 +99,7 @@ pub fn build_row(engine: &mut TextEngine, row: &mut Paragraph, viewport_w: f32) 
     // reserve a right gutter for it — the chip then sits in that gutter on the
     // top line, clear of the code.
     if row.kind == Kind::Code {
-        let label = row.language.as_deref().unwrap_or("Auto");
+        let label = crate::diagram::chip_label(row.language.as_deref());
         row.lang_chip_w = engine.simple_layout(label, theme::role::hint()).width() + 6.0;
     }
     let line_box = step.size * step.line_height;
@@ -526,6 +526,18 @@ fn position_rows(outline: &mut Body, viewport_w: f32, top_inset: f32, pills: &Pi
             } else {
                 table.grid.as_ref().map_or(0.0, |grid| grid.height)
             }
+        } else if let Some(diagram) = &row.diagram {
+            // A diagram row is a code row whose height depends on what it is
+            // showing this frame: the drawing scaled to the column, the
+            // placeholder at the text's height, or the text with its reason
+            // and, open, the drawing below. Decided from the mirrored state,
+            // never by laying anything out here.
+            let text_h = if row.dirty {
+                estimated_text_height(row, viewport_w)
+            } else {
+                row.layout.height().max(step.size * step.line_height)
+            };
+            diagram_layout(row, diagram, text_h, viewport_w).height
         } else if row.dirty {
             // Not shaped yet: an estimate, refined once the row enters the band.
             estimated_text_height(row, viewport_w)
@@ -709,6 +721,152 @@ fn image_row_height(image: &crate::paragraph::ImageRef, viewport_w: f32) -> f32 
     image_display_size(image, viewport_w)
         .1
         .max(theme::FONT_SIZE * theme::LINE_HEIGHT)
+}
+
+/// Air between a diagram's text (or its reason line) and the drawing under it.
+pub const DIAGRAM_GAP: f32 = 8.0;
+/// Air between a diagram's text and the reason line under it — the table's
+/// error line keeps the same four pixels.
+pub const DIAGRAM_LINE_GAP: f32 = 4.0;
+/// How far the *Edit text* control sits in from the code panel's corner.
+const DIAGRAM_CONTROL_INSET: f32 = 4.0;
+
+/// Where a diagram's drawing goes, in content-column x and **offsets from the
+/// row's own y** — the caller adds `row.y` for hit-testing or the screen y
+/// for painting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawingBox {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// The column scale: at most 1. The painter divides every stroke by it so
+    /// a drawing scaled down to fit keeps its line weight.
+    pub scale: f32,
+}
+
+/// The vertical plan of a diagram row this frame, from the mirrored state.
+///
+/// One function answers both `position_rows` (the height) and `draw_document`
+/// (where each part goes), so the row cannot reserve one height and paint
+/// another. Every `y` is an offset from the row's `y`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiagramLayout {
+    /// The reason line under the text, when the current text does not draw.
+    pub reason_y: Option<f32>,
+    /// The *Showing the last drawing that worked* label over a retained
+    /// drawing.
+    pub label_y: Option<f32>,
+    /// The drawing — in place of the text while closed, under it while open.
+    pub drawing: Option<DrawingBox>,
+    pub height: f32,
+}
+
+/// The width a diagram may fill: the text column from the row's first glyph
+/// to the content column's right edge, with no chip gutter — a picture wears
+/// no chips.
+pub fn diagram_column_width(row: &Paragraph, viewport_w: f32) -> f32 {
+    (viewport_w - theme::MARGIN_X - theme::AFFORDANCE_W - row.text_x()).max(80.0)
+}
+
+/// A drawing of `natural` size placed in the row's column at offset `y`:
+/// natural size up to the column, scaled down to fit when wider, **never
+/// scaled up** — the `image_display_box` rule. Aligned in the column the way
+/// the block is.
+fn drawing_box(
+    row: &Paragraph,
+    natural: vello::kurbo::Size,
+    y: f32,
+    viewport_w: f32,
+) -> DrawingBox {
+    let column = diagram_column_width(row, viewport_w);
+    let (nw, nh) = (natural.width as f32, natural.height as f32);
+    let scale = if nw > column && nw > 0.0 {
+        column / nw
+    } else {
+        1.0
+    };
+    let (w, h) = (nw * scale, nh * scale);
+    let left = row.text_x();
+    let x = match row.align {
+        Align::Start => left,
+        Align::Center => left + ((column - w) * 0.5).max(0.0),
+        Align::End => (left + column - w).max(left),
+    };
+    DrawingBox { x, y, w, h, scale }
+}
+
+/// Lay a diagram row out vertically: the text (`text_h`, already measured or
+/// estimated by the caller), then whatever the state adds under it.
+///
+/// Closed and drawn, the drawing stands in for the text and the row is as
+/// tall as the scaled drawing; closed and pending, the row is the text's
+/// height — the placeholder promises the text's room and nothing more. Text
+/// visible (open, or closed and failed): the text, the reason line when the
+/// current text does not draw, and — open — the label (when the drawing is
+/// the last good one) and the drawing. Reason and label are one line in the
+/// hint role; nothing here shapes.
+pub fn diagram_layout(
+    row: &Paragraph,
+    state: &crate::diagram::DiagramRowState,
+    text_h: f32,
+    viewport_w: f32,
+) -> DiagramLayout {
+    let line = theme::role::hint().metrics.line_height;
+    if state.shows_picture() {
+        let drawing = state
+            .drawing
+            .as_ref()
+            .map(|prepared| drawing_box(row, prepared.natural_size(), 0.0, viewport_w));
+        let height = drawing.map_or(text_h, |drawing| drawing.h);
+        return DiagramLayout {
+            reason_y: None,
+            label_y: None,
+            drawing,
+            height,
+        };
+    }
+    let mut y = text_h;
+    let reason_y = state.reason.is_some().then(|| {
+        y += DIAGRAM_LINE_GAP;
+        let at = y;
+        y += line;
+        at
+    });
+    let (label_y, drawing) = match &state.drawing {
+        Some(prepared) => {
+            y += DIAGRAM_GAP;
+            let label_y = state.last_good.then(|| {
+                let at = y;
+                y += line + DIAGRAM_LINE_GAP;
+                at
+            });
+            let drawing = drawing_box(row, prepared.natural_size(), y, viewport_w);
+            y += drawing.h;
+            (label_y, Some(drawing))
+        }
+        None => (None, None),
+    };
+    DiagramLayout {
+        reason_y,
+        label_y,
+        drawing,
+        height: y,
+    }
+}
+
+/// The *Edit text* control at a drawn diagram's top-right, in document y and
+/// content-column x — inside the code panel's corner, the size of a table's
+/// controls. One function for `hover_at`, `mouse_down` and the painter.
+pub fn diagram_control_rect(row: &Paragraph, layout_w: f32) -> Rect {
+    let side = crate::table::CONTROL_SIZE;
+    let right = layout_w - theme::MARGIN_X - theme::AFFORDANCE_W + theme::CODE_PAD;
+    Rect::new(
+        (right - DIAGRAM_CONTROL_INSET - side).max(row.text_x()),
+        row.y - theme::CODE_PAD + DIAGRAM_CONTROL_INSET,
+        side,
+        side,
+    )
 }
 
 /// The hit-rect of the language chip at the top-right of a code block, in

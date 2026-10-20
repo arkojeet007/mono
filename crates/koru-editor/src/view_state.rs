@@ -306,6 +306,8 @@ pub enum Hover {
     TableLayout(usize),
     /// A table's source/grid mode toggle.
     TableMode(usize),
+    /// A drawn diagram's one control, *Edit text*, at the block's top-right.
+    DiagramEdit(usize),
     /// A row of an open overlay panel.
     PanelRow(usize),
     /// A text field inside an open panel.
@@ -346,6 +348,7 @@ impl Hover {
             | Self::TaskWarning(i)
             | Self::TableLayout(i)
             | Self::TableMode(i)
+            | Self::DiagramEdit(i)
             | Self::Pill { row: i, .. }
             | Self::Chip { row: i, .. }
             | Self::Reminder { row: i, .. } => Some(i),
@@ -391,6 +394,7 @@ impl Hover {
             | Self::Copy(_)
             | Self::TableLayout(_)
             | Self::TableMode(_)
+            | Self::DiagramEdit(_)
             | Self::Plus(_)
             | Self::TitleMenu
             | Self::PanelRow(_)
@@ -399,6 +403,16 @@ impl Hover {
             | Self::Checkbox(_) => cursor::PRESS,
         }
     }
+}
+
+/// *Save as…* asked on a drawn diagram: which block to save a picture of.
+///
+/// The view raises it and the shell performs it — the dialog, the raster
+/// and the write are the shell's — so it carries only the node. The drawing
+/// itself is in the view's [`ViewState::diagrams`] entry for that node.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SaveDiagramAs {
+    pub node: NodeId,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1009,8 +1023,30 @@ pub struct ViewState {
     /// floating controls. The controls consume its opacity but draw no tooltip
     /// surface; this keeps the 400/100/75 ms contract in one implementation.
     pub table_controls: koru_ui::Tooltip,
-    /// Table whose controls are waiting, visible, or fading out.
+    /// Table — or diagram — whose controls are waiting, visible, or fading
+    /// out. A diagram's one control (*Edit text*) rides the same clock, so a
+    /// table and a drawing side by side cannot both be showing furniture.
     pub table_controls_node: Option<NodeId>,
+    /// What this view knows about each `mermaid` code block: whether its text
+    /// draws, the drawing, and the last drawing that worked. Keyed by node and
+    /// kept **here, not on the row**, because `Paragraph::adopt` clears a row's
+    /// caches on every keystroke and the last good drawing has to outlive the
+    /// keystroke that broke the text. Entries retire when their node leaves
+    /// the body (`crate::diagram::sync`). Never synced: a drawing is derived.
+    pub diagrams: HashMap<NodeId, crate::diagram::DiagramEntry>,
+    /// The diagram whose text is open for editing in this view, if any. A
+    /// reading position, like scroll — per view, never synced, and closed the
+    /// moment the focus leaves the row.
+    pub diagram_text_open: Option<NodeId>,
+    /// Layouts the editor is asking the host for, in the order it asked.
+    /// Drained by `Editing::take_diagram_requests`; the host answers each
+    /// through `Editing::diagram_result`. The editor never lays a diagram out
+    /// itself and never waits for one.
+    pub diagram_requests: Vec<crate::diagram::DiagramRequest>,
+    /// *Save as…* on a drawn diagram: the shell owns the save dialog, the
+    /// raster and the file, so the view only asks. Drained by the document
+    /// app the way `wants_file_action` is.
+    pub wants_save_diagram_as: Option<SaveDiagramAs>,
     /// Copy icon on a hovered code block — one clock, not per row.
     pub copy: koru_ui::CopyAffordance,
     /// The unfinished-items triangle's tooltip. One clock for the whole view:
@@ -1129,6 +1165,10 @@ impl Default for ViewState {
             table_cell: None,
             table_controls: koru_ui::Tooltip::default(),
             table_controls_node: None,
+            diagrams: HashMap::new(),
+            diagram_text_open: None,
+            diagram_requests: Vec::new(),
+            wants_save_diagram_as: None,
             task_warning: koru_ui::Tooltip::default(),
             copy: koru_ui::CopyAffordance::default(),
             tables_enabled: false,

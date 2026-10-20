@@ -157,6 +157,50 @@ pub fn draw_document(
             }
             continue;
         }
+        // A diagram showing its picture: the drawing in place of the code
+        // text, or the tinted panel alone while the first layout of this text
+        // is in flight. Like an image it has no caret and no text selection;
+        // like a code block it keeps the panel; its one control — *Edit text*
+        // — rides the table controls' clock. The text, its chips and its
+        // reason line are the ordinary code path below, taken when the text
+        // is open or the text does not draw.
+        if let Some(state) = row.diagram.as_ref().filter(|s| s.shows_picture()) {
+            let selected = i == outline.focus && active;
+            let on_row = hover.and_then(Hover::row) == Some(i);
+            if row.selected {
+                draw_row_selection(scene, root, row, vw, oy);
+            }
+            let r = rowlayout::code_panel_rect(row, vw, oy);
+            let panel = rrect(r.x, r.y, r.w, r.h, 6.0);
+            fill(scene, root, theme::p().code_bg, &panel);
+            stroke(scene, root, theme::p().panel_border, 1.0, &panel);
+            draw_diagram_picture(scene, root, row, state, vw, oy, selected);
+            let alpha = table_controls
+                .filter(|(id, _)| *id == row.id)
+                .map_or(0.0, |(_, alpha)| alpha);
+            if alpha > 0.0 {
+                let control = rowlayout::diagram_control_rect(row, vw);
+                crate::table::draw_control(
+                    scene,
+                    root,
+                    engine,
+                    koru_draw::geometry::Rect::new(
+                        control.x,
+                        oy + (control.y - row.y),
+                        control.w,
+                        control.h,
+                    ),
+                    icons::PENCIL,
+                    matches!(hover, Some(Hover::DiagramEdit(h)) if h == i),
+                    alpha,
+                );
+            }
+            if selected || on_row {
+                let grip_active = matches!(hover, Some(Hover::Grip(h)) if h == i);
+                draw_grip(scene, root, row, oy, grip_active);
+            }
+            continue;
+        }
         let focused = i == outline.focus;
 
         // A whole row in a multi-row selection. Behind the text so the words
@@ -310,6 +354,13 @@ pub fn draw_document(
             search_highlights,
             spelling,
         );
+        // A diagram whose text is showing — open for editing, or closed and
+        // not drawing: the hint in an emptied block, the reason the current
+        // text is not drawn, and (open) the drawing below, labelled when it
+        // is the last one that worked rather than the current text's.
+        if let Some(state) = row.diagram.as_ref() {
+            draw_diagram_under_text(scene, root, row, state, engine, ox, oy, vw);
+        }
         // The attribute chips, trailing the text (roadmap A2). Nothing when
         // the node has none set — the invariant, and the common row's cost.
         if !row.chips.is_empty() {
@@ -391,7 +442,7 @@ pub fn draw_document(
             );
             let chip = rowlayout::lang_chip_rect(row, vw);
             let (cx, cy, cw, ch) = (chip.x, oy + (chip.y - row.y), chip.w, chip.h);
-            let label = row.language.as_deref().unwrap_or("Auto");
+            let label = crate::diagram::chip_label(row.language.as_deref());
             fill(scene, root, theme::p().chip_bg, &rrect(cx, cy, cw, ch, 3.0));
             let laid = engine.simple_layout(label, theme::role::hint());
             draw_layout(
@@ -901,6 +952,104 @@ pub fn draw_image_row(
 
     if selected {
         image_chrome(scene, root, engine, x, oy, dw, dh, dragging);
+    }
+}
+
+/// Paint the drawing of `prepared` where `layout` placed it, under the root
+/// transform, the block's translation and the column scale — with the scale
+/// handed to the painter on its own, so every stroke is divided by it and a
+/// drawing scaled down to fit keeps its line weight. Roles become the current
+/// palette's colors here, at draw time, so a theme flip is a redraw.
+fn paint_diagram(
+    scene: &mut Scene,
+    root: Affine,
+    prepared: &koru_draw::diagram::PreparedDiagram,
+    drawing: rowlayout::DrawingBox,
+    oy: f32,
+) {
+    let transform = root
+        * Affine::translate((drawing.x as f64, (oy + drawing.y) as f64))
+        * Affine::scale(drawing.scale as f64);
+    koru_draw::diagram::paint(prepared, theme::p(), transform, drawing.scale as f64, scene);
+}
+
+/// A closed diagram's picture: the drawing scaled to the column, or nothing
+/// over the tinted panel while the layout is pending. `selected` wears the
+/// image's focus ring — a drawing is picked like a picture, so it reads like
+/// one — with no corner handles, since a diagram is never resized by hand.
+fn draw_diagram_picture(
+    scene: &mut Scene,
+    root: Affine,
+    row: &Paragraph,
+    state: &crate::diagram::DiagramRowState,
+    vw: f32,
+    oy: f32,
+    selected: bool,
+) {
+    let layout = rowlayout::diagram_layout(row, state, row.height, vw);
+    let ring = match (&state.drawing, layout.drawing) {
+        (Some(prepared), Some(drawing)) => {
+            paint_diagram(scene, root, prepared, drawing, oy);
+            rect(drawing.x, oy + drawing.y, drawing.w, drawing.h)
+        }
+        _ => rect(
+            row.text_x(),
+            oy,
+            rowlayout::diagram_column_width(row, vw),
+            row.height,
+        ),
+    };
+    if selected {
+        stroke(scene, root, theme::p().focus_ring, 2.0, &ring);
+    }
+}
+
+/// What a diagram shows under — or in place of — its visible text.
+///
+/// The hint stands in for the text of an emptied block, set the way the
+/// body's own placeholder is set (the row's family, step and weight) so it
+/// reads as the line the first keystroke will fill. The reason and the label
+/// are one hint-role line each, in `text_dim`, the way the table's error line
+/// is drawn; both are short, so shaping them here costs what the table's
+/// control glyph already costs per frame. The drawing itself shapes nothing:
+/// that was done when the entry was built, off the loop thread.
+#[allow(clippy::too_many_arguments)]
+fn draw_diagram_under_text(
+    scene: &mut Scene,
+    root: Affine,
+    row: &Paragraph,
+    state: &crate::diagram::DiagramRowState,
+    engine: &mut TextEngine,
+    ox: f32,
+    oy: f32,
+    vw: f32,
+) {
+    let lang = koru_i18n::current();
+    if state.empty && row.text.is_empty() {
+        let hint = engine.placeholder_layout(
+            koru_i18n::t(lang, koru_i18n::Key::DiagramEmptyHint),
+            row.type_step(),
+            row.font_choice().stack(),
+            row.weight(),
+        );
+        draw_layout(scene, root, &hint, ox, oy, Some(theme::p().placeholder));
+    }
+    let layout = rowlayout::diagram_layout(row, state, row.layout.height(), vw);
+    if let (Some(status), Some(y)) = (&state.reason, layout.reason_y)
+        && let Some(text) = crate::diagram::reason_text(lang, status)
+    {
+        let line = engine.simple_layout(&text, theme::role::hint());
+        draw_layout(scene, root, &line, ox, oy + y, Some(theme::p().text_dim));
+    }
+    if let Some(y) = layout.label_y {
+        let line = engine.simple_layout(
+            koru_i18n::t(lang, koru_i18n::Key::DiagramLastGood),
+            theme::role::hint(),
+        );
+        draw_layout(scene, root, &line, ox, oy + y, Some(theme::p().text_dim));
+    }
+    if let (Some(prepared), Some(drawing)) = (&state.drawing, layout.drawing) {
+        paint_diagram(scene, root, prepared, drawing, oy);
     }
 }
 

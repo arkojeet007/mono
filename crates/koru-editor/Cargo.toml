@@ -29,6 +29,13 @@ uuid.workspace = true
 koru-i18n = { path = "../koru-i18n" }
 koru-keys = { path = "../koru-keys" }
 koru-draw = { path = "../koru-draw" }
+# **The vocabulary of a diagram's state, not its engine.** A `mermaid` code
+# block's row carries `koru_diagram::Status` — why a text is not drawn — and
+# the host answers the editor's requests in the same words. The editor never
+# calls `inspect` or `layout`: those run on a host worker, and this crate
+# spawns no threads. The engine stays sealed in `koru-diagram`; the painter of
+# a prepared drawing is `koru-draw`'s.
+koru-diagram = { path = "../koru-diagram" }
 koru-markdown = { path = "../koru-markdown" }
 koru-workspace = { path = "../koru-workspace" }
 # Block behaviour and the syntax engine live here so `syntect` is linked in

@@ -5998,6 +5998,7 @@ dependencies = [
  "koru-blocks",
  "koru-clipboard",
  "koru-core",
+ "koru-diagram",
  "koru-draw",
  "koru-env",
  "koru-features",

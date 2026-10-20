@@ -41,6 +41,10 @@ pub mod browser;
 pub mod chips;
 pub mod clipboard;
 pub mod components;
+/// A `mermaid` code block drawn in place: the per-view state behind the
+/// drawing, the request seam the host answers, and the words a block says
+/// when it is not drawn.
+pub mod diagram;
 pub mod dictation;
 pub mod draw;
 pub mod editor;
@@ -64,6 +68,7 @@ pub mod utils;
 pub mod view_state;
 
 pub use body::Body;
+pub use diagram::{DiagramEntry, DiagramRequest, DiagramState};
 pub use dictation::{Affinity, Composition, Mapped, ProvisionalRun};
 pub use editor::{AttrPicker, Editing, Editor, prepare};
 pub use objective::row_words;
@@ -71,7 +76,7 @@ pub use paragraph::{Paragraph, TaskRow};
 pub use policy::Policy;
 pub use view_state::{
     DelegateRequest, DragRow, Embedded, Hover, OpenWhere, PasteBatch, PasteReplacement,
-    SearchHighlight, ViewState,
+    SaveDiagramAs, SearchHighlight, ViewState,
 };
 pub mod emoji;
 
