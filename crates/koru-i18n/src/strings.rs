@@ -2371,13 +2371,33 @@ pub enum Key {
     // come here as they are touched.
     MenuCopy,
     MenuSaveAs,
+
+    // ------------------------------------------------------------ diagrams
+    // A `mermaid` code block drawn in place. The control that opens its text,
+    // the chip's display name for that one token, the label over a retained
+    // drawing while the text is being edited, the four reasons a block is not
+    // drawn (Koru's words, never the engine's), and the hint in an empty block.
+    DiagramEditText,
+    DiagramChipMermaid,
+    DiagramLastGood,
+    DiagramLineUnreadable,
+    DiagramKindNotDrawn,
+    DiagramTooLargeBoxesOne,
+    DiagramTooLargeBoxesMany,
+    DiagramTooLargeMessagesOne,
+    DiagramTooLargeMessagesMany,
+    /// *Too large to draw* with no count: shown when the engine refused the
+    /// text before anything could be counted — a source over its size budget —
+    /// so there is no number of boxes or messages to name.
+    DiagramTooLargeUncounted,
+    DiagramEmptyHint,
 }
 
 impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1615] = [
+    pub const ALL: [Key; 1626] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -3993,6 +4013,17 @@ impl Key {
         Key::TelemetryConsentDecline,
         Key::MenuCopy,
         Key::MenuSaveAs,
+        Key::DiagramEditText,
+        Key::DiagramChipMermaid,
+        Key::DiagramLastGood,
+        Key::DiagramLineUnreadable,
+        Key::DiagramKindNotDrawn,
+        Key::DiagramTooLargeBoxesOne,
+        Key::DiagramTooLargeBoxesMany,
+        Key::DiagramTooLargeMessagesOne,
+        Key::DiagramTooLargeMessagesMany,
+        Key::DiagramTooLargeUncounted,
+        Key::DiagramEmptyHint,
     ];
 }
 
@@ -12377,4 +12408,19 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     // ------------------------------------------ the document's context menu
     Row { key: Key::MenuCopy, en: "Copy", es: "Copiar", pt_br: "Copiar", de: "Kopieren", fr: "Copier", ar: "نسخ", zh_hans: "复制", ja: "コピー" },
     Row { key: Key::MenuSaveAs, en: "Save as…", es: "Guardar como…", pt_br: "Salvar como…", de: "Speichern unter…", fr: "Enregistrer sous…", ar: "حفظ باسم…", zh_hans: "另存为…", ja: "名前を付けて保存…" },
+    // ------------------------------------------------------------ diagrams
+    Row { key: Key::DiagramEditText, en: "Edit text", es: "Editar texto", pt_br: "Editar texto", de: "Text bearbeiten", fr: "Modifier le texte", ar: "تحرير النص", zh_hans: "编辑文本", ja: "テキストを編集" },
+    // The notation's own name, kept as it is written everywhere.
+    Row { key: Key::DiagramChipMermaid, en: "Mermaid", es: "Mermaid", pt_br: "Mermaid", de: "Mermaid", fr: "Mermaid", ar: "Mermaid", zh_hans: "Mermaid", ja: "Mermaid" },
+    Row { key: Key::DiagramLastGood, en: "Showing the last drawing that worked", es: "Se muestra el último dibujo que funcionó", pt_br: "Mostrando o último desenho que funcionou", de: "Zeigt die letzte Zeichnung, die funktioniert hat", fr: "Affichage du dernier dessin qui a fonctionné", ar: "يعرض آخر رسم نجح", zh_hans: "显示上一次成功的绘图", ja: "最後に描けた図を表示しています" },
+    Row { key: Key::DiagramLineUnreadable, en: "Line {}: this line could not be read", es: "Línea {}: no se pudo leer esta línea", pt_br: "Linha {}: não foi possível ler esta linha", de: "Zeile {}: Diese Zeile konnte nicht gelesen werden", fr: "Ligne {} : cette ligne n’a pas pu être lue", ar: "السطر {}: تعذّرت قراءة هذا السطر", zh_hans: "第 {} 行：无法读取此行", ja: "{} 行目: この行を読み取れませんでした" },
+    Row { key: Key::DiagramKindNotDrawn, en: "Koru does not draw this kind of diagram yet", es: "Koru aún no dibuja este tipo de diagrama", pt_br: "O Koru ainda não desenha este tipo de diagrama", de: "Koru zeichnet diese Art von Diagramm noch nicht", fr: "Koru ne dessine pas encore ce type de diagramme", ar: "لا يرسم Koru هذا النوع من المخططات بعد", zh_hans: "Koru 尚不绘制这种图表", ja: "Koru はこの種類の図をまだ描けません" },
+    Row { key: Key::DiagramTooLargeBoxesOne, en: "Too large to draw: {} box", es: "Demasiado grande para dibujar: {} caja", pt_br: "Grande demais para desenhar: {} caixa", de: "Zu groß zum Zeichnen: {} Kasten", fr: "Trop grand pour être dessiné : {} boîte", ar: "أكبر من أن يُرسم: {} مربع", zh_hans: "太大，无法绘制：{} 个框", ja: "大きすぎて描けません: {} 個のボックス" },
+    Row { key: Key::DiagramTooLargeBoxesMany, en: "Too large to draw: {} boxes", es: "Demasiado grande para dibujar: {} cajas", pt_br: "Grande demais para desenhar: {} caixas", de: "Zu groß zum Zeichnen: {} Kästen", fr: "Trop grand pour être dessiné : {} boîtes", ar: "أكبر من أن يُرسم: {} مربعًا", zh_hans: "太大，无法绘制：{} 个框", ja: "大きすぎて描けません: {} 個のボックス" },
+    Row { key: Key::DiagramTooLargeMessagesOne, en: "Too large to draw: {} message", es: "Demasiado grande para dibujar: {} mensaje", pt_br: "Grande demais para desenhar: {} mensagem", de: "Zu groß zum Zeichnen: {} Nachricht", fr: "Trop grand pour être dessiné : {} message", ar: "أكبر من أن يُرسم: {} رسالة", zh_hans: "太大，无法绘制：{} 条消息", ja: "大きすぎて描けません: {} 件のメッセージ" },
+    Row { key: Key::DiagramTooLargeMessagesMany, en: "Too large to draw: {} messages", es: "Demasiado grande para dibujar: {} mensajes", pt_br: "Grande demais para desenhar: {} mensagens", de: "Zu groß zum Zeichnen: {} Nachrichten", fr: "Trop grand pour être dessiné : {} messages", ar: "أكبر من أن يُرسم: {} رسالة", zh_hans: "太大，无法绘制：{} 条消息", ja: "大きすぎて描けません: {} 件のメッセージ" },
+    // Shown when the engine refused the text before it could count anything
+    // (a source over its size budget), so there is no number to name.
+    Row { key: Key::DiagramTooLargeUncounted, en: "Too large to draw", es: "Demasiado grande para dibujar", pt_br: "Grande demais para desenhar", de: "Zu groß zum Zeichnen", fr: "Trop grand pour être dessiné", ar: "أكبر من أن يُرسم", zh_hans: "太大，无法绘制", ja: "大きすぎて描けません" },
+    Row { key: Key::DiagramEmptyHint, en: "Describe a flowchart or a sequence diagram here", es: "Describe aquí un diagrama de flujo o un diagrama de secuencia", pt_br: "Descreva aqui um fluxograma ou um diagrama de sequência", de: "Beschreiben Sie hier ein Flussdiagramm oder ein Sequenzdiagramm", fr: "Décrivez ici un organigramme ou un diagramme de séquence", ar: "صِف هنا مخططًا انسيابيًا أو مخططًا تسلسليًا", zh_hans: "在此描述流程图或时序图", ja: "ここにフローチャートまたはシーケンス図を記述してください" },
 ];
