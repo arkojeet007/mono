@@ -129,3 +129,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 
 [dev-dependencies]
 tempfile.workspace = true
+# `offscreen`'s raster probe draws a real diagram: the showcase fixture laid
+# out through this crate's measurer. A test input only; nothing here links
+# the diagram engine.
+koru-diagram = { path = "../koru-diagram" }

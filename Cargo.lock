@@ -7525,6 +7525,7 @@ dependencies = [
  "directories",
  "image",
  "koru-channel",
+ "koru-diagram",
  "koru-draw",
  "koru-env",
  "koru-settings",

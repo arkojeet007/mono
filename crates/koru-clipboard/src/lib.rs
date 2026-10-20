@@ -9,6 +9,9 @@
 
 mod system;
 
+#[cfg(test)]
+mod tests;
+
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -249,19 +252,35 @@ pub fn spawn_image_read_with<B: Backend + 'static>(
         .spawn(move || complete(Clipboard::new(backend).images(limits)))
 }
 
+/// PNG bytes for `width × height` tightly packed RGBA8 pixels — the
+/// encoding a clipboard bitmap is normalized to, for a picture Koru rendered
+/// itself (a diagram saved as a file, a scene copied as an image).
+///
+/// Here rather than beside the renderer because this is the crate that
+/// already owns a PNG encoder; the pixels arrive as the plain bytes
+/// `koru_window::offscreen::raster` returns, so no type crosses between the
+/// two. `CorruptImage` when the byte count is not `width × height × 4`.
+pub fn png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Error> {
+    let expected = u64::from(width) * u64::from(height) * 4;
+    if width == 0 || height == 0 || rgba.len() as u64 != expected {
+        return Err(Error::new(ErrorCode::CorruptImage));
+    }
+    encode_png(width, height, rgba)
+}
+
+fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut bytes)
+        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|_| Error::new(ErrorCode::EncodeFailed))?;
+    Ok(bytes)
+}
+
 fn normalize_png(bitmap: RgbaBitmap, limits: ImageLimits) -> Result<PngBitmap, Error> {
     validate_rgba(&bitmap, limits)?;
     let width = u32::try_from(bitmap.width).map_err(|_| Error::new(ErrorCode::OversizedImage))?;
     let height = u32::try_from(bitmap.height).map_err(|_| Error::new(ErrorCode::OversizedImage))?;
-    let mut bytes = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut bytes)
-        .write_image(
-            &bitmap.bytes,
-            width,
-            height,
-            image::ExtendedColorType::Rgba8,
-        )
-        .map_err(|_| Error::new(ErrorCode::EncodeFailed))?;
+    let bytes = encode_png(width, height, &bitmap.bytes)?;
     if bytes.len() > limits.max_png_bytes {
         return Err(Error::new(ErrorCode::OversizedImage));
     }

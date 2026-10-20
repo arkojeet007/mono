@@ -79,6 +79,9 @@ pub mod input;
 pub mod key_quarantine;
 pub mod multi;
 mod non_activating;
+/// A scene rendered to pixels with no window: the read-back recipe the
+/// tests carried in four copies, as the one the product saves a PNG with.
+pub mod offscreen;
 pub mod open_uri;
 pub mod renderer;
 pub mod request;
