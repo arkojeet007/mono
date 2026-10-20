@@ -388,10 +388,12 @@ tells you whether it drew.
 direction, `subgraph` groups included — and sequence diagrams, with their
 notes, activations and `loop`, `alt`/`else` and `opt` frames. Every other
 Mermaid kind (`pie`, `gantt`, `classDiagram`, …) keeps its text and is shown as
-text, with a note that it is not drawn. A flowchart draws up to **500 nodes**
+text, with a note that it is not drawn. A flowchart draws up to **800 nodes**
 and a sequence diagram up to **500 messages**; over that the block shows its
-text. Those two numbers are working values that measurement may change; the
-status below reports the count, so a client never has to know them.
+text. The node limit was measured (every generated flowchart of that size
+lays out well within a page's open time; denser graphs can still be refused
+by the layout engine's own work budget, which the view reports as too large);
+the status below reports the count, so a client never has to know the numbers.
 
 **Koru's theme and font decide how a diagram looks.** Styling and interaction
 directives — `%%{init: …}%%`, `classDef`, `class`, `style`, `linkStyle` and

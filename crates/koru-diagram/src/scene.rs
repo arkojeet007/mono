@@ -102,6 +102,9 @@ pub enum Marker {
     Arrow,
     Circle,
     Cross,
+    /// An open, unfilled arrowhead: Mermaid's asynchronous sequence message
+    /// (`-)`, `--)`). A flowchart never produces it.
+    OpenArrow,
 }
 
 /// How a line is drawn.
