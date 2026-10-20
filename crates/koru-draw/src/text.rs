@@ -19,7 +19,7 @@ use parley::fontique::FontInfoOverride;
 use parley::layout::{Alignment, AlignmentOptions};
 use parley::setting::Tag;
 use parley::style::{
-    FontFamily, FontVariation, FontVariations, FontWeight, LineHeight, StyleProperty,
+    FontFamily, FontVariation, FontVariations, FontWeight, LineHeight, OverflowWrap, StyleProperty,
 };
 use parley::{FontContext, InlineBox, InlineBoxKind, Layout, LayoutContext, RangedBuilder};
 use peniko::Blob;
@@ -87,21 +87,79 @@ impl TextEngine {
         stack: &str,
         weight: f32,
     ) -> Layout<Brush> {
-        let size = metrics.size;
+        self.shaped(
+            text,
+            stack,
+            Setting {
+                size: metrics.size,
+                line_height: LineHeight::Absolute(metrics.line_height),
+                weight,
+                wrap: None,
+                brush: theme::p().text,
+            },
+        )
+    }
+
+    /// Lay `text` out in an explicit family `stack` at `size` px and a raw
+    /// `weight`, at the font's own line height, wrapped at word boundaries
+    /// when `max_width` is given.
+    ///
+    /// The one entry point that takes every input raw — no role, no chrome
+    /// stack, no theme-chosen family — for text whose geometry has to come
+    /// out the same on every machine: a diagram's labels are measured with
+    /// this and then drawn from the very same call, so nothing in their
+    /// width, height or line breaks depends on a setting. The line height is
+    /// the face's own (`LineHeight::MetricsRelative(1.0)`: ascent, descent
+    /// and line gap) rather than a type-scale step, which is what a diagram
+    /// engine assumes when it stacks the lines of a label.
+    ///
+    /// **Word boundaries first.** `OverflowWrap::Anywhere` is CSS's
+    /// `overflow-wrap: anywhere`: a line breaks at a word boundary whenever
+    /// one fits, and inside a word only when a single word is wider than
+    /// `max_width` — where the alternative is a line that overflows the box
+    /// it was measured for.
+    pub fn layout_in_stack(
+        &mut self,
+        text: &str,
+        stack: &str,
+        size: f32,
+        weight: f32,
+        max_width: Option<f32>,
+    ) -> Layout<Brush> {
+        self.shaped(
+            text,
+            stack,
+            Setting {
+                size,
+                line_height: LineHeight::MetricsRelative(1.0),
+                weight,
+                wrap: max_width.map(|w| (w, OverflowWrap::Anywhere)),
+                brush: theme::p().text,
+            },
+        )
+    }
+
+    /// The builder sequence every standalone layout in this file performs,
+    /// written once: family stack, size, line height, the `wght` and `opsz`
+    /// axes, one brush, an optional wrap, then line breaking and start
+    /// alignment. The public entry points differ only in which of these
+    /// they take from a role and which from the caller.
+    fn shaped(&mut self, text: &str, stack: &str, setting: Setting) -> Layout<Brush> {
         let mut b = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
         b.push_default(StyleProperty::FontFamily(FontFamily::Source(
             Cow::Borrowed(stack),
         )));
-        b.push_default(StyleProperty::FontSize(size));
-        b.push_default(StyleProperty::LineHeight(LineHeight::Absolute(
-            metrics.line_height,
-        )));
-        push_axes(&mut b, size, weight);
-        b.push_default(StyleProperty::Brush(Brush(theme::p().text)));
+        b.push_default(StyleProperty::FontSize(setting.size));
+        b.push_default(StyleProperty::LineHeight(setting.line_height));
+        if let Some((_, overflow)) = setting.wrap {
+            b.push_default(StyleProperty::OverflowWrap(overflow));
+        }
+        push_axes(&mut b, setting.size, setting.weight);
+        b.push_default(StyleProperty::Brush(Brush(setting.brush)));
         let mut layout = b.build(text);
-        layout.break_all_lines(None);
+        layout.break_all_lines(setting.wrap.map(|(max_width, _)| max_width));
         layout.align(Alignment::Start, AlignmentOptions::default());
         layout
     }
@@ -209,21 +267,20 @@ impl TextEngine {
         size: f32,
         weight: f32,
     ) -> f32 {
-        let mut b = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, text, 1.0, true);
-        b.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed(stack),
-        )));
-        b.push_default(StyleProperty::FontSize(size));
-        b.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(1.0)));
-        push_axes(&mut b, size, weight);
-        b.push_default(StyleProperty::Brush(Brush(theme::p().text)));
-        let mut layout = b.build(text);
-        layout.break_all_lines(None);
         // A tab is measured from spaces, which are all trailing in this tiny
         // layout; `width()` deliberately excludes them.
-        layout.full_width()
+        self.shaped(
+            text,
+            stack,
+            Setting {
+                size,
+                line_height: LineHeight::FontSizeRelative(1.0),
+                weight,
+                wrap: None,
+                brush: theme::p().text,
+            },
+        )
+        .full_width()
     }
 
     /// Metrics for the caret at a cursor box: `(baseline, rise, descent)`.
@@ -301,22 +358,20 @@ impl TextEngine {
         weight: f32,
         line_height: f32,
     ) -> f32 {
-        let mut b = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, "M", 1.0, true);
-        b.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed(stack),
-        )));
-        b.push_default(StyleProperty::FontSize(size));
-        b.push_default(StyleProperty::LineHeight(LineHeight::Absolute(line_height)));
-        push_axes(&mut b, size, weight);
-        b.push_default(StyleProperty::Brush(Brush(theme::p().text)));
-        let mut layout = b.build("M");
-        layout.break_all_lines(None);
-        layout
-            .get(0)
-            .map(|line| line.metrics().baseline)
-            .unwrap_or(line_height)
+        self.shaped(
+            "M",
+            stack,
+            Setting {
+                size,
+                line_height: LineHeight::Absolute(line_height),
+                weight,
+                wrap: None,
+                brush: theme::p().text,
+            },
+        )
+        .get(0)
+        .map(|line| line.metrics().baseline)
+        .unwrap_or(line_height)
     }
 
     /// Measure a pill, caching the result. Returns `(width, ascent)` for the
@@ -377,22 +432,18 @@ impl TextEngine {
                 let (_, ink) = chip_colors(accent);
                 let style = theme::role::meta();
                 // `simple_layout` bakes the theme's text color; a chip label
-                // wants its tone's ink, so the builder is driven directly.
-                let mut b = self
-                    .layout_cx
-                    .ranged_builder(&mut self.font_cx, label, 1.0, true);
-                b.push_default(StyleProperty::FontFamily(FontFamily::Source(
-                    Cow::Borrowed(theme::ui_stack()),
-                )));
-                b.push_default(StyleProperty::FontSize(style.metrics.size));
-                b.push_default(StyleProperty::LineHeight(LineHeight::Absolute(
-                    style.metrics.line_height,
-                )));
-                push_axes(&mut b, style.metrics.size, style.weight.value());
-                b.push_default(StyleProperty::Brush(Brush(ink)));
-                let mut label_layout = b.build(label);
-                label_layout.break_all_lines(None);
-                label_layout.align(Alignment::Start, AlignmentOptions::default());
+                // wants its tone's ink.
+                let label_layout = self.shaped(
+                    label,
+                    theme::ui_stack(),
+                    Setting {
+                        size: style.metrics.size,
+                        line_height: LineHeight::Absolute(style.metrics.line_height),
+                        weight: style.weight.value(),
+                        wrap: None,
+                        brush: ink,
+                    },
+                );
                 ChipVisual {
                     kind,
                     // **The strike is paint, not width.** A struck chip is
@@ -560,24 +611,17 @@ impl TextEngine {
 
     /// Pill label: document body size, semibold — same face as the paragraph.
     fn pill_label(&mut self, text: &str, fg: Brush, style: PillTextStyle) -> Layout<Brush> {
-        let size = style.size;
-        let weight = theme::FontWeight::SemiBold.value();
-        let mut b = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, text, 1.0, true);
-        b.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed(theme::body_stack()),
-        )));
-        b.push_default(StyleProperty::FontSize(size));
-        b.push_default(StyleProperty::LineHeight(LineHeight::Absolute(
-            style.line_height,
-        )));
-        push_axes(&mut b, size, weight);
-        b.push_default(StyleProperty::Brush(fg));
-        let mut layout = b.build(text);
-        layout.break_all_lines(None);
-        layout.align(Alignment::Start, AlignmentOptions::default());
-        layout
+        self.shaped(
+            text,
+            theme::body_stack(),
+            Setting {
+                size: style.size,
+                line_height: LineHeight::Absolute(style.line_height),
+                weight: theme::FontWeight::SemiBold.value(),
+                wrap: None,
+                brush: fg.0,
+            },
+        )
     }
 
     /// A pill label truncated with `…` to fit `max_w`, keeping the full label
@@ -636,25 +680,17 @@ impl TextEngine {
         stack: &str,
         max_w: f32,
     ) -> Layout<Brush> {
-        use parley::style::OverflowWrap;
-        let size = style.metrics.size;
-        let mut b = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, text, 1.0, true);
-        b.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed(stack),
-        )));
-        b.push_default(StyleProperty::FontSize(size));
-        b.push_default(StyleProperty::LineHeight(LineHeight::Absolute(
-            style.metrics.line_height,
-        )));
-        b.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
-        push_axes(&mut b, size, style.weight.value());
-        b.push_default(StyleProperty::Brush(Brush(theme::p().text)));
-        let mut layout = b.build(text);
-        layout.break_all_lines(Some(max_w));
-        layout.align(Alignment::Start, AlignmentOptions::default());
-        layout
+        self.shaped(
+            text,
+            stack,
+            Setting {
+                size: style.metrics.size,
+                line_height: LineHeight::Absolute(style.metrics.line_height),
+                weight: style.weight.value(),
+                wrap: Some((max_w, OverflowWrap::Anywhere)),
+                brush: theme::p().text,
+            },
+        )
     }
 
     /// Like [`simple_layout_wrapped`](Self::simple_layout_wrapped) with
@@ -675,7 +711,6 @@ impl TextEngine {
         base: Option<peniko::Color>,
         ranges: &[RangeStyle],
     ) -> Layout<Brush> {
-        use parley::style::OverflowWrap;
         let size = metrics.size;
         let mut b = self
             .layout_cx
@@ -764,6 +799,19 @@ impl TextEngine {
         }
         chars[..keep].iter().collect::<String>() + ELLIPSIS
     }
+}
+
+/// What a standalone layout is set in, beyond its text and family stack:
+/// the inputs of [`TextEngine::shaped`] that the public entry points take
+/// from a role, a step or the caller.
+struct Setting {
+    size: f32,
+    line_height: LineHeight,
+    weight: f32,
+    /// The width to break lines at and how a too-long word breaks; `None`
+    /// lays the text out as one line.
+    wrap: Option<(f32, OverflowWrap)>,
+    brush: peniko::Color,
 }
 
 /// One character, not three dots: it kerns, and it is what every other list in

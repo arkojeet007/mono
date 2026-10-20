@@ -5,6 +5,12 @@
 google-fonts-revision=ade3d1533e06b2b1462ffcde8e08b129627ca360
 JetBrainsMono.ttf=48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda
 JetBrainsMono-Italic.ttf=85ae2a5cd3f56baf1ce1c21a851322c58e3d8fbe8e8ad4a4d090a820dd7fe558
+# The face every diagram is measured and drawn with (crates/koru-draw/src/diagram):
+# a diagram's line breaks have to come out the same on every machine, which a
+# revision pin alone promises only while the file at that revision is the one
+# that was fetched. Hashes of the files at the revision above.
+Inter.ttf=29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031
+Inter-Italic.ttf=acd98e64795781b2058f07b18475e0ecee2a0fe2b42a49e2f9e37d0d6bf66ce6
 # The Android app's three static faces (apps/android, Theme.kt), in
 # assets/fonts/android/. Google Fonts' own static instances of the families
 # above, at the API version that names them; the exact bytes the Android app

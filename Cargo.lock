@@ -5976,9 +5976,12 @@ version = "0.0.3"
 dependencies = [
  "image",
  "koru-channel",
+ "koru-diagram",
  "koru-title",
+ "kurbo",
  "parley",
  "peniko",
+ "quick-xml 0.41.0",
  "serde",
  "serde_json",
  "skrifa 0.43.2",

@@ -8,6 +8,14 @@ publish = false
 
 [dependencies]
 parley.workspace = true
+# The diagram scene this crate measures for and paints (`diagram`): shapes as
+# kurbo paths, labels as placed lines, roles in place of colors. The
+# dependency runs this way only — koru-diagram has no font and no renderer —
+# so the MCP server can ask whether a text draws without linking vello.
+koru-diagram = { path = "../koru-diagram" }
+# The scene's geometry vocabulary, the same crate vello re-exports, named here
+# so a `koru_diagram` path and a vello shape are visibly one type.
+kurbo = { workspace = true }
 # Glyph ink bounds, for optically centring one glyph in a tile. parley reports
 # *font* metrics (ascent/descent), which for a colour emoji describe a box its
 # ink does not fill - see `scene::centre_in`. The font stack already resolves
@@ -27,3 +35,9 @@ koru-title = { path = "../koru-title" }
 # The mark wears its channel's color — the tint is applied once to the decoded
 # master in `brand.rs`. A leaf crate, so this costs no transitive weight.
 koru-channel = { path = "../koru-channel" }
+
+[dev-dependencies]
+# The SVG a diagram is saved as is checked as XML, not by grepping for tags:
+# the writer emits no text and no font, and a balanced document is what a
+# browser will open.
+quick-xml = { workspace = true }
