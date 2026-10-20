@@ -861,17 +861,16 @@ fn full_rows(
     // table group follows the Remove row: appended last, it shifts no index
     // anyone else relies on. A row is a table or a code block, never both, so
     // a real menu carries at most one of the two groups — `choice_at` is told
-    // which. *Edit text* is always offered; *Copy* is the whole block, which
-    // is the only way a drawing is copied; *Save as…* only when there is a
-    // drawing to save, so a block that does not draw never offers it.
+    // which. *Edit text* is always offered; *Save as…* only when there is a
+    // drawing to save, so a block that does not draw never offers it. *Copy*
+    // is the menu's ordinary Copy row above: on a selected drawing it takes
+    // the whole block with its language, which is the only way a drawing is
+    // copied, so the group adds no second one.
     if let Some(diagram) = diagram {
         rows.extend([
             menu::Row::Divider,
             menu::Row::item(koru_i18n::t(lang, koru_i18n::Key::DiagramEditText))
                 .with_icon(icons::PENCIL),
-            menu::Row::item(koru_i18n::t(lang, koru_i18n::Key::MenuCopy))
-                .with_icon(icons::COPY)
-                .with_shortcut(menu::Chord::Id(koru_keys::ShortcutId::Copy)),
         ]);
         if diagram.drawn {
             rows.push(
@@ -1065,8 +1064,7 @@ fn choice_at_edit(index: usize, has_table: bool) -> Option<Choice> {
             };
             match index.checked_sub(start)? {
                 1 => Some(Choice::DiagramEditText),
-                2 => Some(Choice::Copy),
-                3 => Some(Choice::SaveDiagramAs),
+                2 => Some(Choice::SaveDiagramAs),
                 _ => None,
             }
         }
@@ -1140,6 +1138,13 @@ mod tests {
         })
     }
 
+    fn label_of(row: &menu::Row) -> Option<&str> {
+        match row {
+            menu::Row::Item { label, .. } => Some(label.as_ref()),
+            _ => None,
+        }
+    }
+
     /// The menu drawn on a diagram: the ordinary rows, then its group.
     fn diagram_rows(drawn: bool) -> Vec<menu::Row> {
         super::rows(
@@ -1180,9 +1185,16 @@ mod tests {
             other => panic!("an item, not {other:?}"),
         };
         assert_eq!(label(&drawn[19]), "Edit text");
-        assert_eq!(label(&drawn[20]), "Copy");
-        assert_eq!(label(&drawn[21]), "Save as…");
-        assert_eq!(drawn.len(), 22);
+        assert_eq!(label(&drawn[20]), "Save as…");
+        assert_eq!(drawn.len(), 21);
+        // One Copy row, the menu's own at index 1: the group adds no second.
+        assert_eq!(
+            drawn
+                .iter()
+                .filter(|row| label_of(row) == Some("Copy"))
+                .count(),
+            1
+        );
         let ctx = diagram(true);
         assert_eq!(
             super::choice_at(19, PillContext::None, None, ctx),
@@ -1190,14 +1202,10 @@ mod tests {
         );
         assert_eq!(
             super::choice_at(20, PillContext::None, None, ctx),
-            Some(Choice::Copy)
-        );
-        assert_eq!(
-            super::choice_at(21, PillContext::None, None, ctx),
             Some(Choice::SaveDiagramAs)
         );
         assert_eq!(super::choice_at(18, PillContext::None, None, ctx), None);
-        assert_eq!(super::choice_at(22, PillContext::None, None, ctx), None);
+        assert_eq!(super::choice_at(21, PillContext::None, None, ctx), None);
         // Every ordinary index still means what it meant.
         for index in 0..18 {
             assert_eq!(
@@ -1209,8 +1217,8 @@ mod tests {
 
         // Not drawn: no *Save as…*, nothing else moves.
         let undrawn = diagram_rows(false);
-        assert_eq!(undrawn.len(), 21);
-        assert_eq!(&undrawn[..], &drawn[..21]);
+        assert_eq!(undrawn.len(), 20);
+        assert_eq!(&undrawn[..], &drawn[..20]);
         assert_eq!(
             super::choice_at(19, PillContext::None, None, diagram(false)),
             Some(Choice::DiagramEditText)
@@ -1237,7 +1245,7 @@ mod tests {
             None,
             koru_i18n::Lang::En,
         );
-        assert_eq!(with_both.len(), 32);
+        assert_eq!(with_both.len(), 31);
         assert!(matches!(with_both[28], menu::Row::Divider));
         assert_eq!(
             choice_at(27, PillContext::None),
