@@ -15,6 +15,7 @@ mod line;
 mod measure;
 mod narrate;
 mod robustness;
+mod sequence;
 mod size;
 mod smoke;
 
@@ -35,6 +36,12 @@ pub(crate) const FLOWCHART_SHOWCASE: &str =
 pub(crate) const SEQUENCE_SHOWCASE: &str =
     include_str!("../../tests/fixtures/sequence-showcase.mmd");
 
+/// What the sequence showcase lacks: a title, a `box` group around two of
+/// three participants, and a `critical` frame with an `option`, which Mermaid
+/// widens to the left. Three messages, no numbering.
+pub(crate) const SEQUENCE_CHECKOUT: &str =
+    include_str!("../../tests/fixtures/sequence-checkout.mmd");
+
 /// A small valid pie chart: a kind Koru does not draw.
 pub(crate) const PIE: &str = include_str!("../../tests/fixtures/pie.mmd");
 
@@ -52,9 +59,10 @@ pub(crate) const MISSING_END: &str = include_str!("../../tests/fixtures/missing-
 pub(crate) const FRONT_MATTER: &str = include_str!("../../tests/fixtures/front-matter.mmd");
 
 /// Every fixture, by file name.
-pub(crate) const FIXTURES: [(&str, &str); 7] = [
+pub(crate) const FIXTURES: [(&str, &str); 8] = [
     ("flowchart-showcase", FLOWCHART_SHOWCASE),
     ("sequence-showcase", SEQUENCE_SHOWCASE),
+    ("sequence-checkout", SEQUENCE_CHECKOUT),
     ("pie", PIE),
     ("empty", EMPTY),
     ("bad-arrow-line7", BAD_ARROW_LINE7),

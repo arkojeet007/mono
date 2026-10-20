@@ -59,8 +59,16 @@ fn the_flowchart_showcase_narrates_its_twelve_arrows_by_label() {
     );
 }
 
+fn message(from: &str, text: &str, to: &str) -> NarrationItem {
+    NarrationItem::Message {
+        from: from.to_owned(),
+        text: text.to_owned(),
+        to: to.to_owned(),
+    }
+}
+
 #[test]
-fn the_sequence_seam_narrates_its_counts_and_no_messages_yet() {
+fn the_sequence_showcase_narrates_its_twelve_messages_by_name() {
     let scene = layout(
         SEQUENCE_SHOWCASE,
         &stub(),
@@ -70,6 +78,13 @@ fn the_sequence_seam_narrates_its_counts_and_no_messages_yet() {
     .unwrap();
     let narration = narrate(&scene);
     assert_eq!(narration.title.as_deref(), Some("Sign-in with a passkey"));
+    assert!(
+        narration
+            .description
+            .as_deref()
+            .unwrap()
+            .starts_with("The app asks")
+    );
     assert_eq!(
         narration.counts,
         Counts::Sequence {
@@ -78,8 +93,23 @@ fn the_sequence_seam_narrates_its_counts_and_no_messages_yet() {
             notes: 2,
         }
     );
-    assert!(
-        narration.items.is_empty(),
-        "the sequence builder fills the messages"
+    // Participants by the name a person sees, never by id: `P` is *Person*,
+    // `App` is *Koru app*, `DB` is *Session store*.
+    assert_eq!(
+        narration.items,
+        [
+            message("Person", "Sign in", "Koru app"),
+            message("Koru app", "Request challenge", "Server"),
+            message("Server", "Challenge", "Koru app"),
+            message("Koru app", "Ask for passkey", "Person"),
+            message("Person", "Touch sensor", "Koru app"),
+            message("Koru app", "Signed challenge", "Server"),
+            message("Server", "Create session", "Session store"),
+            message("Session store", "Session id", "Server"),
+            message("Server", "Session token", "Koru app"),
+            message("Server", "Rejected", "Koru app"),
+            message("Koru app", "Register device", "Server"),
+            message("Koru app", "Signed in", "Person"),
+        ]
     );
 }

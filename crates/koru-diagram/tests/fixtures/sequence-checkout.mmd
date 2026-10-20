@@ -1,0 +1,13 @@
+sequenceDiagram
+    title Checkout
+    box Shop
+    participant A
+    participant B
+    end
+    participant C
+    A->>B: Hi
+    critical Pay
+        B->>C: Charge
+    option Declined
+        C-->>B: No
+    end

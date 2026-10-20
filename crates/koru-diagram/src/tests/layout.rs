@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! `layout` on the fixtures: the flowchart showcase against its golden scene
-//! and its facts, the directives that change nothing, cancellation and the
-//! deadline, the sequence seam, and the statuses that never reach merman.
+//! `layout` on the fixtures: the two showcases against their golden scenes,
+//! the flowchart's facts, the directives that change nothing, cancellation
+//! and the deadline, the sequence showcase's participants and lifelines (the
+//! rest of its scene is in `sequence.rs`), and the statuses that never reach
+//! merman.
 //!
-//! The golden `tests/fixtures/flowchart-showcase.scene.json` is the showcase's
-//! scene as pretty JSON. Regenerate it with
+//! The goldens `tests/fixtures/flowchart-showcase.scene.json` and
+//! `tests/fixtures/sequence-showcase.scene.json` are the showcases' scenes as
+//! pretty JSON. Regenerate them with
 //! `UPDATE_DIAGRAM_GOLDENS=1 cargo test -p koru-diagram`, which is the one
 //! disk write in this suite and the only thing that reads that variable.
 
@@ -27,13 +30,19 @@ use crate::layout::layout_uncounted;
 use crate::measure::{HostMeasure, RequestLog};
 use crate::{
     Cancel, Counts, DiagramScene, Fail, FlowchartScene, Kind, Limits, Marker, MeasuredLine,
-    NodeShape, SceneBody, Status, StrokeKind, TextMeasure, TextMetrics, layout,
+    NodeShape, ParticipantKind, SceneBody, SequenceScene, Status, StrokeKind, TextMeasure,
+    TextMetrics, layout,
 };
 
-const GOLDEN: &str = include_str!("../../tests/fixtures/flowchart-showcase.scene.json");
-const GOLDEN_PATH: &str = concat!(
+const FLOWCHART_GOLDEN: &str = include_str!("../../tests/fixtures/flowchart-showcase.scene.json");
+const FLOWCHART_GOLDEN_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/flowchart-showcase.scene.json"
+);
+const SEQUENCE_GOLDEN: &str = include_str!("../../tests/fixtures/sequence-showcase.scene.json");
+const SEQUENCE_GOLDEN_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/sequence-showcase.scene.json"
 );
 
 fn limits() -> Limits {
@@ -53,6 +62,18 @@ fn flowchart(scene: &DiagramScene) -> &FlowchartScene {
     match &scene.body {
         SceneBody::Flowchart(flowchart) => flowchart,
         SceneBody::Sequence(_) => panic!("a flowchart scene"),
+    }
+}
+
+pub(super) fn sequence_showcase() -> DiagramScene {
+    layout(SEQUENCE_SHOWCASE, &stub(), &limits(), &Cancel::new())
+        .expect("the sequence showcase draws")
+}
+
+pub(super) fn sequence_of(scene: &DiagramScene) -> &SequenceScene {
+    match &scene.body {
+        SceneBody::Sequence(sequence) => sequence,
+        SceneBody::Flowchart(_) => panic!("a sequence scene"),
     }
 }
 
@@ -96,19 +117,20 @@ fn first_difference(
     }
 }
 
-#[test]
-fn the_flowchart_showcase_scene_matches_its_golden() {
-    let actual = pretty(&showcase());
+/// `scene` against the golden at `path`, whose text is `golden`; rewrites
+/// it instead under `UPDATE_DIAGRAM_GOLDENS`.
+fn assert_matches_golden(scene: &DiagramScene, golden: &str, path: &str) {
+    let actual = pretty(scene);
     if std::env::var_os("UPDATE_DIAGRAM_GOLDENS").is_some() {
-        std::fs::write(GOLDEN_PATH, format!("{actual}\n")).expect("the golden is written");
+        std::fs::write(path, format!("{actual}\n")).expect("the golden is written");
         return;
     }
-    if actual.trim_end() == GOLDEN.trim_end() {
+    if actual.trim_end() == golden.trim_end() {
         return;
     }
     // Not byte-identical: a number may differ in its last places between
     // machines, which is not a change of scene.
-    let expected: Value = serde_json::from_str(GOLDEN).expect("the golden is JSON");
+    let expected: Value = serde_json::from_str(golden).expect("the golden is JSON");
     let actual: Value = serde_json::from_str(&actual).expect("the scene is JSON");
     if let Some(difference) = first_difference(&expected, &actual, "scene", 1e-6) {
         panic!(
@@ -116,6 +138,16 @@ fn the_flowchart_showcase_scene_matches_its_golden() {
              if the change is intended, UPDATE_DIAGRAM_GOLDENS=1 cargo test -p koru-diagram"
         );
     }
+}
+
+#[test]
+fn the_flowchart_showcase_scene_matches_its_golden() {
+    assert_matches_golden(&showcase(), FLOWCHART_GOLDEN, FLOWCHART_GOLDEN_PATH);
+}
+
+#[test]
+fn the_sequence_showcase_scene_matches_its_golden() {
+    assert_matches_golden(&sequence_showcase(), SEQUENCE_GOLDEN, SEQUENCE_GOLDEN_PATH);
 }
 
 #[test]
@@ -239,7 +271,7 @@ fn the_flowchart_showcase_has_its_boxes_arrows_and_groups() {
 }
 
 /// The first and last points of a path.
-fn ends(path: &BezPath) -> (Point, Point) {
+pub(super) fn ends(path: &BezPath) -> (Point, Point) {
     let start = match path.elements().first() {
         Some(PathEl::MoveTo(p)) => *p,
         other => panic!("a path starts with a move, not {other:?}"),
@@ -480,7 +512,7 @@ fn a_cancel_handle_is_reusable_and_its_clones_share_the_job() {
 
 /// merman's own bounds for `text` under the same measurer, through its
 /// facade rather than this crate's pipeline.
-fn merman_bounds(text: &str) -> Rect {
+pub(super) fn merman_bounds(text: &str) -> Rect {
     let environment = SvgEnvironment::deterministic()
         .with_text_measurement_policy(HostMeasure::new(stub(), None).policy());
     let output = Renderer::new()
@@ -513,8 +545,7 @@ fn merman_bounds(text: &str) -> Rect {
 
 #[test]
 fn the_sequence_showcase_lays_out_its_participants_and_lifelines() {
-    let scene = layout(SEQUENCE_SHOWCASE, &stub(), &limits(), &Cancel::new())
-        .expect("the sequence showcase draws");
+    let scene = sequence_showcase();
     assert_eq!(scene.kind, Kind::Sequence);
     assert_eq!(
         scene.counts,
@@ -530,9 +561,7 @@ fn the_sequence_showcase_lays_out_its_participants_and_lifelines() {
         scene.bounds,
         Rect::new(0.0, 0.0, expected.width(), expected.height())
     );
-    let SceneBody::Sequence(sequence) = &scene.body else {
-        panic!("a sequence scene");
-    };
+    let sequence = sequence_of(&scene);
     assert_eq!(sequence.participants.len(), 4);
     assert_eq!(sequence.lifelines.len(), 4);
     let names: Vec<&str> = sequence
@@ -541,14 +570,29 @@ fn the_sequence_showcase_lays_out_its_participants_and_lifelines() {
         .map(|p| p.label.text.as_str())
         .collect();
     assert_eq!(names, ["Person", "Koru app", "Server", "Session store"]);
-    assert_eq!(sequence.participants[0].kind, crate::ParticipantKind::Actor);
-    assert_eq!(sequence.participants[1].kind, crate::ParticipantKind::Box);
+    assert_eq!(sequence.participants[0].kind, ParticipantKind::Actor);
+    assert_eq!(sequence.participants[1].kind, ParticipantKind::Box);
     for (participant, lifeline) in sequence.participants.iter().zip(&sequence.lifelines) {
         assert_eq!(participant.top.center().x, lifeline.x);
         assert!(participant.top.y1 <= lifeline.y0 && lifeline.y1 <= participant.bottom.y0);
-        assert!(participant.top.contains(participant.label.rect.center()));
+        let name = participant.label.rect.center();
+        assert!(
+            (name.x - lifeline.x).abs() < 1e-6,
+            "{} is named on its lifeline",
+            participant.id
+        );
+        match participant.kind {
+            // A box is named in its centre.
+            ParticipantKind::Box => assert!(participant.top.contains(name)),
+            // An actor is named under its 65 px figure, in the gap before the
+            // lifeline starts, as Mermaid draws it: `height / 2 + 35` below
+            // the figure's top.
+            ParticipantKind::Actor => {
+                assert!((name.y - (participant.top.y0 + 65.0 / 2.0 + 35.0)).abs() < 1e-6);
+                assert!(participant.top.y1 < name.y && participant.label.rect.y0 < lifeline.y0);
+            }
+        }
     }
-    assert!(sequence.messages.is_empty() && sequence.frames.is_empty());
 
     // The flowchart's bounds are merman's too.
     let flow = showcase();

@@ -1,0 +1,1075 @@
+{
+  "kind": "sequence",
+  "bounds": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 850.0,
+    "y1": 1031.0
+  },
+  "counts": {
+    "kind": "sequence",
+    "participants": 4,
+    "messages": 12,
+    "notes": 2
+  },
+  "acc_title": "Sign-in with a passkey",
+  "acc_descr": "The app asks the server for a challenge, the device signs it, and the server issues a session.",
+  "body": {
+    "Sequence": {
+      "participants": [
+        {
+          "id": "P",
+          "kind": "Actor",
+          "top": {
+            "x0": 50.0,
+            "y0": 10.0,
+            "x1": 200.0,
+            "y1": 75.0
+          },
+          "bottom": {
+            "x0": 50.0,
+            "y0": 955.0,
+            "x1": 200.0,
+            "y1": 1020.0
+          },
+          "label": {
+            "text": "Person",
+            "lines": [
+              {
+                "text": "Person",
+                "x": 104.0,
+                "baseline": 81.69999885559082,
+                "width": 42.0
+              }
+            ],
+            "rect": {
+              "x0": 104.0,
+              "y0": 69.09999942779541,
+              "x1": 146.0,
+              "y1": 85.90000057220459
+            },
+            "role": "Text"
+          }
+        },
+        {
+          "id": "App",
+          "kind": "Box",
+          "top": {
+            "x0": 250.0,
+            "y0": 10.0,
+            "x1": 400.0,
+            "y1": 75.0
+          },
+          "bottom": {
+            "x0": 250.0,
+            "y0": 955.0,
+            "x1": 400.0,
+            "y1": 1020.0
+          },
+          "label": {
+            "text": "Koru app",
+            "lines": [
+              {
+                "text": "Koru app",
+                "x": 297.0,
+                "baseline": 46.69999885559082,
+                "width": 56.0
+              }
+            ],
+            "rect": {
+              "x0": 297.0,
+              "y0": 34.09999942779541,
+              "x1": 353.0,
+              "y1": 50.90000057220459
+            },
+            "role": "Text"
+          }
+        },
+        {
+          "id": "Server",
+          "kind": "Box",
+          "top": {
+            "x0": 450.0,
+            "y0": 10.0,
+            "x1": 600.0,
+            "y1": 75.0
+          },
+          "bottom": {
+            "x0": 450.0,
+            "y0": 955.0,
+            "x1": 600.0,
+            "y1": 1020.0
+          },
+          "label": {
+            "text": "Server",
+            "lines": [
+              {
+                "text": "Server",
+                "x": 504.0,
+                "baseline": 46.69999885559082,
+                "width": 42.0
+              }
+            ],
+            "rect": {
+              "x0": 504.0,
+              "y0": 34.09999942779541,
+              "x1": 546.0,
+              "y1": 50.90000057220459
+            },
+            "role": "Text"
+          }
+        },
+        {
+          "id": "DB",
+          "kind": "Box",
+          "top": {
+            "x0": 650.0,
+            "y0": 10.0,
+            "x1": 800.0,
+            "y1": 75.0
+          },
+          "bottom": {
+            "x0": 650.0,
+            "y0": 955.0,
+            "x1": 800.0,
+            "y1": 1020.0
+          },
+          "label": {
+            "text": "Session store",
+            "lines": [
+              {
+                "text": "Session store",
+                "x": 679.5,
+                "baseline": 46.69999885559082,
+                "width": 91.0
+              }
+            ],
+            "rect": {
+              "x0": 679.5,
+              "y0": 34.09999942779541,
+              "x1": 770.5,
+              "y1": 50.90000057220459
+            },
+            "role": "Text"
+          }
+        }
+      ],
+      "lifelines": [
+        {
+          "x": 125.0,
+          "y0": 90.0,
+          "y1": 955.0
+        },
+        {
+          "x": 325.0,
+          "y0": 75.0,
+          "y1": 955.0
+        },
+        {
+          "x": 525.0,
+          "y0": 75.0,
+          "y1": 955.0
+        },
+        {
+          "x": 725.0,
+          "y0": 75.0,
+          "y1": 955.0
+        }
+      ],
+      "messages": [
+        {
+          "id": "1",
+          "from": "P",
+          "to": "App",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 126.0,
+                "y": 119.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 317.0,
+                "y": 119.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Normal",
+          "label": {
+            "text": "Sign in",
+            "lines": [
+              {
+                "text": "Sign in",
+                "x": 197.5,
+                "baseline": 110.19999885559082,
+                "width": 49.0
+              }
+            ],
+            "rect": {
+              "x0": 197.5,
+              "y0": 97.59999942779541,
+              "x1": 246.5,
+              "y1": 114.40000057220459
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "1",
+            "lines": [
+              {
+                "text": "1",
+                "x": 121.5,
+                "baseline": 123.19999885559082,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 121.5,
+              "y0": 110.59999942779541,
+              "x1": 128.5,
+              "y1": 127.40000057220459
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "3",
+          "from": "App",
+          "to": "Server",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 330.0,
+                "y": 163.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 517.0,
+                "y": 163.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Normal",
+          "label": {
+            "text": "Request challenge",
+            "lines": [
+              {
+                "text": "Request challenge",
+                "x": 364.5,
+                "baseline": 154.19999885559082,
+                "width": 119.0
+              }
+            ],
+            "rect": {
+              "x0": 364.5,
+              "y0": 141.5999994277954,
+              "x1": 483.5,
+              "y1": 158.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "2",
+            "lines": [
+              {
+                "text": "2",
+                "x": 317.5,
+                "baseline": 167.19999885559082,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 317.5,
+              "y0": 154.5999994277954,
+              "x1": 324.5,
+              "y1": 171.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "5",
+          "from": "Server",
+          "to": "App",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 520.0,
+                "y": 207.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 333.0,
+                "y": 207.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Dotted",
+          "label": {
+            "text": "Challenge",
+            "lines": [
+              {
+                "text": "Challenge",
+                "x": 395.5,
+                "baseline": 198.19999885559082,
+                "width": 63.0
+              }
+            ],
+            "rect": {
+              "x0": 395.5,
+              "y0": 185.5999994277954,
+              "x1": 458.5,
+              "y1": 202.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "3",
+            "lines": [
+              {
+                "text": "3",
+                "x": 525.5,
+                "baseline": 211.19999885559082,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 525.5,
+              "y0": 198.5999994277954,
+              "x1": 532.5,
+              "y1": 215.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "9",
+          "from": "App",
+          "to": "P",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 320.0,
+                "y": 357.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 129.0,
+                "y": 357.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Normal",
+          "label": {
+            "text": "Ask for passkey",
+            "lines": [
+              {
+                "text": "Ask for passkey",
+                "x": 172.5,
+                "baseline": 348.1999988555908,
+                "width": 105.0
+              }
+            ],
+            "rect": {
+              "x0": 172.5,
+              "y0": 335.5999994277954,
+              "x1": 277.5,
+              "y1": 352.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "4",
+            "lines": [
+              {
+                "text": "4",
+                "x": 325.5,
+                "baseline": 361.1999988555908,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 325.5,
+              "y0": 348.5999994277954,
+              "x1": 332.5,
+              "y1": 365.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "10",
+          "from": "P",
+          "to": "App",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 126.0,
+                "y": 401.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 317.0,
+                "y": 401.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Dotted",
+          "label": {
+            "text": "Touch sensor",
+            "lines": [
+              {
+                "text": "Touch sensor",
+                "x": 180.0,
+                "baseline": 392.1999988555908,
+                "width": 84.0
+              }
+            ],
+            "rect": {
+              "x0": 180.0,
+              "y0": 379.5999994277954,
+              "x1": 264.0,
+              "y1": 396.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "5",
+            "lines": [
+              {
+                "text": "5",
+                "x": 121.5,
+                "baseline": 405.1999988555908,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 121.5,
+              "y0": 392.5999994277954,
+              "x1": 128.5,
+              "y1": 409.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "13",
+          "from": "App",
+          "to": "Server",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 330.0,
+                "y": 500.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 517.0,
+                "y": 500.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Normal",
+          "label": {
+            "text": "Signed challenge",
+            "lines": [
+              {
+                "text": "Signed challenge",
+                "x": 368.0,
+                "baseline": 491.1999988555908,
+                "width": 112.0
+              }
+            ],
+            "rect": {
+              "x0": 368.0,
+              "y0": 478.5999994277954,
+              "x1": 480.0,
+              "y1": 495.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "6",
+            "lines": [
+              {
+                "text": "6",
+                "x": 317.5,
+                "baseline": 504.1999988555908,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 317.5,
+              "y0": 491.5999994277954,
+              "x1": 324.5,
+              "y1": 508.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "15",
+          "from": "Server",
+          "to": "DB",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 530.0,
+                "y": 544.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 721.0,
+                "y": 544.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Normal",
+          "label": {
+            "text": "Create session",
+            "lines": [
+              {
+                "text": "Create session",
+                "x": 577.0,
+                "baseline": 535.1999988555908,
+                "width": 98.0
+              }
+            ],
+            "rect": {
+              "x0": 577.0,
+              "y0": 522.5999994277954,
+              "x1": 675.0,
+              "y1": 539.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "7",
+            "lines": [
+              {
+                "text": "7",
+                "x": 517.5,
+                "baseline": 548.1999988555908,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 517.5,
+              "y0": 535.5999994277954,
+              "x1": 524.5,
+              "y1": 552.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "16",
+          "from": "DB",
+          "to": "Server",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 724.0,
+                "y": 588.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 533.0,
+                "y": 588.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Dotted",
+          "label": {
+            "text": "Session id",
+            "lines": [
+              {
+                "text": "Session id",
+                "x": 594.0,
+                "baseline": 579.1999988555908,
+                "width": 70.0
+              }
+            ],
+            "rect": {
+              "x0": 594.0,
+              "y0": 566.5999994277954,
+              "x1": 664.0,
+              "y1": 583.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "8",
+            "lines": [
+              {
+                "text": "8",
+                "x": 721.5,
+                "baseline": 592.1999988555908,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 721.5,
+              "y0": 579.5999994277954,
+              "x1": 728.5,
+              "y1": 596.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "17",
+          "from": "Server",
+          "to": "App",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 520.0,
+                "y": 632.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 333.0,
+                "y": 632.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Dotted",
+          "label": {
+            "text": "Session token",
+            "lines": [
+              {
+                "text": "Session token",
+                "x": 381.5,
+                "baseline": 623.1999988555908,
+                "width": 91.0
+              }
+            ],
+            "rect": {
+              "x0": 381.5,
+              "y0": 610.5999994277954,
+              "x1": 472.5,
+              "y1": 627.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "9",
+            "lines": [
+              {
+                "text": "9",
+                "x": 525.5,
+                "baseline": 636.1999988555908,
+                "width": 7.0
+              }
+            ],
+            "rect": {
+              "x0": 525.5,
+              "y0": 623.5999994277954,
+              "x1": 532.5,
+              "y1": 640.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "20",
+          "from": "Server",
+          "to": "App",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 524.0,
+                "y": 721.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 333.0,
+                "y": 721.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Cross",
+          "stroke": "Dotted",
+          "label": {
+            "text": "Rejected",
+            "lines": [
+              {
+                "text": "Rejected",
+                "x": 401.0,
+                "baseline": 712.1999988555908,
+                "width": 56.0
+              }
+            ],
+            "rect": {
+              "x0": 401.0,
+              "y0": 699.5999994277954,
+              "x1": 457.0,
+              "y1": 716.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "10",
+            "lines": [
+              {
+                "text": "10",
+                "x": 518.0,
+                "baseline": 725.1999988555908,
+                "width": 14.0
+              }
+            ],
+            "rect": {
+              "x0": 518.0,
+              "y0": 712.5999994277954,
+              "x1": 532.0,
+              "y1": 729.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "24",
+          "from": "App",
+          "to": "Server",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 330.0,
+                "y": 881.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 521.0,
+                "y": 881.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "OpenArrow",
+          "stroke": "Normal",
+          "label": {
+            "text": "Register device",
+            "lines": [
+              {
+                "text": "Register device",
+                "x": 373.5,
+                "baseline": 872.1999988555908,
+                "width": 105.0
+              }
+            ],
+            "rect": {
+              "x0": 373.5,
+              "y0": 859.5999994277954,
+              "x1": 478.5,
+              "y1": 876.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "11",
+            "lines": [
+              {
+                "text": "11",
+                "x": 314.0,
+                "baseline": 885.1999988555908,
+                "width": 14.0
+              }
+            ],
+            "rect": {
+              "x0": 314.0,
+              "y0": 872.5999994277954,
+              "x1": 328.0,
+              "y1": 889.4000005722046
+            },
+            "role": "Accent"
+          }
+        },
+        {
+          "id": "26",
+          "from": "App",
+          "to": "P",
+          "path": [
+            {
+              "MoveTo": {
+                "x": 320.0,
+                "y": 935.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 129.0,
+                "y": 935.0
+              }
+            }
+          ],
+          "start": "None",
+          "end": "Arrow",
+          "stroke": "Dotted",
+          "label": {
+            "text": "Signed in",
+            "lines": [
+              {
+                "text": "Signed in",
+                "x": 193.5,
+                "baseline": 926.1999988555908,
+                "width": 63.0
+              }
+            ],
+            "rect": {
+              "x0": 193.5,
+              "y0": 913.5999994277954,
+              "x1": 256.5,
+              "y1": 930.4000005722046
+            },
+            "role": "Text"
+          },
+          "number": {
+            "text": "12",
+            "lines": [
+              {
+                "text": "12",
+                "x": 322.0,
+                "baseline": 939.1999988555908,
+                "width": 14.0
+              }
+            ],
+            "rect": {
+              "x0": 322.0,
+              "y0": 926.5999994277954,
+              "x1": 336.0,
+              "y1": 943.4000005722046
+            },
+            "role": "Accent"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "rect": {
+            "x0": 300.0,
+            "y0": 217.0,
+            "x1": 550.0,
+            "y1": 254.0
+          },
+          "label": {
+            "text": "The challenge expires after 60 s",
+            "lines": [
+              {
+                "text": "The challenge expires after 60 s",
+                "x": 313.0,
+                "baseline": 242.19999885559082,
+                "width": 224.0
+              }
+            ],
+            "rect": {
+              "x0": 313.0,
+              "y0": 229.5999994277954,
+              "x1": 537.0,
+              "y1": 246.4000005722046
+            },
+            "role": "Text"
+          }
+        },
+        {
+          "rect": {
+            "x0": 350.0,
+            "y0": 731.0,
+            "x1": 500.0,
+            "y1": 768.0
+          },
+          "label": {
+            "text": "Shows \"Try again\"",
+            "lines": [
+              {
+                "text": "Shows \"Try again\"",
+                "x": 365.5,
+                "baseline": 756.1999988555908,
+                "width": 119.0
+              }
+            ],
+            "rect": {
+              "x0": 365.5,
+              "y0": 743.5999994277954,
+              "x1": 484.5,
+              "y1": 760.4000005722046
+            },
+            "role": "Text"
+          }
+        }
+      ],
+      "activations": [
+        {
+          "x0": 320.0,
+          "y0": 119.0,
+          "x1": 330.0,
+          "y1": 935.0
+        },
+        {
+          "x0": 520.0,
+          "y0": 165.0,
+          "x1": 530.0,
+          "y1": 207.0
+        },
+        {
+          "x0": 520.0,
+          "y0": 502.0,
+          "x1": 530.0,
+          "y1": 632.0
+        }
+      ],
+      "frames": [
+        {
+          "kind": "loop",
+          "rect": {
+            "x0": 114.0,
+            "y0": 264.0,
+            "x1": 340.0,
+            "y1": 411.0
+          },
+          "title": {
+            "text": "[Until the person\nconfirms or cancels]",
+            "lines": [
+              {
+                "text": "[Until the person",
+                "x": 192.5,
+                "baseline": 282.0,
+                "width": 119.0
+              },
+              {
+                "text": "confirms or cancels]",
+                "x": 182.0,
+                "baseline": 298.8000011444092,
+                "width": 140.0
+              }
+            ],
+            "rect": {
+              "x0": 182.0,
+              "y0": 269.4000005722046,
+              "x1": 322.0,
+              "y1": 303.00000286102295
+            },
+            "role": "TextDim"
+          },
+          "sections": []
+        },
+        {
+          "kind": "alt",
+          "rect": {
+            "x0": 310.0,
+            "y0": 421.0,
+            "x1": 736.0,
+            "y1": 778.0
+          },
+          "title": {
+            "text": "[Signature valid]",
+            "lines": [
+              {
+                "text": "[Signature valid]",
+                "x": 488.5,
+                "baseline": 439.0,
+                "width": 119.0
+              }
+            ],
+            "rect": {
+              "x0": 488.5,
+              "y0": 426.4000005722046,
+              "x1": 607.5,
+              "y1": 443.20000171661377
+            },
+            "role": "TextDim"
+          },
+          "sections": [
+            {
+              "y": 647.0,
+              "label": {
+                "text": "[Signature rejected]",
+                "lines": [
+                  {
+                    "text": "[Signature rejected]",
+                    "x": 453.0,
+                    "baseline": 665.0,
+                    "width": 140.0
+                  }
+                ],
+                "rect": {
+                  "x0": 453.0,
+                  "y0": 652.4000005722046,
+                  "x1": 593.0,
+                  "y1": 669.2000017166138
+                },
+                "role": "TextDim"
+              }
+            }
+          ]
+        },
+        {
+          "kind": "opt",
+          "rect": {
+            "x0": 310.0,
+            "y0": 788.0,
+            "x1": 536.0,
+            "y1": 891.0
+          },
+          "title": {
+            "text": "[Remember this\ndevice]",
+            "lines": [
+              {
+                "text": "[Remember this",
+                "x": 399.0,
+                "baseline": 806.0,
+                "width": 98.0
+              },
+              {
+                "text": "device]",
+                "x": 423.5,
+                "baseline": 822.8000011444092,
+                "width": 49.0
+              }
+            ],
+            "rect": {
+              "x0": 399.0,
+              "y0": 793.4000005722046,
+              "x1": 497.0,
+              "y1": 827.000002861023
+            },
+            "role": "TextDim"
+          },
+          "sections": []
+        }
+      ],
+      "boxes": [],
+      "title": null
+    }
+  }
+}

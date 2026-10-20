@@ -14,24 +14,7 @@ use merman::{
 use merman_render::model::SequenceDiagramLayout;
 use serde_json::Value;
 
-use super::SEQUENCE_SHOWCASE;
-
-/// What the showcase lacks: a title, a `box` group, and a `critical` frame
-/// with an `option`, which Mermaid widens to the left.
-const CHECKOUT: &str = "sequenceDiagram
-    title Checkout
-    box Shop
-    participant A
-    participant B
-    end
-    participant C
-    A->>B: Hi
-    critical Pay
-        B->>C: Charge
-    option Declined
-        C-->>B: No
-    end
-";
+use super::{SEQUENCE_CHECKOUT, SEQUENCE_SHOWCASE};
 
 fn detect(engine: &Engine, text: &str) -> (&'static str, &'static str) {
     let mut config = MermaidConfig::default();
@@ -274,9 +257,9 @@ fn the_patched_layout_carries_frames_and_activations() {
 
 #[test]
 fn the_patched_layout_carries_boxes_and_the_title() {
-    let json = layout_json(CHECKOUT);
+    let json = layout_json(SEQUENCE_CHECKOUT);
     let layout = &json["layout"]["SequenceDiagram"];
-    let svg = svg(CHECKOUT);
+    let svg = svg(SEQUENCE_CHECKOUT);
 
     let typed: SequenceDiagramLayout =
         serde_json::from_value(layout.clone()).expect("the layout deserialises");
