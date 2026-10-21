@@ -14,6 +14,7 @@ use super::*;
 use crate::editor::{Editing, Editor};
 use crate::input::action::Action;
 use crate::rowlayout;
+use crate::view_state::SaveDiagramAs;
 
 const TEXT: &str = "flowchart LR\n  A --> B\n  B --> C";
 
@@ -992,4 +993,59 @@ fn the_startup_row_counts_the_views_diagrams_by_state() {
         startup_note(&e.view.diagrams),
         "1 rows, 0 pending, 1 drawn, 0 failed"
     );
+}
+
+// ---------------------------------------------------------- save as… by key
+
+/// The shortcut applies only where the menu offers the row: on a diagram
+/// showing its drawing. Everywhere else the handler refuses and the chord
+/// falls through, so it can never mean two things.
+#[test]
+fn the_save_chord_does_nothing_on_a_paragraph() {
+    let (mut ws, mut e, _node) = diagram_doc(TEXT);
+    e.body.focus = 0;
+    e.view.active = true;
+    assert!(!e.act(&mut ws, Action::SaveDiagramAs));
+    assert_eq!(e.view.wants_save_diagram_as, None);
+}
+
+#[test]
+fn the_save_chord_asks_for_a_drawn_diagram() {
+    let (mut ws, mut e, node) = diagram_doc(TEXT);
+    let asked = e.take_diagram_requests();
+    assert!(e.diagram_result(node, asked[0].text_hash, Ok(prepared(300.0, 200.0))));
+    e.reflow();
+    focus(&mut e, node);
+    assert!(e.act(&mut ws, Action::SaveDiagramAs));
+    assert_eq!(e.view.wants_save_diagram_as, Some(SaveDiagramAs { node }));
+}
+
+#[test]
+fn the_save_chord_does_nothing_while_the_text_is_open_or_before_a_drawing() {
+    let (mut ws, mut e, node) = diagram_doc(TEXT);
+    focus(&mut e, node);
+    // Asked, not answered: a placeholder has no picture to save.
+    assert!(!e.act(&mut ws, Action::SaveDiagramAs));
+    let asked = e.take_diagram_requests();
+    e.diagram_result(node, asked[0].text_hash, Ok(prepared(300.0, 200.0)));
+    e.reflow();
+    // Drawn, but the text is open: the row is text now, not a picture.
+    assert!(e.open_diagram_text(node));
+    assert!(!e.act(&mut ws, Action::SaveDiagramAs));
+    assert_eq!(e.view.wants_save_diagram_as, None);
+    // Closed again: the picture is back, and so is the chord.
+    assert!(e.close_diagram_text());
+    assert!(e.act(&mut ws, Action::SaveDiagramAs));
+    assert_eq!(e.view.wants_save_diagram_as, Some(SaveDiagramAs { node }));
+}
+
+#[test]
+fn the_save_chord_does_nothing_on_a_diagram_that_does_not_draw() {
+    let (mut ws, mut e, node) = diagram_doc(TEXT);
+    let asked = e.take_diagram_requests();
+    e.diagram_result(node, asked[0].text_hash, Err(not_parsed(2)));
+    e.reflow();
+    focus(&mut e, node);
+    assert!(!e.act(&mut ws, Action::SaveDiagramAs));
+    assert_eq!(e.view.wants_save_diagram_as, None);
 }

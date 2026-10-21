@@ -93,6 +93,7 @@ impl Policy {
             | Action::TogglePageTitle
             | Action::ToggleDone
             | Action::TickCheckbox
+            | Action::SaveDiagramAs
             | Action::ToggleHideCompleted
             | Action::Reorder(_)
             | Action::Indent(_)

@@ -307,6 +307,24 @@ pub enum ShortcutId {
     /// so `Ctrl+Shift+M` reaches this chord too. Nothing binds
     /// `Ctrl+Shift+M`, so it costs nothing today.
     TickCheckbox,
+    /// Save the focused diagram's picture as a PNG or an SVG — the menu's
+    /// *Save as…* on a drawn `mermaid` block, from the keyboard.
+    ///
+    /// **Applies only on a drawn diagram**, and the editor's handler enforces
+    /// it the way [`TickCheckbox`](Self::TickCheckbox) does: on a paragraph,
+    /// on a diagram whose text is open, or on one that does not draw, the
+    /// handler answers `false` and the chord falls through unclaimed. The
+    /// registry has no notion of a selection scope, so this is the only place
+    /// the rule can live; the menu row is the other half, offered only when
+    /// there is a drawing to save.
+    ///
+    /// `PRIMARY`+Shift+X: the shifted sibling of Cut, free on both platforms
+    /// — Ctrl/⌘+S and Ctrl/⌘+Shift+S are the document's saves, and the
+    /// collision test below keeps it that way. It exists because a document
+    /// block's menu opens only from a pointer today; without this a keyboard
+    /// user could reach every other step of a diagram's life but not its
+    /// file.
+    SaveDiagramAs,
     InsertLink,
     EmojiPicker,
     DeleteRows,
@@ -900,6 +918,12 @@ pub const REGISTRY: &[Shortcut] = &[
         Layer::Editor,
         "Tick checkbox",
         Chord::new(named(NamedKey::Enter), PRIMARY_SHIFT),
+    ),
+    s(
+        ShortcutId::SaveDiagramAs,
+        Layer::Editor,
+        "Save diagram as…",
+        Chord::new(On::Letter('x'), PRIMARY_SHIFT),
     ),
     s(
         ShortcutId::InsertLink,

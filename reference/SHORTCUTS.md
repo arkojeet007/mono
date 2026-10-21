@@ -102,6 +102,7 @@ Chords are shown as this platform writes them.
 | `Ctrl+Shift+-` | Subscript |
 | `Ctrl+Enter` | Mark done |
 | `Ctrl+Shift+Enter` | Tick checkbox |
+| `Ctrl+Shift+X` | Save diagram as… |
 | `Ctrl+K` | Link |
 | `Ctrl+Shift+Space` | Emoji |
 | `Ctrl+D` | Delete line (children outdent) |

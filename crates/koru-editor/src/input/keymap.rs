@@ -302,6 +302,13 @@ pub const DEFAULT: &[(Chord, Action)] = &[
         Chord::new(named(NamedKey::Enter), C, S, false),
         Action::TickCheckbox,
     ),
+    // **The shifted sibling of Cut saves a drawn diagram's picture.** Applies
+    // only on such a row — the handler refuses everything else, so the chord
+    // is free to fall through. See `koru_keys::ShortcutId::SaveDiagramAs`.
+    (
+        Chord::new(On::Letter('x'), C, S, false),
+        Action::SaveDiagramAs,
+    ),
     (
         Chord::new(named(NamedKey::Enter), false, false, false),
         Action::SplitLine,
@@ -595,6 +602,20 @@ mod tests {
         assert_eq!(
             resolve(&key(NamedKey::Enter), None, ModifiersState::ALT),
             Some(Action::InsertParagraphAbove)
+        );
+    }
+
+    /// Cut and *Save diagram as…* share a letter and differ by Shift, as the
+    /// registry says they do.
+    #[test]
+    fn shift_turns_cut_into_save_diagram_as() {
+        assert_eq!(
+            resolve(&ch("x"), None, koru_keys::PRIMARY),
+            Some(Action::Cut)
+        );
+        assert_eq!(
+            resolve(&ch("x"), None, koru_keys::PRIMARY | ModifiersState::SHIFT),
+            Some(Action::SaveDiagramAs)
         );
     }
 

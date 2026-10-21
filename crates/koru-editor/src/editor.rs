@@ -37,8 +37,8 @@ use crate::paragraph::Paragraph;
 use crate::rowlayout;
 use crate::trigger::{self, Anchor, PillSpec, Trigger, TriggerKind};
 use crate::view_state::{
-    DragRow, Hover, ImageResize, LinkChipHit, OpenWhere, ScrollAnim, SearchFlash, ViewState,
-    image_handle_at,
+    DragRow, Hover, ImageResize, LinkChipHit, OpenWhere, SaveDiagramAs, ScrollAnim, SearchFlash,
+    ViewState, image_handle_at,
 };
 
 const SEARCH_FLASH_DURATION: Duration = Duration::from_millis(1200);
@@ -4722,6 +4722,32 @@ pub trait Editing {
                     return false;
                 };
                 self.body_mut().set_done(ws, id, !done);
+            }
+            // **Only a drawn diagram has a picture to save**, and only while
+            // it is showing it: a paragraph, a block whose text is open, a
+            // placeholder or a block that does not draw all answer `false`,
+            // the `TickCheckbox` rule, so the chord is left unhandled rather
+            // than claimed for nothing. The same test the menu applies before
+            // it offers the row; the shell performs the save.
+            Action::SaveDiagramAs => {
+                let Some(node) = self
+                    .body()
+                    .focused()
+                    .filter(|row| crate::diagram::is_diagram_row(row))
+                    .map(|row| row.id)
+                else {
+                    return false;
+                };
+                let view = self.view();
+                let drawn = view.diagram_text_open != Some(node)
+                    && matches!(
+                        view.diagrams.get(&node).map(|entry| &entry.state),
+                        Some(crate::diagram::DiagramState::Drawn(_))
+                    );
+                if !drawn {
+                    return false;
+                }
+                self.view_mut().wants_save_diagram_as = Some(SaveDiagramAs { node });
             }
             Action::ToggleHideCompleted | Action::Reorder(_) | Action::Indent(_) => {
                 debug_assert_eq!(action.scope(), Scope::Structural);

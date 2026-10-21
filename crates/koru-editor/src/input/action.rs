@@ -168,6 +168,17 @@ pub enum Action {
     /// `false` and the key falls through unhandled, which is the same nothing
     /// a press on empty space produces.
     TickCheckbox,
+    /// **Ask the shell to save the focused diagram's picture** — the menu's
+    /// *Save as…* on a drawn `mermaid` block, from the keyboard.
+    ///
+    /// [`Scope::Shared`], like [`TickCheckbox`](Self::TickCheckbox), and
+    /// refused the same way: the handler sets the view's
+    /// `wants_save_diagram_as` only when the focused row is a diagram
+    /// showing its drawing — closed, and drawn — and answers `false` on
+    /// everything else, so the chord falls through unclaimed rather than
+    /// meaning something different per row. The dialog, the raster and the
+    /// file are the shell's; the editor only names the block.
+    SaveDiagramAs,
     ToggleHideCompleted,
     /// Negative is up.
     Reorder(i32),
