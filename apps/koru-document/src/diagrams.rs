@@ -12,14 +12,20 @@
 //! until the new one lands, so there is no controller state here beyond the
 //! client itself.
 //!
-//! No worker in the process — a test — means no client, and every call is a
-//! cheap no-op: the block keeps its placeholder, the spelling rule.
+//! **The client is looked up until there is one, not once.** A view the
+//! shell restores at launch is built before the shell starts the worker, so a
+//! line taken at construction would be none for the life of that view and its
+//! diagrams would wait forever. Until the worker exists, every pass is one
+//! empty `OnceLock` read and the editor keeps its requests; the first pass
+//! after it starts sends them. No worker in the process at all — a test —
+//! is the same cheap no-op: the block keeps its placeholder, the spelling rule.
 
 use koru_editor::{Editing, Editor};
 use koru_workspace_host::diagram::{DiagramClient, client};
 
 pub struct Diagrams {
     client: Option<DiagramClient>,
+    connect: fn() -> Option<DiagramClient>,
 }
 
 impl Default for Diagrams {
@@ -30,13 +36,25 @@ impl Default for Diagrams {
 
 impl Diagrams {
     pub fn new() -> Self {
-        Self { client: client() }
+        Self::connecting(client)
+    }
+
+    /// A line to whatever worker `connect` finds, asked again on every pass
+    /// until it finds one.
+    pub(crate) fn connecting(connect: fn() -> Option<DiagramClient>) -> Self {
+        Self {
+            client: connect(),
+            connect,
+        }
     }
 
     /// Hand the editor's pending requests to the worker and land its answers.
     /// Returns whether a drawing or a reason changed, so the view's `maintain`
     /// can ask for a redraw. One empty `try_recv` when idle.
     pub fn maintain(&mut self, editor: &mut Editor) -> bool {
+        if self.client.is_none() {
+            self.client = (self.connect)();
+        }
         let Some(client) = &self.client else {
             return false;
         };

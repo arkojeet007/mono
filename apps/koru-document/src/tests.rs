@@ -5241,6 +5241,33 @@ fn without_a_worker_a_maintenance_pass_leaves_the_diagram_pending() {
     assert!(view.drawn_diagram(node).is_none());
 }
 
+/// A view built before the worker starts — every tab the shell restores at
+/// launch — still has its diagram drawn once the worker is up: the line to
+/// it is looked up again on each pass, and the request the editor kept in
+/// the meantime goes out on the first pass that finds it.
+#[test]
+fn a_view_built_before_the_worker_starts_draws_once_it_does() {
+    use koru_workspace_host::diagram::{DiagramClient, DiagramWorker};
+    static WORKER: std::sync::OnceLock<DiagramWorker> = std::sync::OnceLock::new();
+    fn connect() -> Option<DiagramClient> {
+        WORKER.get().map(DiagramWorker::client)
+    }
+
+    let (mut ws, mut view, node) = diagram_document();
+    view.diagrams = crate::diagrams::Diagrams::connecting(connect);
+    assert!(!View::maintain(&mut view, &mut ws, Instant::now()));
+    assert!(view.drawn_diagram(node).is_none(), "no worker yet");
+
+    let measure = std::sync::Arc::new(koru_draw::diagram::InterMeasure);
+    assert!(WORKER.set(DiagramWorker::start(measure, 1, || {})).is_ok());
+    let deadline = Instant::now() + std::time::Duration::from_secs(20);
+    while view.drawn_diagram(node).is_none() {
+        assert!(Instant::now() < deadline, "the worker never answered");
+        View::maintain(&mut view, &mut ws, Instant::now());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// *Save as…* reaches the shell only with a drawing in hand: a request
 /// raised on a block that is not drawn is dropped, and the page's name — what
 /// the default file name is made of — is read from the document, not from a
