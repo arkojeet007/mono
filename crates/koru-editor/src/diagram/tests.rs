@@ -323,12 +323,15 @@ fn a_drawn_row_takes_the_natural_height_scaled_to_the_column() {
 fn a_result_landing_reshapes_nothing() {
     let (_ws, mut e, node) = diagram_doc(TEXT);
     e.take_diagram_requests();
-    let before = rowlayout::shapings();
+    // Each row's own shaping stamp, not the process-wide counter: other
+    // tests shape rows in parallel, and only this editor's rows matter.
+    let stamps = |e: &Editor| e.body.rows.iter().map(|r| r.shaped).collect::<Vec<_>>();
+    let before = stamps(&e);
     assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
     e.reflow();
     assert_eq!(row(&e, node).height, 300.0, "the height changed");
     e.reflow();
-    assert_eq!(rowlayout::shapings(), before, "and nothing was shaped");
+    assert_eq!(stamps(&e), before, "and no row of this editor was reshaped");
 }
 
 /// Closed and failed, the row is the text plus one reason line, like a
