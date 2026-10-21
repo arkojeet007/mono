@@ -637,7 +637,13 @@ fn write_text_atomic(path: &Path, text: &str) -> Result<(), ExportError> {
     write_bytes_atomic(path, text.as_bytes())
 }
 
-fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), ExportError> {
+/// Write `bytes` to `path` so that the file is either the old one or the
+/// whole new one: into a `.part` beside it, synced, then renamed over.
+///
+/// Public because it is the one atomic file write in the tree that a save
+/// from the shell can share — a diagram saved as a PNG or an SVG goes
+/// through it, so a full disk leaves no half-written picture.
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), ExportError> {
     let part = part_path(path);
     let result = (|| -> Result<(), ExportError> {
         let mut file = fs::File::create(&part).map_err(|e| ExportError::new(e.to_string()))?;

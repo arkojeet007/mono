@@ -12091,6 +12091,21 @@ impl View for MainView {
         }
     }
 
+    fn take_wants_save_diagram_as(
+        &mut self,
+        ws: &WorkspaceDoc,
+    ) -> Option<koru_workspace_host::SaveDiagram> {
+        let request = match self.active_view() {
+            TabView::Leaf(l) => View::take_wants_save_diagram_as(l, ws),
+            _ => None,
+        }?;
+        // The route a file's Save takes: a pane request the shell serves
+        // against this window, whose device rasterises the PNG. Converted
+        // here and `None` returned, so the shell's own drain finds nothing.
+        self.ask_pane(PaneRequest::SaveDiagram(request));
+        None
+    }
+
     fn take_wants_file_action(
         &mut self,
     ) -> Option<(koru_core::DocumentId, koru_workspace_host::FileAction)> {

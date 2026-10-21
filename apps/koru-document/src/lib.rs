@@ -24,6 +24,7 @@ pub mod blockmenu;
 pub mod bubble;
 pub mod caption;
 pub mod context_menu;
+pub mod diagrams;
 pub mod docview;
 pub mod draw;
 pub mod menu;
@@ -198,6 +199,9 @@ pub struct BuiltInDocument {
     /// at open (D13) so the menu never relabels under the pointer. Assigned —
     /// to a snapshot or to `None` — on every context-menu open.
     context_spelling: Option<spelling::SpellSnapshot>,
+    /// The line to the shell's diagram worker: the editor's layout requests
+    /// go out and the drawings come back through it, once per `maintain`.
+    diagrams: diagrams::Diagrams,
 }
 
 /// The three pieces of work this view's `adopt` arranges, counted.
@@ -390,6 +394,7 @@ impl BuiltInDocument {
                     dictation: None,
                     spelling: spelling::SpellCheck::new(),
                     context_spelling: None,
+                    diagrams: diagrams::Diagrams::new(),
                 }
             }
         }
@@ -463,6 +468,7 @@ impl BuiltInDocument {
             dictation: None,
             spelling: spelling::SpellCheck::new(),
             context_spelling: None,
+            diagrams: diagrams::Diagrams::new(),
         }
     }
 
@@ -505,6 +511,7 @@ impl BuiltInDocument {
             dictation: None,
             spelling: spelling::SpellCheck::new(),
             context_spelling: None,
+            diagrams: diagrams::Diagrams::new(),
         }
     }
 
@@ -721,10 +728,30 @@ impl BuiltInDocument {
     /// *Save as…* asked on a drawn diagram, if it was — the way
     /// `take_wants_file_action` surfaces a file action. The shell owns the
     /// save dialog, the raster and the write; this view only names the block.
-    /// **Not yet drained by any shell**: the wiring is the host's, and until
-    /// it lands the menu row is offered and the request is left here.
+    /// `View::take_wants_save_diagram_as` drains it, pairing the node with
+    /// its drawing and the page's title for the shell.
     pub fn take_wants_save_diagram_as(&mut self) -> Option<koru_editor::SaveDiagramAs> {
         self.editor.view.wants_save_diagram_as.take()
+    }
+
+    /// The drawing `node` shows right now, if it is a diagram in its `Drawn`
+    /// state — what *Save as…* saves. `None` for a placeholder, a block that
+    /// does not draw, or any other row: the menu offers the row only when
+    /// this answers, and a request that races a keystroke is simply dropped.
+    pub fn drawn_diagram(
+        &self,
+        node: NodeId,
+    ) -> Option<std::sync::Arc<koru_draw::diagram::PreparedDiagram>> {
+        match self
+            .editor
+            .view
+            .diagrams
+            .get(&node)
+            .map(|entry| &entry.state)
+        {
+            Some(koru_editor::DiagramState::Drawn(prepared)) => Some(prepared.clone()),
+            _ => None,
+        }
     }
 
     /// Decide whether there is a bubble this frame and, if there is, **pin it**.
@@ -2470,9 +2497,8 @@ impl BuiltInDocument {
                     }
                     // The view only asks: the save dialog, the raster and the
                     // file are the shell's. Drained by
-                    // `take_wants_save_diagram_as`, which no shell reads yet —
-                    // the host's wiring is a later change; until it lands the
-                    // row is offered and the request is left here.
+                    // `View::take_wants_save_diagram_as` on the next
+                    // maintenance pass, with the drawing and the page's title.
                     Some(context_menu::Choice::SaveDiagramAs) => {
                         if let Some(diagram) = self.focused_diagram_context().filter(|d| d.drawn) {
                             self.editor.view.wants_save_diagram_as =
@@ -2536,19 +2562,25 @@ impl BuiltInDocument {
         if !self.window_chrome {
             return;
         }
-        let name = self
-            .editor
-            .body
-            .root
-            .and_then(|root| ws.read(root).ok())
-            .and_then(|n| n.content.as_text().map(str::to_string))
-            .map(|t| t.trim().to_string())
-            .unwrap_or_default();
+        let name = self.page_name(ws);
         self.title = if name.is_empty() {
             "Untitled".to_string()
         } else {
             name
         };
+    }
+
+    /// The page's name: the root's text, trimmed. Empty when the page has
+    /// none — the caption says *Untitled* for that, and a saved diagram's
+    /// default file name says *Diagram*.
+    pub fn page_name(&self, ws: &WorkspaceDoc) -> String {
+        self.editor
+            .body
+            .root
+            .and_then(|root| ws.read(root).ok())
+            .and_then(|n| n.content.as_text().map(str::to_string))
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default()
     }
 
     /// Whether the caption's window-menu button is currently showing its menu.

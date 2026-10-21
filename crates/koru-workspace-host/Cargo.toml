@@ -75,6 +75,11 @@ koru-voice = { path = "../koru-voice" }
 # The spell engine boundary: the worker in `spelling.rs` is the one consumer —
 # views talk to it through that module's client, never to koru-spell directly.
 koru-spell = { path = "../koru-spell" }
+# The diagram engine boundary, the same shape: the worker in `diagram.rs` lays
+# a `mermaid` block out on its threads and views reach it through that
+# module's client. Already in the graph through `koru-draw`'s painter; named
+# here because the layout call is made here.
+koru-diagram = { path = "../koru-diagram" }
 koru-import = { path = "../koru-import" }
 koru-import-legacy-workspace = { path = "../koru-import-legacy-workspace" }
 koru-import-markdown = { path = "../koru-import-markdown" }

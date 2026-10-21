@@ -364,10 +364,13 @@ impl View for BuiltInDocument {
         let warning = self.editor.maintain_task_warning(now);
         let local = self.search.maintain(now);
         let spelling = self.spelling.maintain(&mut self.editor, ws, now);
+        // The layouts the last reflow asked for go out; the drawings that
+        // came back land, and the next frame takes its heights from them.
+        let diagrams = self.diagrams.maintain(&mut self.editor);
         // Suggestions that just landed belong in the open context menu's
         // placeholder, not behind a reopen.
         let filled = self.fill_context_suggestions();
-        search || table || copy || warning || local || spelling || filled
+        search || table || copy || warning || local || spelling || diagrams || filled
     }
 
     fn adopt(&mut self, ws: &WorkspaceDoc) {
@@ -610,6 +613,20 @@ impl View for BuiltInDocument {
                 );
                 (file, mapped)
             })
+    }
+
+    fn take_wants_save_diagram_as(
+        &mut self,
+        ws: &WorkspaceDoc,
+    ) -> Option<koru_workspace_host::SaveDiagram> {
+        let request = BuiltInDocument::take_wants_save_diagram_as(self)?;
+        // The menu offered the row on a drawing; a keystroke since may have
+        // replaced it with a placeholder, and then there is nothing to save.
+        let prepared = self.drawn_diagram(request.node)?;
+        Some(koru_workspace_host::SaveDiagram {
+            prepared,
+            title: self.page_name(ws),
+        })
     }
 
     fn take_wants_copy_image(&mut self) -> Option<String> {

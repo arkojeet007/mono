@@ -5171,3 +5171,91 @@ fn one_adopt_is_one_title_refresh_one_search_scan_and_one_spelling_look() {
         (1, 1, 1)
     );
 }
+
+// ------------------------------------------------------------------ diagrams
+
+/// A document with one `mermaid` block, laid out once, and the block's node.
+fn diagram_document() -> (WorkspaceDoc, BuiltInDocument, koru_core::NodeId) {
+    let mut ws = WorkspaceDoc::create(WorkspaceId::new(), "t").unwrap();
+    let doc = koru_workspace::document(&mut ws, "Release plan").expect("a document");
+    let node = ws
+        .insert(
+            koru_core::schema::Parent::Node(doc),
+            Node::code("flowchart LR\n  A --> B").unwrap(),
+        )
+        .unwrap();
+    ws.set_language(node, Some(koru_editor::diagram::LANGUAGE))
+        .unwrap();
+    let mut view = BuiltInDocument::open(&ws, doc);
+    view.editor.view.code_enabled = true;
+    view.editor.body.rebuild(&ws);
+    View::set_viewport(&mut view, 900.0, 560.0);
+    (ws, view, node)
+}
+
+/// The worker's answer lands through the view the way the shell delivers it,
+/// and an answer for a block that has since been deleted is dropped: it
+/// finds no entry, changes nothing, asks for no redraw.
+#[test]
+fn a_diagram_reply_for_a_node_the_editor_no_longer_has_is_dropped() {
+    let (mut ws, mut view, node) = diagram_document();
+    let asked = view.take_diagram_requests();
+    assert_eq!(asked.len(), 1, "one layout asked for the one block");
+    assert_eq!(asked[0].node, node);
+    let late = Err(koru_editor::diagram::Status::NotParsed {
+        line: 1,
+        message: "late".into(),
+        code: "merman.parse.diagram_parse".into(),
+    });
+    // The block goes before the worker answers.
+    ws.delete(node).unwrap();
+    view.editor.body.rebuild(&ws);
+    view.editor.reflow();
+    assert!(!view.editor.view.diagrams.contains_key(&node));
+    assert!(!view.diagram_result(node, asked[0].text_hash, late));
+    // And a reply for a node that never was is the same nothing.
+    assert!(!view.diagram_result(
+        koru_core::NodeId::new(),
+        asked[0].text_hash,
+        Err(koru_editor::diagram::Status::Empty)
+    ));
+}
+
+/// No worker runs in a test process, so the document's line to it is quietly
+/// off: a maintenance pass neither sends the editor's requests nor invents
+/// answers, and the block keeps its placeholder.
+#[test]
+fn without_a_worker_a_maintenance_pass_leaves_the_diagram_pending() {
+    let (mut ws, mut view, node) = diagram_document();
+    assert!(!View::maintain(&mut view, &mut ws, Instant::now()));
+    let asked = view.take_diagram_requests();
+    assert_eq!(asked.len(), 1, "the request is still the editor's to give");
+    assert!(matches!(
+        view.editor
+            .view
+            .diagrams
+            .get(&node)
+            .map(|entry| &entry.state),
+        Some(koru_editor::DiagramState::Pending)
+    ));
+    assert!(view.drawn_diagram(node).is_none());
+}
+
+/// *Save as…* reaches the shell only with a drawing in hand: a request
+/// raised on a block that is not drawn is dropped, and the page's name — what
+/// the default file name is made of — is read from the document, not from a
+/// caption a tab does not draw.
+#[test]
+fn save_diagram_as_is_handed_over_only_with_a_drawing() {
+    let (ws, mut view, node) = diagram_document();
+    view.editor.view.wants_save_diagram_as = Some(koru_editor::SaveDiagramAs { node });
+    assert!(
+        View::take_wants_save_diagram_as(&mut view, &ws).is_none(),
+        "a placeholder has no picture to save"
+    );
+    assert!(
+        view.editor.view.wants_save_diagram_as.is_none(),
+        "and the ask is spent"
+    );
+    assert_eq!(view.page_name(&ws), "Release plan");
+}

@@ -7617,6 +7617,7 @@ dependencies = [
  "koru-clipboard",
  "koru-core",
  "koru-delegate-core",
+ "koru-diagram",
  "koru-dictation",
  "koru-docstore",
  "koru-draw",

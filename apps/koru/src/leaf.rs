@@ -799,6 +799,15 @@ impl View for Leaf {
         }
     }
 
+    fn take_wants_save_diagram_as(
+        &mut self,
+        ws: &WorkspaceDoc,
+    ) -> Option<koru_workspace_host::SaveDiagram> {
+        match self {
+            Self::Document(d) => View::take_wants_save_diagram_as(d, ws),
+        }
+    }
+
     fn take_wants_create_tag(&mut self) -> Option<(Vec<NodeId>, String)> {
         match self {
             Self::Document(d) => View::take_wants_create_tag(d),

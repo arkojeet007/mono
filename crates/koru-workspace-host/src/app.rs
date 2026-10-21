@@ -927,6 +927,10 @@ pub enum Wake {
     /// The spell worker finished a batch of checks. The results are already on
     /// each asking view's own reply channel; `maintain` drains them.
     Spelling,
+    /// The diagram worker laid a `mermaid` block out. The drawing is already
+    /// on the asking view's reply channel; `maintain` lands it and asks for
+    /// the redraw. Carries nothing, like `Spelling`.
+    Diagram,
     /// The session backend queued a `BackendEvent` for a session tab. Queue
     /// first, wake second — the event is already on the owning view's queue and
     /// `maintain` drains it; nothing on the loop thread touches the session
@@ -5260,6 +5264,7 @@ Nothing was written. The store starts on demand, so this usually means it could 
         }
         let image_loader = crate::images::ImageLoader::spawn(&wake_proxy);
         crate::spelling::spawn(&wake_proxy, cli::root_from_args());
+        crate::diagram::spawn(&wake_proxy);
         let (clipboard_image_tx, clipboard_image_rx) = mpsc::channel();
         let (profile_cascade_tx, profile_cascade_rx) = mpsc::channel();
         let (profile_removal_tx, profile_removal_rx) = mpsc::channel();
@@ -6262,6 +6267,22 @@ Nothing was written. The store starts on demand, so this usually means it could 
                     // MainView intercepts Restore via PaneRequest; no-op here.
                 }
             }
+        }
+        // *Save as…* on a drawn diagram. The container turns it into a
+        // `PaneRequest::SaveDiagram` the way it does a file's Save; a bare
+        // document window has no container, so what is left here is served
+        // directly, against the window that asked.
+        let diagram_saves: Vec<(WindowId, crate::SaveDiagram)> = self
+            .panes
+            .iter_mut()
+            .filter_map(|(id, pane)| {
+                pane.view
+                    .take_wants_save_diagram_as(&self.runtime.workspace.ws)
+                    .map(|request| (*id, request))
+            })
+            .collect();
+        for (id, request) in diagram_saves {
+            self.save_diagram(id, request);
         }
         // /attach and /image both open a native picker on the main thread,
         // matching each other: no parent window (a parented rfd dialog from
@@ -8886,6 +8907,7 @@ Nothing was written. The store starts on demand, so this usually means it could 
                 self.save_file(id);
             }
             PaneRequest::SaveFiles(ids) => self.save_files(ids),
+            PaneRequest::SaveDiagram(request) => self.save_diagram(source, request),
             PaneRequest::OpenFile(id) => {
                 crate::attach_debug!("shell drain PaneRequest::OpenFile id={}", id.to_storage());
                 self.open_file(id);
@@ -10018,6 +10040,119 @@ Nothing was written. The store starts on demand, so this usually means it could 
                     .with_details(error),
             );
         }
+    }
+
+    /// Save a drawn diagram as the picture on screen, as a PNG or an SVG.
+    ///
+    /// The picker stays on the event thread, like every save here. **The
+    /// typed extension decides the format** (`crate::diagram::save_target`):
+    /// the SVG comes from the painter's twin and needs no GPU; the PNG is
+    /// rasterised at `SAVE_SCALE` on **this window's device, on the loop
+    /// thread** — accepted for a one-off the person has just confirmed in a
+    /// dialog, since a drawing-sized texture renders in a few milliseconds
+    /// and the renderer it uses is the one the window already holds. The PNG
+    /// encode and the atomic write go to the save worker, and the result is
+    /// the same *Saved “name”.* notice, or the same error, a workspace file's
+    /// save shows. The folder is remembered as every export's is.
+    fn save_diagram(&mut self, source: WindowId, request: crate::SaveDiagram) {
+        let Some(chosen) = crate::dialogs::pick_save_file(
+            koru_i18n::t(koru_i18n::current(), koru_i18n::Key::MenuSaveAs),
+            &crate::diagram::default_file_name(&request.title),
+            crate::diagram::SAVE_FILTERS,
+            self.runtime.settings.last_export_dir.as_deref(),
+            None,
+        ) else {
+            return;
+        };
+        let (destination, format) = crate::diagram::save_target(chosen);
+        if let Some(dir) = destination.parent() {
+            self.remember_export_dir(dir.to_path_buf());
+        }
+        let name = crate::diagram::file_name(&destination);
+        let payload = match format {
+            crate::diagram::SaveFormat::Svg => Ok(crate::diagram::SavePayload::Svg(
+                koru_draw::diagram::svg(&request.prepared, theme::p()),
+            )),
+            crate::diagram::SaveFormat::Png => self
+                .raster_diagram(source, &request.prepared)
+                .map(crate::diagram::SavePayload::Rgba),
+        };
+        let payload = match payload {
+            Ok(payload) => payload,
+            Err(error) => {
+                // No adapter, a lost device, a texture too large: the
+                // existing file-error notice, with the reason in its details.
+                eprintln!("[Koru][diagram] save failed: {error}");
+                self.handle_import_message(ImportMessage::FileSaved {
+                    name,
+                    destination,
+                    result: Err(error),
+                });
+                return;
+            }
+        };
+        let tx = self.import_tx.clone();
+        let proxy = self.wake_proxy.clone();
+        let worker_destination = destination.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("koru-save-file".into())
+            .spawn(move || {
+                let result = payload.encode().and_then(|bytes| {
+                    koru_export_markdown::write_bytes_atomic(&worker_destination, &bytes)
+                        .map_err(|error| error.to_string())
+                });
+                if let Err(error) = &result {
+                    eprintln!("[Koru][diagram] save failed: {error}");
+                }
+                let _ = tx.send(ImportMessage::FileSaved {
+                    name,
+                    destination: worker_destination,
+                    result,
+                });
+                let _ = proxy.send_event(Wake::Import);
+            })
+        {
+            self.report(
+                ErrorReport::new("Couldn't start saving the file", "Nothing was written.")
+                    .with_details(error),
+            );
+        }
+    }
+
+    /// The pixels of `prepared` at `SAVE_SCALE` over the page color, drawn
+    /// with the renderer `source` draws with. A window whose device is gone
+    /// renders through a fresh renderer on the context's device instead.
+    fn raster_diagram(
+        &mut self,
+        source: WindowId,
+        prepared: &koru_draw::diagram::PreparedDiagram,
+    ) -> Result<koru_window::offscreen::Rgba, String> {
+        let palette = theme::p();
+        let scale = crate::diagram::SAVE_SCALE;
+        let size = prepared.natural_size();
+        let width = (size.width * scale).ceil() as u32;
+        let height = (size.height * scale).ceil() as u32;
+        let mut scene = Scene::new();
+        koru_draw::diagram::paint(prepared, palette, Affine::scale(scale), 1.0, &mut scene);
+        let dev_id = self.panes.get(&source).map(|pane| pane.surface.dev_id);
+        let rendered = match dev_id.and_then(|dev_id| {
+            self.renderers
+                .get_mut(&dev_id)
+                .map(|renderer| (dev_id, renderer))
+        }) {
+            Some((dev_id, renderer)) => koru_window::offscreen::raster_with(
+                renderer,
+                &self.context.devices[dev_id],
+                &scene,
+                width,
+                height,
+                palette.bg,
+            ),
+            None => {
+                koru_window::offscreen::raster(&mut self.context, &scene, width, height, palette.bg)
+            }
+        };
+        rendered.map_err(|error| error.to_string())
     }
 
     /// Save a selection into one folder, retaining each stored file name.
