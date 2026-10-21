@@ -1975,6 +1975,38 @@ pub enum Key {
     /// storage. The failures reuse `ReminderError*`, which already say exactly
     /// the right thing.
     A11yReminderNewsSaved,
+    // ------------------------------------------------------- a11y: diagrams
+    // What a screen reader hears on a `mermaid` block: a drawing has no text
+    // to read, so the block is one control named with its narration. The
+    // counts are One/Many pairs the caller chooses and fills with digits; the
+    // phrases take the filled fragments; the narration is the sentences
+    // joined. **A composition**, which is a known limit: it is right where a
+    // count fragment agrees on its own, and a language whose agreement
+    // reaches past the fragment (a dual, a case the phrase would govern) is
+    // approximated rather than modelled.
+    A11yDiagramBoxesOne,
+    A11yDiagramBoxesMany,
+    A11yDiagramArrowsOne,
+    A11yDiagramArrowsMany,
+    A11yDiagramParticipantsOne,
+    A11yDiagramParticipantsMany,
+    A11yDiagramMessagesOne,
+    A11yDiagramMessagesMany,
+    /// *Diagram, flowchart, {boxes}, {arrows}* — the two filled fragments.
+    A11yDiagramFlowchart,
+    /// *Diagram, sequence, {participants}: {names}; {messages}* — the names
+    /// are the participants' labels joined with a comma, in order.
+    A11yDiagramSequence,
+    /// One arrow as prose: *{from}, arrow "{label}", to {to}*.
+    A11yDiagramArrow,
+    /// An arrow with no label: *{from}, arrow to {to}*.
+    A11yDiagramArrowUnlabelled,
+    /// One message as prose: *{from}, message "{text}", to {to}*.
+    A11yDiagramMessage,
+    /// *Diagram, not drawn: {reason}* — the reason line the block shows.
+    A11yDiagramNotDrawn,
+    /// The placeholder, while the first layout of a text is in flight.
+    A11yDiagramPending,
     TrashDeleteFailedTitle,
     TrashDeleteFailedBody,
     TrashDeletePartial,
@@ -2397,7 +2429,7 @@ impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1626] = [
+    pub const ALL: [Key; 1641] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -3701,6 +3733,21 @@ impl Key {
         Key::A11yReminderOnThisItem,
         Key::A11yReminderUnconfirmed,
         Key::A11yReminderNewsSaved,
+        Key::A11yDiagramBoxesOne,
+        Key::A11yDiagramBoxesMany,
+        Key::A11yDiagramArrowsOne,
+        Key::A11yDiagramArrowsMany,
+        Key::A11yDiagramParticipantsOne,
+        Key::A11yDiagramParticipantsMany,
+        Key::A11yDiagramMessagesOne,
+        Key::A11yDiagramMessagesMany,
+        Key::A11yDiagramFlowchart,
+        Key::A11yDiagramSequence,
+        Key::A11yDiagramArrow,
+        Key::A11yDiagramArrowUnlabelled,
+        Key::A11yDiagramMessage,
+        Key::A11yDiagramNotDrawn,
+        Key::A11yDiagramPending,
         Key::TrashDeleteFailedTitle,
         Key::TrashDeleteFailedBody,
         Key::TrashDeletePartial,
@@ -12055,6 +12102,24 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     Row { key: Key::A11yReminderOnThisItem, en: "Reminders on this item", es: "Recordatorios de este elemento", pt_br: "Lembretes deste item", de: "Erinnerungen zu diesem Eintrag", fr: "Rappels sur cet élément", ar: "التذكيرات على هذا العنصر", zh_hans: "此条目的提醒", ja: "この項目のリマインダー" },
     Row { key: Key::A11yReminderUnconfirmed, en: "Not confirmed by storage yet", es: "Aún no confirmado por el almacenamiento", pt_br: "Ainda não confirmado pelo armazenamento", de: "Vom Speicher noch nicht bestätigt", fr: "Pas encore confirmé par le stockage", ar: "لم يؤكِّده التخزين بعد", zh_hans: "存储尚未确认", ja: "ストレージがまだ確認していません" },
     Row { key: Key::A11yReminderNewsSaved, en: "Reminder saved.", es: "Recordatorio guardado.", pt_br: "Lembrete salvo.", de: "Erinnerung gespeichert.", fr: "Rappel enregistré.", ar: "تم حفظ التذكير.", zh_hans: "提醒已保存。", ja: "リマインダーを保存しました。" },
+    // The count fragments a diagram's narration is built from, filled with
+    // digits, and the phrases that take them. See the `Key` block's note on
+    // what composing them can and cannot get right.
+    Row { key: Key::A11yDiagramBoxesOne, en: "{} box", es: "{} caja", pt_br: "{} caixa", de: "{} Kasten", fr: "{} boîte", ar: "{} مربع", zh_hans: "{} 个框", ja: "{} 個のボックス" },
+    Row { key: Key::A11yDiagramBoxesMany, en: "{} boxes", es: "{} cajas", pt_br: "{} caixas", de: "{} Kästen", fr: "{} boîtes", ar: "{} مربعًا", zh_hans: "{} 个框", ja: "{} 個のボックス" },
+    Row { key: Key::A11yDiagramArrowsOne, en: "{} arrow", es: "{} flecha", pt_br: "{} seta", de: "{} Pfeil", fr: "{} flèche", ar: "{} سهم", zh_hans: "{} 个箭头", ja: "{} 本の矢印" },
+    Row { key: Key::A11yDiagramArrowsMany, en: "{} arrows", es: "{} flechas", pt_br: "{} setas", de: "{} Pfeile", fr: "{} flèches", ar: "{} سهمًا", zh_hans: "{} 个箭头", ja: "{} 本の矢印" },
+    Row { key: Key::A11yDiagramParticipantsOne, en: "{} participant", es: "{} participante", pt_br: "{} participante", de: "{} Teilnehmer", fr: "{} participant", ar: "{} مشارك", zh_hans: "{} 个参与者", ja: "{} 個の参加者" },
+    Row { key: Key::A11yDiagramParticipantsMany, en: "{} participants", es: "{} participantes", pt_br: "{} participantes", de: "{} Teilnehmer", fr: "{} participants", ar: "{} مشاركًا", zh_hans: "{} 个参与者", ja: "{} 個の参加者" },
+    Row { key: Key::A11yDiagramMessagesOne, en: "{} message", es: "{} mensaje", pt_br: "{} mensagem", de: "{} Nachricht", fr: "{} message", ar: "{} رسالة", zh_hans: "{} 条消息", ja: "{} 件のメッセージ" },
+    Row { key: Key::A11yDiagramMessagesMany, en: "{} messages", es: "{} mensajes", pt_br: "{} mensagens", de: "{} Nachrichten", fr: "{} messages", ar: "{} رسالة", zh_hans: "{} 条消息", ja: "{} 件のメッセージ" },
+    Row { key: Key::A11yDiagramFlowchart, en: "Diagram, flowchart, {}, {}", es: "Diagrama, diagrama de flujo, {}, {}", pt_br: "Diagrama, fluxograma, {}, {}", de: "Diagramm, Flussdiagramm, {}, {}", fr: "Diagramme, organigramme, {}, {}", ar: "مخطط، مخطط انسيابي، {}، {}", zh_hans: "图表，流程图，{}，{}", ja: "図、フローチャート、{}、{}" },
+    Row { key: Key::A11yDiagramSequence, en: "Diagram, sequence, {}: {}; {}", es: "Diagrama, secuencia, {}: {}; {}", pt_br: "Diagrama, sequência, {}: {}; {}", de: "Diagramm, Sequenz, {}: {}; {}", fr: "Diagramme, séquence, {} : {} ; {}", ar: "مخطط، تسلسل، {}: {}؛ {}", zh_hans: "图表，时序图，{}：{}；{}", ja: "図、シーケンス、{}: {}; {}" },
+    Row { key: Key::A11yDiagramArrow, en: "{}, arrow \"{}\", to {}", es: "{}, flecha «{}», hacia {}", pt_br: "{}, seta “{}”, para {}", de: "{}, Pfeil „{}“, nach {}", fr: "{}, flèche « {} », vers {}", ar: "{}، سهم \"{}\"، إلى {}", zh_hans: "{}，箭头“{}”，到 {}", ja: "{}、矢印「{}」、{} へ" },
+    Row { key: Key::A11yDiagramArrowUnlabelled, en: "{}, arrow to {}", es: "{}, flecha hacia {}", pt_br: "{}, seta para {}", de: "{}, Pfeil nach {}", fr: "{}, flèche vers {}", ar: "{}، سهم إلى {}", zh_hans: "{}，箭头到 {}", ja: "{}、{} への矢印" },
+    Row { key: Key::A11yDiagramMessage, en: "{}, message \"{}\", to {}", es: "{}, mensaje «{}», a {}", pt_br: "{}, mensagem “{}”, para {}", de: "{}, Nachricht „{}“, an {}", fr: "{}, message « {} », à {}", ar: "{}، رسالة \"{}\"، إلى {}", zh_hans: "{}，消息“{}”，发给 {}", ja: "{}、メッセージ「{}」、{} へ" },
+    Row { key: Key::A11yDiagramNotDrawn, en: "Diagram, not drawn: {}", es: "Diagrama, no dibujado: {}", pt_br: "Diagrama, não desenhado: {}", de: "Diagramm, nicht gezeichnet: {}", fr: "Diagramme, non dessiné : {}", ar: "مخطط، غير مرسوم: {}", zh_hans: "图表，未绘制：{}", ja: "図、未描画: {}" },
+    Row { key: Key::A11yDiagramPending, en: "Diagram, drawing", es: "Diagrama, dibujando", pt_br: "Diagrama, desenhando", de: "Diagramm, wird gezeichnet", fr: "Diagramme, en cours de dessin", ar: "مخطط، قيد الرسم", zh_hans: "图表，正在绘制", ja: "図、描画中" },
     Row {
         key: Key::TrashDeleteFailedTitle,
         en: "Could not delete all selected items",

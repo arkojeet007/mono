@@ -192,6 +192,7 @@ fn row(id: koru_core::NodeId, runs: Vec<NodeId>, selection: Option<TextSelection
             selection,
         },
         objects: Vec::new(),
+        diagram: None,
     }
 }
 

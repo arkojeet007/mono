@@ -1688,3 +1688,162 @@ fn pane_origin_and_clip_republish_with_sidebar_and_focused_split_geometry() {
     }
     assert!(screen.v.focused_view_rect().y > screen.v.content().y);
 }
+
+// ================================================================ diagrams
+
+const DIAGRAM_TEXT: &str = "flowchart LR\n  A --> B";
+
+/// A window showing a paragraph and a `mermaid` block of `text`, with a client
+/// attached and the whole tree published, the caret in the paragraph. The
+/// block has been asked for and not answered: the host's worker is not here,
+/// and [`answer`] stands in for it.
+fn reading_diagram(text: &str) -> (Screen, KoruNodeId) {
+    let (mut v, mut w) = container();
+    let doc =
+        w.ws.insert(Parent::Root, CoreNode::document("Notes").unwrap())
+            .expect("the document node");
+    w.ws.insert(Parent::Node(doc), CoreNode::paragraph("one").unwrap())
+        .expect("a paragraph");
+    let node =
+        w.ws.insert(Parent::Node(doc), CoreNode::code(text).unwrap())
+            .expect("the block");
+    w.ws.set_language(node, Some(koru_editor::diagram::LANGUAGE))
+        .expect("its language");
+    w.ws.enable_undo();
+    v.seat_accessibility(WINDOW);
+    v.open_node(&w.ws, doc);
+    v.recents.clear();
+    let first = *body_rows(&v).first().expect("a body paragraph");
+    put_caret_in(&mut v, first);
+
+    let adapter = Adapter::default();
+    let pane = PaneAccessibility::new(WINDOW, VIEW, Some(Box::new(adapter.clone())));
+    let mut screen = Screen {
+        v,
+        w,
+        pane,
+        adapter,
+        client: Client::default(),
+    };
+    screen.pane.revealed();
+    screen.adapter.attach();
+    assert_eq!(screen.service(), Some(Scope::Whole));
+    assert_eq!(screen.service(), None, "an idle pass published something");
+    (screen, node)
+}
+
+/// The host's answer for the block's current text, landed the way the loop
+/// lands it, and the frame's reflow that mirrors it onto the row.
+fn answer(screen: &mut Screen, node: KoruNodeId, status: koru_editor::diagram::Status) {
+    let Some(Leaf::Document(document)) = super::leaf_mut(&mut screen.v) else {
+        panic!("the active tab is not a document");
+    };
+    let text = document
+        .editor
+        .body
+        .row(node)
+        .expect("the block")
+        .text
+        .clone();
+    assert!(
+        document
+            .editor
+            .diagram_result(node, koru_editor::diagram::text_hash(&text), Err(status)),
+        "the answer is for the text in flight"
+    );
+    document.editor.reflow();
+}
+
+/// **The first block with no text and a name of its own**, read back the way
+/// a client reads it: an image named *Diagram, drawing* while the host has
+/// not answered, with Focus and ScrollIntoView, no runs, no value and nothing
+/// to select.
+#[test]
+fn a_diagram_waiting_for_its_drawing_is_an_image_named_as_such_with_no_text() {
+    let (screen, node) = reading_diagram(DIAGRAM_TEXT);
+    let id = screen.paragraph(node);
+    let image = screen.client.node(id);
+    assert_eq!(image.role(), Role::Image);
+    assert_eq!(image.label(), Some("Diagram, drawing"));
+    assert!(image.value().is_none(), "a picture has no text value");
+    assert!(screen.client.runs(id).is_empty(), "a picture has no runs");
+    assert!(image.supports_action(Action::Focus));
+    assert!(image.supports_action(Action::ScrollIntoView));
+    assert!(
+        !image.supports_action(Action::SetTextSelection),
+        "there is no text in a picture to select"
+    );
+    assert!(screen.client.announcing().is_empty());
+    // The paragraph beside it is untouched.
+    let rows = body_rows(&screen.v);
+    assert_eq!(screen.client.text(screen.paragraph(rows[0])), "one");
+}
+
+/// The host's answer is a change to the tree — the revision moves, the row is
+/// republished — and it is never spoken: neither an answer landing nor a
+/// peer's rewrite of the text is the person's own doing, and the policy for
+/// everything that is not is silence.
+#[test]
+fn a_host_answer_renames_the_block_moves_the_revision_and_says_nothing() {
+    let (mut screen, node) = reading_diagram(DIAGRAM_TEXT);
+    let id = screen.paragraph(node);
+    let before = screen.v.semantics_revision();
+    answer(
+        &mut screen,
+        node,
+        koru_editor::diagram::Status::NotParsed {
+            line: 2,
+            message: "unexpected token".into(),
+            code: "merman.parse.diagram_parse".into(),
+        },
+    );
+    assert_ne!(
+        screen.v.semantics_revision(),
+        before,
+        "an answer landing is a change to the tree"
+    );
+    assert_eq!(screen.service(), Some(Scope::Delta));
+    let row = screen.client.node(id);
+    assert_eq!(
+        row.role(),
+        Role::MultilineTextInput,
+        "a block that does not draw shows its text"
+    );
+    assert_eq!(
+        row.label(),
+        Some("Diagram, not drawn: Line 2: this line could not be read")
+    );
+    assert!(
+        screen.client.text(id).starts_with("flowchart LR"),
+        "the text is there to fix: {:?}",
+        screen.client.text(id)
+    );
+    assert!(
+        screen.client.announcing().is_empty(),
+        "an answer landing was spoken"
+    );
+
+    // A peer rewrites the text, and the host answers for the new text.
+    let mut peer = peer(&screen.w);
+    peer.set_text(node, "pie\n  \"a\": 1")
+        .expect("the peer's edit");
+    import(&mut screen, &peer);
+    assert_eq!(screen.service(), Some(Scope::Delta));
+    assert!(screen.client.text(id).starts_with("pie"));
+    answer(
+        &mut screen,
+        node,
+        koru_editor::diagram::Status::KindNotDrawn {
+            kind: Some("pie".into()),
+        },
+    );
+    assert_eq!(screen.service(), Some(Scope::Delta));
+    assert_eq!(
+        screen.client.node(id).label(),
+        Some("Diagram, not drawn: Koru does not draw this kind of diagram yet")
+    );
+    assert!(
+        screen.client.announcing().is_empty(),
+        "a remote change of a diagram was spoken"
+    );
+}

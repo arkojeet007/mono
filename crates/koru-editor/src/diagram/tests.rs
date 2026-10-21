@@ -725,3 +725,248 @@ fn reason_text_for_every_status() {
         }
     }
 }
+
+// ------------------------------------------------------------- the narration
+
+/// The deterministic measurer the engine's own tests lay the showcases out
+/// with — half the size per character, no font — so the scene is the same on
+/// every machine. The narration reads labels and counts, never a width.
+pub(crate) struct Stub;
+
+impl koru_diagram::TextMeasure for Stub {
+    fn measure(&self, text: &str, px: f32) -> koru_diagram::TextMetrics {
+        koru_diagram::TextMetrics {
+            width: text.chars().count() as f32 * 0.5 * px,
+            height: 1.2 * px,
+            ascent: 0.9 * px,
+        }
+    }
+
+    fn wrap(&self, text: &str, px: f32, max_width: f32) -> Vec<koru_diagram::MeasuredLine> {
+        let mut lines: Vec<koru_diagram::MeasuredLine> = Vec::new();
+        let mut current = String::new();
+        for word in text.split(' ').filter(|w| !w.is_empty()) {
+            let candidate = if current.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{current} {word}")
+            };
+            if current.is_empty() || self.measure(&candidate, px).width <= max_width {
+                current = candidate;
+            } else {
+                lines.push(koru_diagram::MeasuredLine {
+                    width: self.measure(&current, px).width,
+                    text: std::mem::replace(&mut current, word.to_owned()),
+                });
+            }
+        }
+        if !current.is_empty() || lines.is_empty() {
+            lines.push(koru_diagram::MeasuredLine {
+                width: self.measure(&current, px).width,
+                text: current,
+            });
+        }
+        lines
+    }
+}
+
+/// The two showcases the engine's tests render: ten boxes, twelve arrows and
+/// two groups behind a title and a description; four participants and twelve
+/// messages behind the same.
+pub(crate) const FLOWCHART_SHOWCASE: &str =
+    include_str!("../../../koru-diagram/tests/fixtures/flowchart-showcase.mmd");
+pub(crate) const SEQUENCE_SHOWCASE: &str =
+    include_str!("../../../koru-diagram/tests/fixtures/sequence-showcase.mmd");
+
+/// `text` laid out through the stub and shaped, as the host hands it back.
+pub(crate) fn laid_out(text: &str) -> Arc<PreparedDiagram> {
+    let measure: Arc<dyn koru_diagram::TextMeasure> = Arc::new(Stub);
+    let scene = koru_diagram::layout(
+        text,
+        &measure,
+        &koru_diagram::Limits::default(),
+        &koru_diagram::Cancel::new(),
+    )
+    .expect("the text draws");
+    Arc::new(PreparedDiagram::new(Arc::new(scene)))
+}
+
+/// A closed row showing `drawing`.
+fn drawn(drawing: Arc<PreparedDiagram>) -> DiagramRowState {
+    DiagramRowState {
+        open: false,
+        pending: false,
+        empty: false,
+        reason: None,
+        drawing: Some(drawing),
+        last_good: false,
+        shown: 1,
+    }
+}
+
+/// A closed row with nothing to show but `reason` and its text.
+fn failed(reason: Status) -> DiagramRowState {
+    let empty = matches!(reason, Status::Empty);
+    DiagramRowState {
+        open: false,
+        pending: false,
+        empty,
+        reason: (!empty).then_some(reason),
+        drawing: None,
+        last_good: false,
+        shown: 2,
+    }
+}
+
+const FLOWCHART_NARRATION: &str = concat!(
+    "Checkout flow. ",
+    "How an order moves from the cart to a confirmed payment, with retries and a fallback provider. ",
+    "Diagram, flowchart, 10 boxes, 12 arrows. ",
+    "Cart, arrow to Valid order? ",
+    "Valid order?, arrow \"no\", to Fix the order. ",
+    "Fix the order, arrow to Cart. ",
+    "Valid order?, arrow \"yes\", to Charge card. ",
+    "Charge card, arrow to Payment gateway. ",
+    "Payment gateway, arrow \"declined\", to Retry. ",
+    "Retry, arrow to Charge card. ",
+    "Payment gateway, arrow \"timeout\", to Second provider (EU). ",
+    "Payment gateway, arrow \"approved\", to Order confirmed. ",
+    "Second provider (EU), arrow to Order confirmed. ",
+    "Order confirmed, arrow to Email & push — café ☕. ",
+    "Payment service, arrow to Audit log",
+);
+
+const SEQUENCE_NARRATION: &str = concat!(
+    "Sign-in with a passkey. ",
+    "The app asks the server for a challenge, the device signs it, and the server issues a session. ",
+    "Diagram, sequence, 4 participants: Person, Koru app, Server, Session store; 12 messages. ",
+    "Person, message \"Sign in\", to Koru app. ",
+    "Koru app, message \"Request challenge\", to Server. ",
+    "Server, message \"Challenge\", to Koru app. ",
+    "Koru app, message \"Ask for passkey\", to Person. ",
+    "Person, message \"Touch sensor\", to Koru app. ",
+    "Koru app, message \"Signed challenge\", to Server. ",
+    "Server, message \"Create session\", to Session store. ",
+    "Session store, message \"Session id\", to Server. ",
+    "Server, message \"Session token\", to Koru app. ",
+    "Server, message \"Rejected\", to Koru app. ",
+    "Koru app, message \"Register device\", to Server. ",
+    "Koru app, message \"Signed in\", to Person",
+);
+
+/// Title and description first, the counts, then the twelve arrows in source
+/// order by the labels a person sees — the box ids `Validate` and `Fix` are
+/// never spoken, an arrow from a group names the group's title, and a box
+/// called *Valid order?* ends its sentence itself.
+#[test]
+fn a_drawn_flowchart_is_read_title_first_then_counts_then_every_arrow() {
+    let text = narration_text(Lang::En, &drawn(laid_out(FLOWCHART_SHOWCASE)))
+        .expect("a closed drawing is narrated");
+    assert_eq!(text, FLOWCHART_NARRATION);
+}
+
+/// The participants by name, in the order they stand, then the twelve
+/// messages in order — `P` is *Person* and `DB` is *Session store*.
+#[test]
+fn a_drawn_sequence_is_read_with_its_participants_by_name() {
+    let text = narration_text(Lang::En, &drawn(laid_out(SEQUENCE_SHOWCASE)))
+        .expect("a closed drawing is narrated");
+    assert_eq!(text, SEQUENCE_NARRATION);
+}
+
+#[test]
+fn a_block_that_is_not_drawn_says_so_first_and_an_open_one_says_nothing() {
+    assert_eq!(
+        narration_text(Lang::En, &failed(not_parsed(7))).as_deref(),
+        Some("Diagram, not drawn: Line 7: this line could not be read")
+    );
+    assert_eq!(
+        narration_text(Lang::En, &failed(Status::Empty)).as_deref(),
+        Some("Diagram, not drawn: Describe a flowchart or a sequence diagram here"),
+        "an emptied block names its hint"
+    );
+    let pending = DiagramRowState {
+        open: false,
+        pending: true,
+        empty: false,
+        reason: None,
+        drawing: None,
+        last_good: false,
+        shown: 3,
+    };
+    assert_eq!(
+        narration_text(Lang::En, &pending).as_deref(),
+        Some("Diagram, drawing")
+    );
+    // Open, the text is what the person hears, whatever the state — a
+    // retained drawing under it included.
+    let mut open = drawn(laid_out(FLOWCHART_SHOWCASE));
+    open.open = true;
+    open.last_good = true;
+    assert_eq!(narration_text(Lang::En, &open), None);
+    let mut open = failed(not_parsed(7));
+    open.open = true;
+    assert_eq!(narration_text(Lang::En, &open), None);
+}
+
+/// Exactly one takes the One row; nothing and many take the Many row.
+#[test]
+fn the_count_fragments_agree_with_their_number() {
+    assert_eq!(
+        narration_text(Lang::En, &drawn(laid_out("flowchart LR\n  A --> B"))).as_deref(),
+        Some("Diagram, flowchart, 2 boxes, 1 arrow. A, arrow to B")
+    );
+    assert_eq!(
+        narration_text(Lang::En, &drawn(laid_out("flowchart LR\n  A"))).as_deref(),
+        Some("Diagram, flowchart, 1 box, 0 arrows")
+    );
+    assert_eq!(
+        narration_text(
+            Lang::En,
+            &drawn(laid_out("sequenceDiagram\n  participant A\n  A->>A: hi"))
+        )
+        .as_deref(),
+        Some("Diagram, sequence, 1 participant: A; 1 message. A, message \"hi\", to A")
+    );
+}
+
+/// Every language says something about every state, with the counts as
+/// digits in it.
+#[test]
+fn every_language_narrates_every_state() {
+    let flowchart = drawn(laid_out(FLOWCHART_SHOWCASE));
+    let sequence = drawn(laid_out(SEQUENCE_SHOWCASE));
+    let pending = DiagramRowState {
+        open: false,
+        pending: true,
+        empty: false,
+        reason: None,
+        drawing: None,
+        last_good: false,
+        shown: 4,
+    };
+    for lang in Lang::ALL {
+        // The counts in the reader's own numerals — Arabic-Indic for Arabic.
+        let (ten, twelve, four) = (
+            number::decimal(lang, 10),
+            number::decimal(lang, 12),
+            number::decimal(lang, 4),
+        );
+        let text = narration_text(lang, &flowchart).expect("a drawn flowchart");
+        assert!(
+            text.contains(&ten) && text.contains(&twelve) && text.contains("Checkout flow"),
+            "{lang:?}: {text}"
+        );
+        let text = narration_text(lang, &sequence).expect("a drawn sequence");
+        assert!(
+            text.contains(&four) && text.contains(&twelve) && text.contains("Session store"),
+            "{lang:?}: {text}"
+        );
+        for state in [&pending, &failed(not_parsed(7)), &failed(Status::Empty)] {
+            assert!(
+                narration_text(lang, state).is_some_and(|text| !text.trim().is_empty()),
+                "{lang:?} says nothing for {state:?}"
+            );
+        }
+    }
+}

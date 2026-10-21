@@ -43,9 +43,9 @@ use std::sync::Arc;
 
 use koru_core::NodeId;
 use koru_core::node::Kind;
-use koru_diagram::Kind as DiagramKind;
+use koru_diagram::{Counts, DiagramScene, Kind as DiagramKind, NarrationItem, SceneBody};
 use koru_draw::diagram::PreparedDiagram;
-use koru_i18n::{Key, Lang};
+use koru_i18n::{Key, Lang, fill, number, t};
 
 /// The status a host answers with, re-exported so a view above this crate can
 /// name it without linking the engine's crate itself.
@@ -56,7 +56,7 @@ use crate::paragraph::Paragraph;
 use crate::view_state::ViewState;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// The language token that makes a code block a diagram. Exact: `Mermaid` or
 /// `mermaid-js` are ordinary code blocks.
@@ -184,6 +184,11 @@ pub struct DiagramRowState {
     /// `drawing` is the last good one, not the current text's: it wears the
     /// label that says so.
     pub last_good: bool,
+    /// The hash of the text this state describes — the entry's
+    /// [`shown_hash`](DiagramEntry::shown_hash) — so a reader of the row can
+    /// tell *which* text's drawing or reason this is without looking inside
+    /// either. What the accessibility projection keys a diagram's name on.
+    pub shown: u64,
 }
 
 impl std::fmt::Debug for DiagramRowState {
@@ -195,6 +200,7 @@ impl std::fmt::Debug for DiagramRowState {
             .field("reason", &self.reason)
             .field("drawing", &self.drawing.as_ref().map(|p| p.natural_size()))
             .field("last_good", &self.last_good)
+            .field("shown", &self.shown)
             .finish()
     }
 }
@@ -226,6 +232,7 @@ impl DiagramRowState {
             reason,
             drawing,
             last_good,
+            shown: entry.shown_hash,
         }
     }
 
@@ -398,6 +405,177 @@ pub fn reason_text(lang: Lang, status: &Status) -> Option<String> {
         Status::Empty => koru_i18n::t(lang, Key::DiagramEmptyHint).to_owned(),
     };
     Some(text)
+}
+
+/// What a screen reader hears on a diagram row, or `None` when the row is
+/// read as the code text it shows.
+///
+/// `None` while the text is open: the person is editing it, and the text is
+/// what they hear. Closed, the block is one of three things and says which:
+///
+/// - **drawn** — `accTitle` and `accDescr` first when the text declares them,
+///   then *Diagram, flowchart, 10 boxes, 12 arrows* or *Diagram, sequence, 4
+///   participants: Person, Koru app, Server, Session store; 12 messages*,
+///   then every arrow or message as prose in source order, each by the labels
+///   a person sees and never by id ([`scene_narration`]);
+/// - **drawing** — *Diagram, drawing*, the placeholder's name while the first
+///   layout of this text is in flight;
+/// - **not drawn** — *Diagram, not drawn: …* with the reason line the block
+///   itself shows ([`reason_text`]); an emptied block names its hint. The
+///   text is on the page under that name, so the name says why first.
+///
+/// Pure, and a walk over vectors the host has already prepared: a caller
+/// builds it once when it publishes the row, never per frame.
+pub fn narration_text(lang: Lang, state: &DiagramRowState) -> Option<String> {
+    if state.open {
+        return None;
+    }
+    if state.pending {
+        return Some(t(lang, Key::A11yDiagramPending).to_owned());
+    }
+    if let Some(status) = &state.reason {
+        let reason = reason_text(lang, status)?;
+        return Some(fill(t(lang, Key::A11yDiagramNotDrawn), &[&reason]));
+    }
+    if state.empty {
+        let hint = t(lang, Key::DiagramEmptyHint);
+        return Some(fill(t(lang, Key::A11yDiagramNotDrawn), &[hint]));
+    }
+    let prepared = state.drawing.as_ref()?;
+    Some(scene_narration(lang, prepared.scene()))
+}
+
+/// The narration of a scene that drew, in `lang`: the title and the
+/// description the text declares, when it does; the summary with its counts;
+/// then every arrow or message as prose, in source order, by the labels a
+/// person sees. The pieces are sentences joined with `. `; a piece that
+/// already ends a sentence — a description with its full stop, a box called
+/// *Valid order?* — is not given a second, and the last gets none.
+///
+/// The counts are digits in `lang`, and a count's noun is the One or the
+/// Many row for it. That is a composition, and it is right where a language
+/// agrees inside the fragment; a dual, or a case the phrase would govern, is
+/// approximated. The sentence joiner and the comma between participants are
+/// punctuation, the same in every language here.
+pub fn scene_narration(lang: Lang, scene: &DiagramScene) -> String {
+    let narration = koru_diagram::narrate(scene);
+    let mut sentences: Vec<String> = Vec::with_capacity(narration.items.len() + 3);
+    sentences.extend(narration.title);
+    sentences.extend(narration.description);
+    sentences.push(summary(lang, scene, &narration.counts));
+    sentences.extend(narration.items.iter().map(|item| item_text(lang, item)));
+    join_sentences(&sentences)
+}
+
+/// *Diagram, flowchart, 10 boxes, 12 arrows*, or *Diagram, sequence, 4
+/// participants: Person, Koru app, Server, Session store; 12 messages*.
+fn summary(lang: Lang, scene: &DiagramScene, counts: &Counts) -> String {
+    match counts {
+        Counts::Flowchart { nodes, edges, .. } => fill(
+            t(lang, Key::A11yDiagramFlowchart),
+            &[
+                &fragment(
+                    lang,
+                    Key::A11yDiagramBoxesOne,
+                    Key::A11yDiagramBoxesMany,
+                    *nodes,
+                ),
+                &fragment(
+                    lang,
+                    Key::A11yDiagramArrowsOne,
+                    Key::A11yDiagramArrowsMany,
+                    *edges,
+                ),
+            ],
+        ),
+        Counts::Sequence {
+            participants,
+            messages,
+            ..
+        } => {
+            // The participants by the label a person sees, in the order they
+            // stand — which the narration's items do not carry on their own.
+            let names = match &scene.body {
+                SceneBody::Sequence(sequence) => sequence
+                    .participants
+                    .iter()
+                    .map(|participant| spoken(&participant.label.text))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                SceneBody::Flowchart(_) => String::new(),
+            };
+            fill(
+                t(lang, Key::A11yDiagramSequence),
+                &[
+                    &fragment(
+                        lang,
+                        Key::A11yDiagramParticipantsOne,
+                        Key::A11yDiagramParticipantsMany,
+                        *participants,
+                    ),
+                    &names,
+                    &fragment(
+                        lang,
+                        Key::A11yDiagramMessagesOne,
+                        Key::A11yDiagramMessagesMany,
+                        *messages,
+                    ),
+                ],
+            )
+        }
+    }
+}
+
+/// A count and its noun: the One row for exactly one, the Many row for
+/// everything else, the number in `lang`'s digits.
+fn fragment(lang: Lang, one: Key, many: Key, count: usize) -> String {
+    let key = if count == 1 { one } else { many };
+    fill(t(lang, key), &[&number::decimal(lang, count as u64)])
+}
+
+/// One arrow or message as prose.
+fn item_text(lang: Lang, item: &NarrationItem) -> String {
+    match item {
+        NarrationItem::Arrow {
+            from,
+            label: Some(label),
+            to,
+        } => fill(t(lang, Key::A11yDiagramArrow), &[from, label, to]),
+        NarrationItem::Arrow {
+            from,
+            label: None,
+            to,
+        } => fill(t(lang, Key::A11yDiagramArrowUnlabelled), &[from, to]),
+        NarrationItem::Message { from, text, to } => {
+            fill(t(lang, Key::A11yDiagramMessage), &[from, text, to])
+        }
+    }
+}
+
+/// A label's text as one spoken line: its line breaks are spaces.
+fn spoken(text: &str) -> String {
+    text.split('\n').collect::<Vec<_>>().join(" ")
+}
+
+/// `sentences` joined with `. `, without doubling a full stop (or a question
+/// mark, or an exclamation) a sentence already ends in, and with none after
+/// the last.
+fn join_sentences(sentences: &[String]) -> String {
+    let mut out = String::new();
+    for (index, sentence) in sentences.iter().enumerate() {
+        out.push_str(sentence);
+        if index + 1 == sentences.len() {
+            break;
+        }
+        if !sentence
+            .trim_end()
+            .ends_with(['.', '!', '?', '。', '！', '？'])
+        {
+            out.push('.');
+        }
+        out.push(' ');
+    }
+    out
 }
 
 /// The byte offset where 1-based `line` of `text` starts — where *Edit text*

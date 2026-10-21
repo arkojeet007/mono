@@ -36,8 +36,18 @@
 //!     │   ├── CheckBox  the drawn box     koru:wN/vV/n:<node uuid>#check   (a checklist row)
 //!     │   ├── Link | Label  a pill        koru:wN/vV/n:<attr uuid>#pill
 //!     │   └── Label   the task lifecycle  koru:wN/vV/n:<node uuid>#state   (a task)
+//!     ├── Image     a diagram's picture      koru:wN/vV/n:<node uuid>#text   (a `mermaid` block, drawn or drawing)
 //!     └── …
 //! ```
+//!
+//! **The picture is the first block with no text and a name of its own.** A
+//! `mermaid` block showing its drawing — or the placeholder waiting for one —
+//! is published as `Role::Image` named with its narration, under the same
+//! locator its text would have, with Focus and ScrollIntoView and no text
+//! pattern; opening the text turns it back into the paragraph above. A block
+//! whose text is showing because it does not draw keeps its text and wears
+//! *Diagram, not drawn: …* as its name, so the reason is heard first. See
+//! [`picture`].
 //!
 //! **The box and the lifecycle are two controls because they are two facts.**
 //! `Paragraph::is_task` asks whether this row draws a checkbox, which a plain
@@ -93,7 +103,7 @@ use accesskit::{Action, ActionData, Role};
 use koru_core::NodeId as KoruNodeId;
 use koru_core::schema::WorkspaceDoc;
 use koru_editor::accessibility::{
-    DocumentAccessibility, Publish, RowText, RowUpdate, ViewGeometry, actions, events,
+    DocumentAccessibility, Publish, RowFacts, RowText, RowUpdate, ViewGeometry, actions, events,
 };
 use koru_i18n::{Key, t};
 use koru_workspace_host::accessibility::{
@@ -497,6 +507,13 @@ impl MainView {
             rev.u64(row.shaped_at());
             rev.bool(row.dirty);
             rev.f32(row.y).f32(row.height);
+            // What the row says about itself as a diagram — an answer that
+            // landed, a text that opened or closed — which moves no glyph and
+            // need not move the stamp or the height.
+            match RowFacts::of(row).diagram {
+                Some(fact) => rev.byte(1).bool(fact.picture).u64(fact.stamp),
+                None => rev.byte(0),
+            };
         }
         if let Some(row) = editor.body.rows.get(editor.body.focus) {
             rev.u64(row.selection.anchor().index() as u64);
@@ -771,6 +788,11 @@ fn body_viewport(
 }
 /// One paragraph, as a screen reader meets it.
 fn paragraph(cx: &Shell, row: &RowUpdate, read_only: bool) -> SemanticNode {
+    if let Some(narration) = row.diagram.as_deref()
+        && row.facts.diagram.is_some_and(|diagram| diagram.picture)
+    {
+        return picture(cx, row, narration);
+    }
     let mut node = SemanticNode::new(paragraph_occurrence(cx, row.id), Role::MultilineTextInput)
         // Focus, so an AT can move into a paragraph; SetTextSelection, so it
         // can select; ScrollIntoView, because a paragraph that is not laid out
@@ -783,6 +805,13 @@ fn paragraph(cx: &Shell, row: &RowUpdate, read_only: bool) -> SemanticNode {
         .with_position(row.index);
     if let Some(bounds) = row.bounds {
         node = node.with_bounds(bounds);
+    }
+    // **A diagram whose text is showing because it does not draw** wears the
+    // reason as its name — *Diagram, not drawn: Line 7: …* — so a reader
+    // hears why before the code text it can then fix. The text stays the
+    // paragraph's own, read and selected like any other row's.
+    if let Some(narration) = &row.diagram {
+        node = node.with_label(narration.clone());
     }
     let objects: Vec<SemanticNode> = row
         .objects
@@ -830,6 +859,38 @@ fn paragraph(cx: &Shell, row: &RowUpdate, read_only: bool) -> SemanticNode {
             read_only,
         }),
     }
+}
+
+/// **A diagram showing its picture**: the drawing, or the placeholder waiting
+/// for one.
+///
+/// The first block in a document with no text to read, so the first with a
+/// name of its own: the narration `koru_editor::diagram::narration_text`
+/// builds — the title and description the text declares, then *Diagram,
+/// flowchart, 10 boxes, 12 arrows*, then every arrow as prose; or *Diagram,
+/// drawing* while the layout is in flight. **User content inside it** — the
+/// labels, the title — is read as written, never translated or normalised;
+/// the words around it come from `koru-i18n`.
+///
+/// `Role::Image` — `UIA_ImageControlTypeId` on Windows, `NSAccessibilityImageRole`
+/// on macOS — carrying Focus, so a reader can land on it and Enter opens the
+/// text, and ScrollIntoView like every paragraph. No text pattern and no
+/// SetTextSelection: there is no text here to select, and an advertised action
+/// that performs nothing is worse than one that is absent. Never `live`: a
+/// drawing that lands, or changes under a peer's edit, is republished and not
+/// spoken — the policy every row in this document follows. **If a screen
+/// reader will not land on an image**, the one change is the role on the
+/// first line below: `Role::Group`, with the same name.
+fn picture(cx: &Shell, row: &RowUpdate, narration: &str) -> SemanticNode {
+    let mut node = SemanticNode::new(paragraph_occurrence(cx, row.id), Role::Image)
+        .with_label(narration)
+        .with_action(Action::Focus)
+        .with_action(Action::ScrollIntoView)
+        .with_position(row.index);
+    if let Some(bounds) = row.bounds {
+        node = node.with_bounds(bounds);
+    }
+    node
 }
 
 /// **The box, if this row draws one** — and only the box.

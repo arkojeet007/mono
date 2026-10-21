@@ -69,7 +69,9 @@
 //! accessibility bookkeeping; the document, its layout and its caret are read
 //! through `&Paragraph` and cannot be touched.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use accesskit::{Node, NodeId, Role, TextSelection, TreeId, TreeUpdate};
 use koru_core::AttrId;
@@ -77,6 +79,7 @@ use koru_core::NodeId as KoruNodeId;
 use koru_draw::geometry::Rect;
 use koru_draw::pill::PillKind;
 use koru_draw::theme::Brush;
+use koru_i18n::Lang;
 use parley::LayoutAccessibility;
 use parley::layout::PositionedLayoutItem;
 
@@ -84,6 +87,7 @@ use super::geometry;
 use super::text_positions::{
     self, RunSpan, byte_of, downstream, merge_to_graphemes, position_of, trim_strut,
 };
+use crate::diagram::{self, DiagramRowState};
 use crate::paragraph::Paragraph;
 use crate::rowlayout;
 
@@ -276,6 +280,9 @@ impl BodyUpdate {
 /// So this carries both, unmerged, and a publisher says both out loud. A
 /// projection that collapsed them into one boolean would be telling a screen
 /// reader something the model does not say.
+///
+/// A third fact rides beside them: what the row says about itself as a
+/// diagram, when it is one. See [`DiagramFact`].
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowFacts {
     /// `Some(ticked)` when this row draws a checkbox at all — the `done`
@@ -285,16 +292,67 @@ pub struct RowFacts {
     /// The canonical lifecycle, when this row is a task. `None` on every row
     /// that is not one — a ticked checklist item included.
     pub task: Option<crate::paragraph::TaskRow>,
+    /// What this row says about itself as a diagram: a `mermaid` block whose
+    /// text is closed. `None` on every other row, and on a diagram whose text
+    /// is open — that is the code row it is, and is read as one.
+    pub diagram: Option<DiagramFact>,
 }
 
 impl RowFacts {
-    /// Read straight off the row, from the two predicates that already answer
-    /// these questions. Nothing is derived a second time here.
+    /// Read straight off the row, from the predicates that already answer
+    /// these questions. Nothing is derived a second time here — and nothing
+    /// is *said* here either: a diagram's sentence is built only for a row a
+    /// publish carries ([`RowUpdate::diagram`]).
     pub fn of(row: &Paragraph) -> Self {
         Self {
             checkbox: row.is_task().then_some(row.done),
             task: row.task,
+            diagram: row
+                .diagram
+                .as_ref()
+                .and_then(|state| DiagramFact::of(state, koru_i18n::current())),
         }
+    }
+}
+
+/// **A diagram row's fact, without its sentence.**
+///
+/// A drawing has no text to read, so what a screen reader is told about a
+/// diagram is a *name* — the narration [`diagram::narration_text`] builds
+/// from the prepared scene. Building it is a walk over the scene's arrows:
+/// cheap once, and not something to do for every row on every publish; and
+/// comparing two of them is not something to do at all. So the fact a publish
+/// compares is this — *which* text the row's state describes and *which*
+/// state it is in, as one stamp. The sentence is a function of the stamp and
+/// is built when the stamp moves.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DiagramFact {
+    /// The row shows a picture in place of its text — the drawing, or the
+    /// placeholder waiting for one — and is published as an image with no
+    /// text. `false` for a block whose text is showing because it does not
+    /// draw: that is a code row wearing *Diagram, not drawn: …* as its name.
+    pub picture: bool,
+    /// Everything the narration is a function of: the text the state
+    /// describes, which of the three states it is in, and the language.
+    pub stamp: u64,
+}
+
+impl DiagramFact {
+    fn of(state: &DiagramRowState, lang: Lang) -> Option<Self> {
+        if state.open {
+            return None;
+        }
+        let mut hasher = DefaultHasher::new();
+        state.shown.hash(&mut hasher);
+        state.pending.hash(&mut hasher);
+        state.empty.hash(&mut hasher);
+        state.reason.is_some().hash(&mut hasher);
+        state.drawing.is_some().hash(&mut hasher);
+        lang.hash(&mut hasher);
+        Some(Self {
+            picture: state.shows_picture(),
+            stamp: hasher.finish(),
+        })
     }
 }
 
@@ -322,6 +380,12 @@ pub struct RowUpdate {
     /// screen is still readable, so its pills are still announceable, and like
     /// its runs they carry no rectangle until the view scrolls to them.
     pub objects: Vec<InlineObject>,
+    /// What a screen reader hears about this row as a diagram, already in the
+    /// current language, when [`facts`](Self::facts) says it is one: the
+    /// narration of the drawing, the placeholder's name, or the reason it is
+    /// not drawn. A picture row's whole name; a not-drawn block's name over
+    /// its text. Built here, once, for a row a publish carries.
+    pub diagram: Option<String>,
 }
 
 /// What a published paragraph says about its text.
@@ -455,6 +519,12 @@ struct Published {
     /// what a screen reader must say about it and need not change one glyph —
     /// so a row whose facts moved is republished even when its runs did not.
     facts: RowFacts,
+    /// Whether the client was given this row's runs. A diagram's picture
+    /// hides a shaped text layout, so the shaping stamp alone cannot say
+    /// whether the runs it stands for were ever sent — and a row that opens
+    /// its text after being published as a picture must publish them rather
+    /// than name them as retained.
+    textual: bool,
 }
 
 impl DocumentAccessibility {
@@ -541,6 +611,10 @@ impl DocumentAccessibility {
             .flat_map(|id| self.published_run_ids(*id))
             .collect();
         let order = (publish == Publish::Whole || self.order != live).then(|| live.clone());
+        // The language a diagram's name is built in: read once per publish,
+        // and folded into the fact a row is compared by, so a name is rebuilt
+        // when the language changes and not otherwise.
+        let lang = koru_i18n::current();
 
         let mut updates = Vec::new();
         for (index, row) in rows.iter().enumerate() {
@@ -559,6 +633,9 @@ impl DocumentAccessibility {
             let focused = focus == Some(index);
             let height = if origin.is_some() { row.height } else { 0.0 };
             let facts = RowFacts::of(row);
+            // Whether this row has text to publish at all: shaped, and not an
+            // image, a divider or a diagram showing its picture.
+            let textual = shaped != 0 && has_text_layout(row);
             let was = self.rows.get(&row.id).and_then(|entry| entry.published);
 
             // **The cheap way out, taken before anything is touched.** A row
@@ -572,6 +649,7 @@ impl DocumentAccessibility {
                 height,
                 selection: None,
                 facts,
+                textual,
             };
             if publish == Publish::Delta && !focused && was == Some(unchanged) {
                 self.counters.skipped += 1;
@@ -590,17 +668,23 @@ impl DocumentAccessibility {
                 height,
                 selection,
                 facts,
+                textual,
             };
             if publish == Publish::Delta && was == Some(want) {
                 self.counters.skipped += 1;
                 continue;
             }
+            // A client holds a row's runs only if it was given them: a row
+            // last published as a diagram's picture has none to retain,
+            // whatever its shaping stamp says.
             let republish_runs = publish == Publish::Whole
                 || match was {
                     None => true,
-                    Some(was) => was.shaped != want.shaped || was.origin != want.origin,
+                    Some(was) => {
+                        was.shaped != want.shaped || was.origin != want.origin || !was.textual
+                    }
                 };
-            let text = if shaped == 0 || !has_text_layout(row) {
+            let text = if !textual {
                 RowText::Absent
             } else if republish_runs {
                 let mut runs = entry
@@ -655,6 +739,12 @@ impl DocumentAccessibility {
                     .map(|bounds| geometry::shift(bounds, view.origin.0, view.origin.1)),
                 text,
                 objects,
+                // Built here, for a row this publish carries, and nowhere per
+                // frame: a drawn diagram's name is a walk over its arrows.
+                diagram: row
+                    .diagram
+                    .as_ref()
+                    .and_then(|state| diagram::narration_text(lang, state)),
             });
         }
 
@@ -678,6 +768,8 @@ impl DocumentAccessibility {
         // Images and dividers receive a geometry stamp but build_row never
         // shapes their text. A default or previous layout has unrelated byte
         // ranges: passing it with shaped_text can panic inside Parley on U+200B.
+        // A diagram showing its picture has a shaped text nobody is shown;
+        // its runs are dropped too, and rebuilt when the text opens.
         if !has_text_layout(row) {
             entry.spans.clear();
             entry.cache = None;
@@ -931,12 +1023,24 @@ fn inline_objects(row: &Paragraph, origin: (f32, f32)) -> Vec<InlineObject> {
     out
 }
 
-/// The editor's caret or selection, as positions into this row's published
-/// runs.
+/// Whether this row's layout is its text, shaped — rather than the geometry
+/// stamp an image, a divider or a diagram's picture carries.
+///
+/// A diagram showing its picture has its code text shaped underneath, but a
+/// person is not shown it and neither is a screen reader: the row is
+/// published as a picture named with its narration, with no runs, and the
+/// text comes back — with its runs — when the text opens.
 fn has_text_layout(row: &Paragraph) -> bool {
-    row.image.is_none() && row.kind != koru_core::node::Kind::Divider
+    row.image.is_none()
+        && row.kind != koru_core::node::Kind::Divider
+        && !row
+            .diagram
+            .as_ref()
+            .is_some_and(DiagramRowState::shows_picture)
 }
 
+/// The editor's caret or selection, as positions into this row's published
+/// runs.
 fn selection_of(row: &Paragraph, spans: &[RunSpan]) -> TextSelection {
     let anchor = row.selection.anchor();
     let focus = row.selection.focus();

@@ -11,12 +11,17 @@
 //! printed as well as asserted (`-- --nocapture`), because the assertion says
 //! "not O(document)" and a reader wants the actual figure.
 
+use std::sync::Arc;
+
 use koru_core::WorkspaceId;
 use koru_core::node::Node as CoreNode;
 use koru_core::schema::{Parent, WorkspaceDoc};
+use koru_draw::diagram::PreparedDiagram;
+use winit::keyboard::{ModifiersState, NamedKey};
 
 use super::*;
 use crate::accessibility::MAX_WORD_STARTS_INDEX;
+use crate::diagram::tests::{FLOWCHART_SHOWCASE, laid_out};
 use crate::input::action::Action;
 use crate::{Editing, Editor};
 
@@ -940,4 +945,184 @@ fn content_clip_matches_page_chrome_and_other_mode_columns() {
             )
         );
     }
+}
+
+// ================================================================ diagrams
+
+const DIAGRAM_TEXT: &str = "flowchart LR\n  A --> B\n  B --> C";
+
+/// A document of a paragraph, a `mermaid` block of `text` and a paragraph
+/// after it, opened in a real editor at a real viewport, with the host's
+/// `answer` for the block landed through the editor's own seam — or not
+/// landed, which leaves the block waiting.
+fn diagram_document(
+    text: &str,
+    answer: Option<Result<Arc<PreparedDiagram>, diagram::Status>>,
+) -> (WorkspaceDoc, Editor, KoruNodeId) {
+    let mut ws = WorkspaceDoc::create(WorkspaceId::new(), "diagram fixture")
+        .expect("an in-memory workspace");
+    let doc = ws
+        .insert(
+            Parent::Root,
+            CoreNode::document("Fixture").expect("a document"),
+        )
+        .expect("the document node");
+    ws.insert(Parent::Node(doc), CoreNode::paragraph("before").unwrap())
+        .unwrap();
+    let node = ws
+        .insert(Parent::Node(doc), CoreNode::code(text).unwrap())
+        .unwrap();
+    ws.set_language(node, Some(diagram::LANGUAGE)).unwrap();
+    ws.insert(Parent::Node(doc), CoreNode::paragraph("after").unwrap())
+        .unwrap();
+    ws.enable_undo();
+    let mut editor = Editor::rooted_at(&ws, doc, true);
+    editor.view.code_enabled = true;
+    editor.body.rebuild(&ws);
+    editor.set_viewport(VIEWPORT_W, VIEWPORT_H);
+    editor.view.active = true;
+    editor.reflow();
+    if let Some(answer) = answer {
+        assert!(
+            editor.diagram_result(node, diagram::text_hash(text), answer),
+            "the answer is for the text in flight"
+        );
+        editor.reflow();
+    }
+    (ws, editor, node)
+}
+
+fn diagram_row(update: &BodyUpdate, node: KoruNodeId) -> &RowUpdate {
+    update
+        .rows
+        .iter()
+        .find(|row| row.id == node)
+        .expect("the diagram row is in the update")
+}
+
+/// **The first block with no text and a name of its own.** A drawn diagram
+/// goes out with no runs and its narration as its fact; opening the text
+/// turns it back into the code row, whose runs must then be *published* —
+/// the client never had them, so naming them as retained would name children
+/// it does not hold; closing it again takes them away.
+#[test]
+fn a_drawn_diagram_is_a_picture_named_with_its_narration_until_its_text_opens() {
+    let (mut ws, mut editor, node) =
+        diagram_document(FLOWCHART_SHOWCASE, Some(Ok(laid_out(FLOWCHART_SHOWCASE))));
+    let mut doc = DocumentAccessibility::default();
+    let (update, _) = publish(&mut doc, &editor, Publish::Whole);
+    let row = diagram_row(&update, node);
+    assert!(
+        matches!(row.text, RowText::Absent),
+        "a picture has no runs: {:?}",
+        row.text
+    );
+    assert_eq!(row.facts.diagram.map(|fact| fact.picture), Some(true));
+    let name = row.diagram.as_deref().expect("a picture is named");
+    assert!(
+        name.starts_with("Checkout flow. How an order moves"),
+        "{name}"
+    );
+    assert!(
+        name.contains("Diagram, flowchart, 10 boxes, 12 arrows. Cart, arrow to Valid order? "),
+        "{name}"
+    );
+    assert!(doc.published_run_ids(node).is_empty());
+    assert_eq!(stubs(&update), 1, "only the picture is without runs");
+    assert_eq!(with_text(&update), update.rows.len() - 1);
+    assert_eq!(crate::accessibility::events::coherent(&update), Ok(()));
+
+    // An idle publish skips the picture like every other unchanged row.
+    let (idle, counters) = publish(&mut doc, &editor, Publish::Delta);
+    assert!(idle.rows.is_empty(), "{idle:?}");
+    assert_eq!(counters.shapings, 0);
+
+    // Enter opens the text.
+    assert!(editor.open_diagram_text(node));
+    editor.reflow();
+    let (update, counters) = publish(&mut doc, &editor, Publish::Delta);
+    let row = diagram_row(&update, node);
+    assert!(
+        row.diagram.is_none() && row.facts.diagram.is_none(),
+        "open text is read as the text it is"
+    );
+    assert!(
+        matches!(row.text, RowText::Runs { .. }),
+        "the client never had these runs: {:?}",
+        row.text
+    );
+    assert_eq!(counters.shapings, 1, "the code text is projected now, once");
+    assert!(!doc.published_run_ids(node).is_empty());
+    assert_eq!(crate::accessibility::events::coherent(&update), Ok(()));
+
+    // Esc closes it: the picture again, and the runs go with their parent.
+    assert!(editor.key(
+        &mut ws,
+        &winit::keyboard::Key::Named(NamedKey::Escape),
+        None,
+        ModifiersState::empty()
+    ));
+    editor.reflow();
+    let (update, _) = publish(&mut doc, &editor, Publish::Delta);
+    let row = diagram_row(&update, node);
+    assert!(matches!(row.text, RowText::Absent), "{:?}", row.text);
+    assert_eq!(row.diagram.as_deref(), Some(name));
+    assert!(doc.published_run_ids(node).is_empty());
+}
+
+/// A block waiting for its drawing is a picture named *Diagram, drawing*;
+/// the host's answer renames it, moves its fact, and shapes no text.
+#[test]
+fn a_host_answer_renames_the_picture_and_moves_its_fact() {
+    let (_ws, mut editor, node) = diagram_document(DIAGRAM_TEXT, None);
+    let mut doc = DocumentAccessibility::default();
+    let (update, _) = publish(&mut doc, &editor, Publish::Whole);
+    let row = diagram_row(&update, node);
+    assert_eq!(row.diagram.as_deref(), Some("Diagram, drawing"));
+    assert!(matches!(row.text, RowText::Absent));
+    let before = row
+        .facts
+        .diagram
+        .expect("a waiting block is a diagram fact");
+    assert!(before.picture);
+
+    assert!(editor.diagram_result(
+        node,
+        diagram::text_hash(DIAGRAM_TEXT),
+        Ok(laid_out(DIAGRAM_TEXT))
+    ));
+    editor.reflow();
+    let (update, counters) = publish(&mut doc, &editor, Publish::Delta);
+    let row = diagram_row(&update, node);
+    assert_eq!(
+        row.diagram.as_deref(),
+        Some("Diagram, flowchart, 3 boxes, 2 arrows. A, arrow to B. B, arrow to C")
+    );
+    assert!(matches!(row.text, RowText::Absent));
+    let after = row.facts.diagram.expect("a drawn block is a diagram fact");
+    assert!(after.picture);
+    assert_ne!(after.stamp, before.stamp, "the fact moved with the answer");
+    assert_eq!(counters.shapings, 0, "a drawing landing shapes no text");
+}
+
+/// A block whose text shows because it does not draw keeps its text — a
+/// person is fixing it — and wears the reason as its name.
+#[test]
+fn a_block_that_does_not_draw_keeps_its_text_under_the_reason() {
+    let status = diagram::Status::NotParsed {
+        line: 2,
+        message: "unexpected token".into(),
+        code: "merman.parse.diagram_parse".into(),
+    };
+    let (_ws, editor, node) = diagram_document(DIAGRAM_TEXT, Some(Err(status)));
+    let mut doc = DocumentAccessibility::default();
+    let (update, _) = publish(&mut doc, &editor, Publish::Whole);
+    let row = diagram_row(&update, node);
+    assert!(matches!(row.text, RowText::Runs { .. }), "{:?}", row.text);
+    assert_eq!(
+        row.diagram.as_deref(),
+        Some("Diagram, not drawn: Line 2: this line could not be read")
+    );
+    assert_eq!(row.facts.diagram.map(|fact| fact.picture), Some(false));
+    assert!(!doc.published_run_ids(node).is_empty());
 }
