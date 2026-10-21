@@ -388,31 +388,39 @@ fn every_in_flight_stream_reaches_one_terminal_outcome_when_the_host_dies() {
     let root = tempfile::tempdir().unwrap();
     let (gateway, client) = start(root.path());
     let chats = [create_chat(&client), create_chat(&client)];
+    // Both turns are sent before either is waited on. The deterministic
+    // provider's whole answer is 28 characters at 20 ms, so a stream is
+    // in flight for about half a second; sending the second turn only after
+    // the first one's text arrived spent that half second on a loaded CI
+    // runner, and the first attempt was Complete before the kill.
+    let mut streams = chats
+        .iter()
+        .map(|&chat_id| {
+            client
+                .ai()
+                .send_turn(&SendTurnRequest {
+                    operation_id: Uuid::new_v4(),
+                    chat_id,
+                    surface: AiSurface::Standalone,
+                    markdown: "Two streams, one kill".into(),
+                    explicit_refs: Vec::new(),
+                    web_search: false,
+                    reasoning_override: None,
+                    system_prompt_override: None,
+                    replace_pinned_documents: false,
+                })
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
     let mut accepted = Vec::new();
-    let mut streams = Vec::new();
-    for chat_id in chats {
-        let mut stream = client
-            .ai()
-            .send_turn(&SendTurnRequest {
-                operation_id: Uuid::new_v4(),
-                chat_id,
-                surface: AiSurface::Standalone,
-                markdown: "Two streams, one kill".into(),
-                explicit_refs: Vec::new(),
-                web_search: false,
-                reasoning_override: None,
-                system_prompt_override: None,
-                replace_pinned_documents: false,
-            })
-            .unwrap();
+    for (chat_id, stream) in chats.iter().zip(&mut streams) {
         assert!(
             stream
                 .events
                 .any(|event| matches!(event.unwrap().event, PublicAiEvent::TextDelta { .. })),
             "a stream must be live before the host is killed"
         );
-        accepted.push((chat_id, stream.accepted.clone()));
-        streams.push(stream);
+        accepted.push((*chat_id, stream.accepted.clone()));
     }
 
     gateway.terminate();

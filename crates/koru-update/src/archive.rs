@@ -281,10 +281,15 @@ pub fn extract_zip(
     let mut expanded = 0u64;
     for index in 0..zip.len() {
         let entry = zip.by_index(index).map_err(|e| e.to_string())?;
-        let enclosed = entry
-            .enclosed_name()
-            .ok_or_else(|| format!("unsafe archive path: {}", entry.name()))?
-            .to_path_buf();
+        // The raw bytes, because a name that does not decode is one of the
+        // ways `enclosed_name` refuses an entry, and the message still has to
+        // say which entry it was.
+        let enclosed = entry.enclosed_name().ok_or_else(|| {
+            format!(
+                "unsafe archive path: {}",
+                String::from_utf8_lossy(entry.name_raw())
+            )
+        })?;
         strict_relative_path(&enclosed.to_string_lossy())?;
         if !names.insert(enclosed) {
             return Err("archive contains duplicate paths".into());

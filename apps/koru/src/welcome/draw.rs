@@ -452,6 +452,10 @@ impl WelcomeView {
             );
             drawn.push((target, *rect));
         }
+        if let Some((text, rect)) = &row.code {
+            self.draw_code(canvas, root, text, *rect, ui, Target::CopyMcp);
+            drawn.push((Target::CopyMcp, *rect));
+        }
         if !row.hints.is_empty() {
             let first = row.hints[0].y;
             let last = row.hints[row.hints.len() - 1].y + layout::HINT_LINE_H;
@@ -569,6 +573,46 @@ impl WelcomeView {
         koru_ui::KeyChip::draw(canvas, root, &mut self.engine, rect, text);
     }
 
+    /// A command to copy: a key chip that is pressed like a link, outlined
+    /// while hovered and ringed while focused.
+    fn draw_code(
+        &mut self,
+        canvas: &mut Scene,
+        root: Affine,
+        text: &str,
+        rect: Rect,
+        ui: Interaction,
+        target: Target,
+    ) {
+        let p = theme::p();
+        let _code = inspect::scope(
+            "Welcome command",
+            "part",
+            root,
+            scene::rect(rect.x, rect.y, rect.w, rect.h),
+            |r| r.property("copies", "welcome::mcp_command", "the whole command"),
+        );
+        self.draw_key_chip(canvas, root, text, rect);
+        if ui.hot(target) {
+            scene::stroke(
+                canvas,
+                root,
+                p.link.fg,
+                theme::BORDER_W,
+                &scene::rrect(rect.x, rect.y, rect.w, rect.h, 5.0),
+            );
+        }
+        if ui.focused(target) {
+            scene::stroke(
+                canvas,
+                root,
+                p.focus_ring,
+                theme::BORDER_W * 2.0,
+                &scene::rrect(rect.x - 2.0, rect.y - 2.0, rect.w + 4.0, rect.h + 4.0, 6.0),
+            );
+        }
+    }
+
     /// Link text, underlined while hovered and ringed while focused.
     fn draw_link(
         &mut self,
@@ -585,18 +629,7 @@ impl WelcomeView {
             "part",
             root,
             scene::rect(rect.x, rect.y, rect.w, rect.h),
-            |r| {
-                r.property("text", text, "welcome copy");
-                r.property(
-                    "action",
-                    if target == Target::Chat {
-                        "none yet"
-                    } else {
-                        "yes"
-                    },
-                    "Target",
-                );
-            },
+            |r| r.property("text", text, "welcome copy"),
         );
         draw_line(
             canvas,
@@ -609,7 +642,7 @@ impl WelcomeView {
             "theme::role::meta()",
             p.link.fg,
         );
-        if ui.hot(target) && target != Target::Chat {
+        if ui.hot(target) {
             scene::fill(
                 canvas,
                 root,

@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use super::*;
 use koru_projection::model::ListedDocument;
 use koru_projection::{DocumentProjection, ProjectedNode};
@@ -113,23 +111,16 @@ fn snapshot_waits_for_a_new_generation_even_after_an_earlier_sweep() {
         "11111111-1111-4111-8111-111111111111",
         100,
     );
-    let sweeps = Sweeps::default();
+    let sweeps = Sweeps::answering_for_test();
     sweeps.record_for_test(workspace);
     let port = port_with(&stored, sweeps.clone());
-    let completed = Arc::new(AtomicBool::new(false));
-    let signal = completed.clone();
-    let worker = std::thread::spawn(move || {
-        while !sweeps.take_request_and_record_for_test(workspace) {
-            std::thread::yield_now();
-        }
-        signal.store(true, Ordering::SeqCst);
-    });
 
     let snapshot = port
         .snapshot(&[visible_input(stored)], &ReminderSettings::default())
         .unwrap();
-    worker.join().unwrap();
-    assert!(completed.load(Ordering::SeqCst));
+    // The earlier sweep was the first ticket; the snapshot asked for, and
+    // was answered by, a second one.
+    assert_eq!(sweeps.finished(workspace), 2);
     assert!(snapshot.updating_workspaces.is_empty());
 }
 
@@ -171,18 +162,11 @@ fn a_missing_node_in_a_current_document_is_authoritative_not_cold() {
         "55555555-5555-4555-8555-555555555555",
         100,
     );
-    let sweeps = Sweeps::default();
-    let port = port_with(&present, sweeps.clone());
-    let worker = std::thread::spawn(move || {
-        while !sweeps.take_request_and_record_for_test(workspace) {
-            std::thread::yield_now();
-        }
-    });
+    let port = port_with(&present, Sweeps::answering_for_test());
 
     let snapshot = port
         .snapshot(&[visible_input(missing)], &ReminderSettings::default())
         .unwrap();
-    worker.join().unwrap();
     assert!(snapshot.updating_workspaces.is_empty());
     assert!(snapshot.reminders[0].target.projected);
     assert_eq!(snapshot.reminders[0].target.state, TargetState::Missing);
@@ -247,15 +231,8 @@ fn missed_and_upcoming_are_disjoint_while_active_is_the_deliverable_superset() {
         "33333333-3333-4333-8333-333333333333",
         101,
     );
-    let sweeps = Sweeps::default();
-    let port = port_with(&past, sweeps.clone());
+    let port = port_with(&past, Sweeps::answering_for_test());
     let runner = |view| {
-        let sweeps = sweeps.clone();
-        let thread = std::thread::spawn(move || {
-            while !sweeps.take_request_and_record_for_test(workspace) {
-                std::thread::yield_now();
-            }
-        });
         let result = port
             .query(
                 &[visible_input(past.clone()), visible_input(future.clone())],
@@ -267,7 +244,6 @@ fn missed_and_upcoming_are_disjoint_while_active_is_the_deliverable_superset() {
                 },
             )
             .unwrap();
-        thread.join().unwrap();
         result.reminders
     };
     assert_eq!(runner(ReminderView::Missed).len(), 1);
@@ -297,22 +273,11 @@ fn cleared_handled_fact_is_terminal_in_reconciliation_but_absent_from_api_histor
         stored.clone(),
         std::collections::BTreeSet::from([occurrence]),
     );
-    let sweeps = Sweeps::default();
-    let port = port_with(&stored, sweeps.clone());
-    let run_sweep = || {
-        let sweeps = sweeps.clone();
-        std::thread::spawn(move || {
-            while !sweeps.take_request_and_record_for_test(workspace) {
-                std::thread::yield_now();
-            }
-        })
-    };
+    let port = port_with(&stored, Sweeps::answering_for_test());
 
-    let thread = run_sweep();
     let snapshot = port
         .snapshot(std::slice::from_ref(&input), &ReminderSettings::default())
         .unwrap();
-    thread.join().unwrap();
     let row = &snapshot.reminders[0];
     assert!(row.stored.actions.is_empty());
     assert!(row.reduced.handled_history.is_empty());
@@ -325,7 +290,6 @@ fn cleared_handled_fact_is_terminal_in_reconciliation_but_absent_from_api_histor
     assert_eq!(wire["reduced"]["effective"]["state"], "handled");
 
     for view in [ReminderView::Active, ReminderView::HandledHistory] {
-        let thread = run_sweep();
         let result = port
             .query(
                 std::slice::from_ref(&input),
@@ -337,7 +301,6 @@ fn cleared_handled_fact_is_terminal_in_reconciliation_but_absent_from_api_histor
                 },
             )
             .unwrap();
-        thread.join().unwrap();
         assert!(result.reminders.is_empty(), "{view:?}");
     }
 }
@@ -359,8 +322,13 @@ fn a_moved_document_does_not_leave_healthy_reminders_waiting_for_projection() {
                 "88888888-8888-4888-8888-888888888888",
                 100,
             );
-            let sweeps = Sweeps::default();
-            let port = port_with(&healthy, sweeps.clone());
+            // `completed`: the sweep the snapshot asks for has finished.
+            let sweeps = if completed {
+                Sweeps::answering_for_test()
+            } else {
+                Sweeps::default()
+            };
+            let port = port_with(&healthy, sweeps);
             // The document still exists, but is now listed in a different
             // workspace. Its old EntityRef must not borrow that location's
             // projection or keep healthy siblings permanently updating.
@@ -397,13 +365,6 @@ fn a_moved_document_does_not_leave_healthy_reminders_waiting_for_projection() {
                     )
                     .unwrap();
             }
-            let worker = completed.then(|| {
-                std::thread::spawn(move || {
-                    while !sweeps.take_request_and_record_for_test(workspace) {
-                        std::thread::yield_now();
-                    }
-                })
-            });
             let mut inputs = vec![visible_input(healthy.clone()), visible_input(old.clone())];
             if missing_first {
                 inputs.reverse();
@@ -411,9 +372,6 @@ fn a_moved_document_does_not_leave_healthy_reminders_waiting_for_projection() {
             let snapshot = port
                 .snapshot(&inputs, &ReminderSettings::default())
                 .unwrap();
-            if let Some(worker) = worker {
-                worker.join().unwrap();
-            }
             if completed {
                 assert!(
                     snapshot.updating_workspaces.is_empty(),
@@ -461,7 +419,6 @@ fn a_listed_document_without_projection_stays_uncertain_after_a_sweep() {
         "99999999-9999-4999-8999-999999999999",
         100,
     );
-    let sweeps = Sweeps::default();
     let mut projections = Projections::in_memory().unwrap();
     projections
         .set_listing(
@@ -482,17 +439,11 @@ fn a_listed_document_without_projection_stays_uncertain_after_a_sweep() {
         .unwrap();
     let port = ReadPort {
         projections: Mutex::new(projections),
-        sweeps: sweeps.clone(),
+        sweeps: Sweeps::answering_for_test(),
     };
-    let worker = std::thread::spawn(move || {
-        while !sweeps.take_request_and_record_for_test(workspace) {
-            std::thread::yield_now();
-        }
-    });
     let snapshot = port
         .snapshot(&[visible_input(stored)], &ReminderSettings::default())
         .unwrap();
-    worker.join().unwrap();
     assert_eq!(snapshot.updating_workspaces, vec![workspace]);
     assert!(
         !snapshot.reminders[0].target.projected,

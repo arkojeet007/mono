@@ -6,7 +6,7 @@
 //! behind `PUT /v1/events/telemetry/consent` (the opt-in contract of
 //! 2026-10-11, ADR-176-consenton's amendment).
 //! Nothing here stores it. This module is the shell's *reading* of that
-//! record, so the Settings toggle and the main window's question can be drawn
+//! record, so the Settings toggle can be drawn
 //! without anyone touching a socket on the event loop:
 //!
 //! - **One worker thread does every read and every write.** A press calls
@@ -20,14 +20,16 @@
 //!   constructor would be state this global already is. [`install`] is
 //!   called once per process when the Store has answered; before it, and in
 //!   any process that never calls it (every test), the reading is
-//!   [`Answer::Unknown`] and nothing asks or shows a control.
+//!   [`Answer::Unknown`] and no control is shown.
+//! - **Nothing asks.** A device with no answer shares nothing; the Settings
+//!   toggle is where somebody opts in (maintainers, 2026-10-19).
 //! - **A wake, not a poll.** The worker sends `Wake::Settings` after every
 //!   answer; the wake carries nothing, and each surface re-reads [`current`]
 //!   on its next maintenance pass.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Sender};
 
 use winit::event_loop::EventLoopProxy;
@@ -38,15 +40,15 @@ use crate::app::Wake;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Answer {
-    /// Not read yet, or never will be in this process. Nothing asks and no
-    /// control is shown — a question asked before the record is read could
-    /// ask somebody who already answered.
+    /// Not read yet, or never will be in this process. No control is shown:
+    /// one drawn before the record is read could contradict it.
     Unknown = 0,
     /// The events worker is not there to ask (`KORU_EVENTS_DISABLED`, or no
-    /// gateway). Nothing is exported either way; nothing asks.
+    /// gateway). Nothing is exported either way.
     Unavailable = 1,
     /// No answer under the opt-in contract: a fresh install, or an upgrade
-    /// from the old default-granted state. **This is what asks.**
+    /// from the old default-granted state. Shares nothing; the toggle shows
+    /// it off.
     Unanswered = 2,
     Granted = 3,
     Refused = 4,
@@ -94,10 +96,6 @@ enum Job {
 
 static ANSWER: AtomicU8 = AtomicU8::new(Answer::Unknown as u8);
 static WORKER: OnceLock<Sender<Job>> = OnceLock::new();
-/// Whether this process has already put the question up. Once per run: a
-/// person who closes the window is not asked again until the next start, and
-/// the next start reads the record afresh.
-static ASKED: AtomicBool = AtomicBool::new(false);
 
 fn store(answer: Answer) {
     ANSWER.store(answer as u8, Ordering::Release);
@@ -188,15 +186,6 @@ pub fn refresh() {
     if let Some(worker) = WORKER.get() {
         let _ = worker.send(Job::Read);
     }
-}
-
-/// **Whether to put the question up now**, and the claim to do it.
-///
-/// `true` once per process, and only while the record says nobody has
-/// answered. The caller shows the question and answers it through [`set`],
-/// either way: closing it is an answer of no, so nobody is asked twice.
-pub fn claim_question() -> bool {
-    current() == Answer::Unanswered && !ASKED.swap(true, Ordering::AcqRel)
 }
 
 #[cfg(test)]

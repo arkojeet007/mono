@@ -24,9 +24,9 @@ pub enum RowId {
     /// Drawn, with nothing behind it yet.
     Watch,
     Ai,
-    /// Drawn, with nothing behind it yet.
+    /// *Copy* puts the MCP command on the clipboard.
     Mcp,
-    /// Drawn, with nothing behind it yet.
+    /// Opens the `+` menu's list of agents; a pick starts its tab.
     TerminalAgent,
     /// Drawn, with nothing behind it yet.
     OwnApps,
@@ -78,21 +78,22 @@ impl RowId {
     /// so the page reads as the design does, but has no tick circle, is never
     /// counted and is never a target.
     pub const fn actionable(self) -> bool {
-        !matches!(
-            self,
-            Self::TaskList | Self::Watch | Self::Mcp | Self::TerminalAgent | Self::OwnApps
-        )
+        !matches!(self, Self::TaskList | Self::Watch | Self::OwnApps)
     }
 
     /// Whether this build shows the row (`koru_features`,
     /// guide/contributing/FEATURE-FLAGS.md): the task list with tasks, the
-    /// reminder with reminders, Koru AI with Koru AI. The inert rows stay
-    /// drawn as they are.
+    /// reminder with reminders, Koru AI with Koru AI, the agent row with
+    /// agents. *Phone*, *Watch* and
+    /// *Write your own apps* are hidden for now, whatever the build: there is
+    /// no phone or watch app to pair yet, and nothing to point at for apps.
     pub fn shown_in_product(self) -> bool {
         match self {
             Self::TaskList => koru_features::tasks(),
             Self::Reminder => koru_features::reminders(),
             Self::Ai => koru_features::ai(),
+            Self::TerminalAgent => koru_features::agents(),
+            Self::Phone | Self::Watch | Self::OwnApps => false,
             _ => true,
         }
     }

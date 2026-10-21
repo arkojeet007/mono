@@ -327,7 +327,11 @@ mod tests {
             .read_to_string(&mut markdown)
             .unwrap();
         assert!(markdown.contains("](assets/"), "{markdown}");
-        assert!(archive.file_names().any(|name| name.starts_with("assets/")));
+        assert!(
+            archive
+                .file_names()
+                .any(|name| name.is_ok_and(|name| name.starts_with("assets/")))
+        );
     }
 
     #[test]

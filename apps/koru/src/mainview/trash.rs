@@ -72,11 +72,6 @@ pub(super) enum ConfirmSubject {
     /// would be a second thing that could be out of date by the time somebody
     /// answers.
     VoiceConsent,
-    /// **The telemetry question** (the opt-in contract of 2026-10-11). Like
-    /// the voice step it is answered either way: *no*, and closing it, are
-    /// recorded as no, so a person who declined is not asked again; Settings
-    /// is where the answer changes.
-    TelemetryConsent,
     ClearPersonalDictionary,
     /// A project in the Agents tree. Not a document at all: a yes sends the
     /// typed delete verb to the session host, which is the project registry's
@@ -705,10 +700,6 @@ impl MainView {
             self.ask_pane(koru_workspace_host::PaneRequest::VoiceConsent(confirmed));
             return true;
         }
-        if subject == ConfirmSubject::TelemetryConsent {
-            koru_workspace_host::telemetry_consent::set(confirmed);
-            return true;
-        }
         if !confirmed {
             // Cancelling clears the request as well as the dialog — a pending
             // deletion that survived a Cancel would go off on the next drain.
@@ -794,7 +785,7 @@ impl MainView {
             }
             // Answered above, before the cancel path — it is the one subject
             // whose *no* is as much of an answer as its *yes*.
-            ConfirmSubject::VoiceConsent | ConfirmSubject::TelemetryConsent => {}
+            ConfirmSubject::VoiceConsent => {}
             ConfirmSubject::ClearPersonalDictionary => {
                 koru_workspace_host::spelling::edit(
                     koru_workspace_host::spelling::SpellEdit::ClearPersonal,

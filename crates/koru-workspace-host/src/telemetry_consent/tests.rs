@@ -44,7 +44,7 @@ fn the_reading_follows_the_record() {
 }
 
 /// An older worker's status has no `telemetry_consent_answered`; the default
-/// reads as unanswered, so a newer shell asks rather than assumes.
+/// reads as unanswered, so a newer shell shares nothing rather than assumes.
 #[test]
 fn an_older_workers_status_reads_as_unanswered() {
     let json = serde_json::json!({
@@ -66,20 +66,11 @@ fn the_toggle_shows_only_what_a_record_can_back() {
     assert_eq!(Answer::Unavailable.toggle(), None);
 }
 
-/// One test owns the process global, so the order of its steps is the order
-/// the shell meets them in.
+/// One test owns the process global.
 #[test]
-fn the_question_is_claimed_once_and_only_while_unanswered() {
+fn without_a_worker_a_press_records_nothing() {
     assert_eq!(current(), Answer::Unknown, "nothing is read in a test");
-    assert!(!claim_question(), "an unread record is never asked about");
-
-    store(Answer::Granted);
-    assert!(!claim_question(), "an answered device is not asked");
-
     store(Answer::Unanswered);
-    assert!(claim_question(), "an unanswered device is asked");
-    assert!(!claim_question(), "once per run");
-
     // Without a worker a press changes nothing, so a test can never claim
     // to have recorded anything.
     set(true);

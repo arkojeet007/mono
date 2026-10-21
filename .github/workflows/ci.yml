@@ -246,7 +246,13 @@ jobs:
         if: steps.fonts.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./scripts/setup/fetch-fonts.ps1
+      # The runner has no GPU. Every Agent a test starts would compile vello's
+      # pipelines on the software rasterizer at startup — over ten seconds of
+      # every core, five Agents at a time — and the Codex fixture's handshake
+      # times out under it. No test draws, so nothing is warmed (reference/ENV.md).
       - name: cargo test --workspace
+        env:
+          KORU_NO_GPU_WARMUP: "1"
         run: cargo test --workspace --locked
       - name: Windows setup and repository script regressions
         if: matrix.toolchain == 'pinned'

@@ -248,10 +248,12 @@ fn materialize_archive(
     let mut expanded = 0u64;
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(failed)?;
-        let path = entry
-            .enclosed_name()
-            .ok_or_else(|| ImportError::new(format!("unsafe archive path: {}", entry.name())))?
-            .to_path_buf();
+        let path = entry.enclosed_name().ok_or_else(|| {
+            ImportError::new(format!(
+                "unsafe archive path: {}",
+                String::from_utf8_lossy(entry.name_raw())
+            ))
+        })?;
         if !unique.insert(path.clone()) {
             return Err(ImportError::new("the TextPack contains duplicate paths"));
         }

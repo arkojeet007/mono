@@ -97,10 +97,15 @@ fn argv_cwd_and_environment_are_delivered_without_a_shell_join() {
     let output = output.join().expect("reader thread");
     assert!(exit.success, "{exit:?}: {output:?}");
     assert!(output.contains(&format!("ARG:{marker}")), "{output:?}");
-    assert!(
-        output
-            .to_lowercase()
-            .contains(&format!("cwd:{}", root.path().display()).to_lowercase()),
+    // The same directory, not the same spelling: a CI runner's TEMP is an 8.3
+    // short path (C:\Users\RUNNER~1\...) and PowerShell reports the long one.
+    let reported = output
+        .lines()
+        .find_map(|line| line.split_once("CWD:").map(|(_, path)| path.trim()))
+        .unwrap_or_else(|| panic!("no CWD line: {output:?}"));
+    assert_eq!(
+        std::fs::canonicalize(reported).ok(),
+        Some(std::fs::canonicalize(root.path()).expect("the root exists")),
         "{output:?}"
     );
 }

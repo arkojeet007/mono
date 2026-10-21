@@ -640,8 +640,8 @@ pub const VARS: &[EnvVar] = &[
     ),
     switch_var(
         name::KORU_NO_GPU_WARMUP,
-        "A/B measurement switch: puts GPU adapter, device and renderer creation (the shader compile) back on the main thread. Nothing in the product reads it.",
-        "koru.exe",
+        "A/B measurement switch: puts GPU adapter, device and renderer creation (the shader compile) back on the main thread, at the first window. Nothing in the product reads it; CI sets it for the tests, because a runner without a GPU compiles on the software rasterizer.",
+        "koru.exe, koru-agent",
     ),
     switch_var(
         name::KORU_IROH_ISOLATED,

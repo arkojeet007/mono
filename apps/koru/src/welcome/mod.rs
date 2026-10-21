@@ -24,6 +24,7 @@
 //!   never be pressable somewhere other than where it is painted.
 //! - [`draw`] — painting, every element inside a named inspector scope.
 //! - [`hints`] — the *Learn your way around* lines, from `koru_keys`.
+//! - [`mcp`] — the command an MCP host runs to reach this installation.
 //! - [`build`] — the build stamp and channel copy the update surface uses.
 //!
 //! The view never performs an effect. It raises [`WelcomeWant`]s and newly
@@ -49,9 +50,11 @@ mod build;
 mod draw;
 mod hints;
 mod layout;
+mod mcp;
 mod rows;
 
 pub(crate) use build::{DOWNLOAD_URL, build_stamp, channel_label, channel_note};
+pub(crate) use mcp::command as mcp_command;
 pub(crate) use rows::RowId;
 use rows::Section;
 
@@ -97,10 +100,8 @@ const REMINDER_HINT: &str = "Nudge yourself about a task or a document, on your 
 const FEEDBACK_TITLE: &str = "Let us know how it went";
 const FEEDBACK_BEFORE: &str = "We love to hear from you — ";
 const FEEDBACK_FORM: &str = "feedback form";
-const FEEDBACK_COMMA: &str = ", ";
-const FEEDBACK_EMAIL: &str = "email";
 const FEEDBACK_OR: &str = " or ";
-const FEEDBACK_CHAT: &str = "chat";
+const FEEDBACK_EMAIL: &str = "email";
 const FEEDBACK_AFTER: &str = ".";
 
 const PHONE_TITLE: &str = "Phone";
@@ -115,6 +116,7 @@ const AI_TITLE: &str = "Set up your AI";
 const AI_HINT: &str = "Pick a model and connect a key — Koru works fine without it.";
 const MCP_TITLE: &str = "Manage documents over MCP";
 const MCP_HINT: &str = "Let outside tools read and write your workspace through the MCP service.";
+const MCP_COPY: &str = "Copy";
 const AGENT_TITLE: &str = "Run an agent in a terminal";
 const AGENT_HINT: &str = "Point a coding agent at your workspace from the command line.";
 const AGENT_COMMAND: &str = "koru agent";
@@ -162,12 +164,17 @@ pub enum WelcomeWant {
     Feedback,
     /// *email* — the support mailto.
     Email,
+    /// *Copy* — the MCP command, [`mcp_command`], on the clipboard.
+    CopyMcpCommand,
     /// *Phone*, *Another computer*, the pairing square — Link another device.
     LinkDevice,
     /// *Customize…* — the Settings tab.
     Settings,
     /// *Set up your AI* — the Providers and models tab Settings → AI opens.
     AiSetup,
+    /// *Run an agent in a terminal* — the `+` menu's list of agents, at the
+    /// pointer.
+    Agents,
 }
 
 /// Who the page greets and whose page it is.
@@ -193,8 +200,8 @@ pub(crate) enum Target {
     ChooseFiles,
     FeedbackForm,
     Email,
-    /// Drawn as a link and consumed, but inert until the chat webview lands.
-    Chat,
+    /// The MCP row's *Copy* button and the command beside it.
+    CopyMcp,
     /// The *Show* / *Hide* link of a section whose counted rows are all done.
     Toggle(Section),
     /// The pairing square beside the device rows.
@@ -202,12 +209,6 @@ pub(crate) enum Target {
 }
 
 impl Target {
-    /// Inert targets take the press (so it does not fall through to the row
-    /// beneath) but are never focused.
-    fn focusable(self) -> bool {
-        self != Self::Chat
-    }
-
     /// A row-wide target loses to anything drawn on top of it.
     fn is_row(self) -> bool {
         matches!(self, Self::Row(_))
@@ -239,6 +240,9 @@ pub struct WelcomeView {
     /// Whether a pinned tab shows its title: a window preference the tab strip
     /// reads from any open Welcome tab.
     pinned_show_title: bool,
+    /// What the MCP row shows, read once: the executable's path does not move
+    /// while it runs.
+    mcp_command: String,
 }
 
 impl Default for WelcomeView {
@@ -264,6 +268,7 @@ impl WelcomeView {
             laid: None,
             drawn: Vec::new(),
             pinned_show_title: false,
+            mcp_command: mcp::command(),
         }
     }
 
@@ -368,7 +373,10 @@ impl WelcomeView {
                 self.wants.push(WelcomeWant::Email);
                 self.tick(RowId::Feedback);
             }
-            Target::Chat => {}
+            Target::CopyMcp => {
+                self.wants.push(WelcomeWant::CopyMcpCommand);
+                self.tick(RowId::Mcp);
+            }
             Target::PairQr => self.wants.push(WelcomeWant::LinkDevice),
             Target::Toggle(section) => {
                 if !self.shown.remove(&section) {
@@ -400,14 +408,18 @@ impl WelcomeView {
                     self.wants.push(WelcomeWant::AiSetup);
                     self.tick(row);
                 }
-                // Drawn rows with nothing behind them yet; never a target.
+                RowId::TerminalAgent => {
+                    self.wants.push(WelcomeWant::Agents);
+                    self.tick(row);
+                }
+                // Rows that act only through their links, chips and buttons,
+                // and drawn rows with nothing behind them yet; never a target.
                 RowId::Documents
                 | RowId::Files
                 | RowId::TaskList
                 | RowId::Feedback
                 | RowId::Watch
                 | RowId::Mcp
-                | RowId::TerminalAgent
                 | RowId::OwnApps => {}
             },
         }
@@ -447,7 +459,6 @@ impl WelcomeView {
             .hits
             .iter()
             .map(|(target, _)| *target)
-            .filter(|target| target.focusable())
             .collect()
     }
 
@@ -540,9 +551,7 @@ impl View for WelcomeView {
         let Some(target) = Self::target_at(self.ensure_laid(), x, cy) else {
             return false;
         };
-        if target.focusable() {
-            self.focus = Some(target);
-        }
+        self.focus = Some(target);
         self.activate(target);
         true
     }

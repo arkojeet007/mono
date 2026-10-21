@@ -1151,7 +1151,10 @@ fn an_unrequested_shutdown_is_an_unexpected_exit_the_supervisor_recovers_from() 
 /// not own; what is being asserted is that the answer arrived at all, and fast.
 #[test]
 fn the_agent_answers_while_its_gateway_is_still_starting() {
+    let started = Instant::now();
     let agent = Agent::start();
+    let accepting = started.elapsed();
+    let mut asks = 0u32;
     let mut shell = agent.shell();
     koru_ipc::set_timeouts(&shell.stream, Some(Duration::from_secs(30)));
 
@@ -1160,10 +1163,12 @@ fn the_agent_answers_while_its_gateway_is_still_starting() {
     while Instant::now() < deadline {
         let published = koru_api_discovery::probe_at(segment(), agent.root()).is_ok();
         let asked = Instant::now();
+        asks += 1;
         assert!(matches!(
             shell.ask(Request::Status),
             Response::Status { .. }
         ));
+        let status_took = asked.elapsed();
         let dictation = shell.ask(Request::DictationState {
             route: u64::MAX,
             state: koru_agent_wire::DictationState::Refused,
@@ -1175,7 +1180,10 @@ fn the_agent_answers_while_its_gateway_is_still_starting() {
         let round_trip = asked.elapsed();
         assert!(
             round_trip < Duration::from_secs(2),
-            "the Agent took {round_trip:?} to answer while its gateway was starting"
+            "the Agent took {round_trip:?} to answer while its gateway was starting \
+             (Status {status_took:?}, published {published}, ask {asks} at {:?}, \
+             connectable after {accepting:?})",
+            asked - started
         );
         if !published {
             answered_before_the_gateway += 1;
@@ -1766,8 +1774,14 @@ fn public_sessions_client_streams_raw_output_and_delivers_an_image_path() {
             )
             .unwrap();
 
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // The echo is typed into a PowerShell that may not have started yet:
+        // a cold powershell.exe on a loaded four-core runner took longer than
+        // the 5 s this used to allow. The input waits in the PTY, so a long
+        // limit costs nothing when the shell is quick.
+        let wait = Duration::from_secs(30);
+        let deadline = Instant::now() + wait;
         let mut retry_after_gap = false;
+        let mut stream_ended = false;
         while Instant::now() < deadline {
             match receiver.recv_timeout(Duration::from_millis(250)) {
                 Ok(Ok(SessionStreamItem::Output { chunk }))
@@ -1785,7 +1799,10 @@ fn public_sessions_client_streams_raw_output_and_delivers_an_image_path() {
                 }
                 Ok(Err(error)) => panic!("public session stream failed: {error}"),
                 Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    stream_ended = true;
+                    break;
+                }
             }
         }
         if saw_marker {
@@ -1795,7 +1812,12 @@ fn public_sessions_client_streams_raw_output_and_delivers_an_image_path() {
         subscription.close();
         assert!(
             retry_after_gap,
-            "stream ended without output or explicit gap"
+            "{}",
+            if stream_ended {
+                "stream ended without output or explicit gap".to_owned()
+            } else {
+                format!("no output and no gap within {wait:?} of typing the echo")
+            }
         );
     }
     assert!(saw_marker, "client stream never delivered process output");

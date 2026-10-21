@@ -497,7 +497,10 @@ fn zip_names(path: &Path) -> Vec<String> {
     let file = std::fs::File::open(path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     (0..archive.len())
-        .map(|index| archive.by_index(index).unwrap().name().to_string())
+        .map(|index| {
+            let entry = archive.by_index(index).unwrap();
+            entry.name().unwrap().into_owned()
+        })
         .collect()
 }
 

@@ -4,11 +4,14 @@
 use super::scheduler::{Scheduler, SelectionReply};
 use super::*;
 
+type CancelReply = mpsc::SyncSender<Result<(), &'static str>>;
+type CancelAnswer = mpsc::Receiver<Result<(), &'static str>>;
+
 enum Command<C> {
     Activate(Option<C>),
     Select(BTreeSet<ProfileId>, C, SelectionReply),
     Refresh(C, C),
-    Cancel(C, mpsc::SyncSender<Result<(), &'static str>>),
+    Cancel(C, CancelReply),
     Retry(C, Option<ProfileId>),
 }
 
@@ -111,6 +114,13 @@ impl<P: Port> Control<P> {
                 }
             };
             let mut handed_off = 0;
+            // A durable cancel is acknowledged only once the snapshot callers
+            // read shows it. The scheduler answers into a relay as soon as the
+            // target is cleared — or later, when it had to load the account
+            // first — and the caller's reply is sent after the publish below,
+            // so `cancel_durable` returning `Ok` and `snapshot()` still naming
+            // the cancelled target can no longer both be true.
+            let mut cancels: Vec<(CancelAnswer, CancelReply)> = Vec::new();
             loop {
                 let next = {
                     let mut desired = worker_desired
@@ -133,7 +143,9 @@ impl<P: Port> Control<P> {
                             scheduler.retry_for(&credential, profile)
                         }
                         Command::Cancel(credential, reply) => {
-                            scheduler.cancel_requested(credential, reply);
+                            let (relay, answered) = mpsc::sync_channel(1);
+                            scheduler.cancel_requested(credential, relay);
+                            cancels.push((answered, reply));
                         }
                     }
                 }
@@ -167,6 +179,16 @@ impl<P: Port> Control<P> {
                     visible.snapshot = snapshot;
                     visible.snapshot.report.clone()
                 };
+                // Disconnected means the scheduler dropped the answer; dropping
+                // the reply too gives the caller the same unavailable error.
+                cancels.retain(|(answered, reply)| match answered.try_recv() {
+                    Ok(result) => {
+                        let _ = reply.try_send(result);
+                        false
+                    }
+                    Err(mpsc::TryRecvError::Empty) => true,
+                    Err(mpsc::TryRecvError::Disconnected) => false,
+                });
                 let mut report = report;
                 report.durable_revision = revision.filter(|revision| *revision > handed_off);
                 if let Some(revision) = report.durable_revision {

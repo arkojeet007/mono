@@ -1450,8 +1450,22 @@ fn saved_session_refreshes_stale_protocol_registration_without_another_login() {
 }
 
 /// Every `koru_account` line `run` logs on this thread, as `message k=v ...`.
+///
+/// **One global subscriber, not a scoped `with_default`.** `tracing` caches
+/// each callsite's interest for the whole process. A test thread that first
+/// reached a callsite while no capture was installed could store "never"
+/// for it just as another thread's scoped capture rebuilt the cache, and that
+/// capture then lost the line: on a busy runner
+/// `restore_logs_which_stored_slot_was_refused_without_a_value` lost its
+/// first line this way. The global subscriber answers `sometimes` for this
+/// target, so no callsite is ever cached as off and every event asks
+/// `enabled`, which looks for a capture on the current thread.
 pub(super) fn account_log_lines(run: impl FnOnce()) -> Vec<String> {
-    struct Capture(Arc<Mutex<Vec<String>>>);
+    use std::cell::RefCell;
+    thread_local! {
+        static LINES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+    struct Capture;
     struct Line(String);
     impl tracing::field::Visit for Line {
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
@@ -1459,8 +1473,18 @@ pub(super) fn account_log_lines(run: impl FnOnce()) -> Vec<String> {
         }
     }
     impl tracing::Subscriber for Capture {
+        fn register_callsite(
+            &self,
+            metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            if metadata.target() == "koru_account" {
+                tracing::subscriber::Interest::sometimes()
+            } else {
+                tracing::subscriber::Interest::never()
+            }
+        }
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-            metadata.target() == "koru_account"
+            metadata.target() == "koru_account" && LINES.with(|lines| lines.borrow().is_some())
         }
         fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
             tracing::span::Id::from_u64(1)
@@ -1470,18 +1494,29 @@ pub(super) fn account_log_lines(run: impl FnOnce()) -> Vec<String> {
         fn event(&self, event: &tracing::Event<'_>) {
             let mut line = Line(String::new());
             event.record(&mut line);
-            self.0
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(line.0.trim().to_owned());
+            LINES.with(|lines| {
+                if let Some(lines) = lines.borrow_mut().as_mut() {
+                    lines.push(line.0.trim().to_owned());
+                }
+            });
         }
         fn enter(&self, _: &tracing::span::Id) {}
         fn exit(&self, _: &tracing::span::Id) {}
     }
-    let lines = Arc::new(Mutex::new(Vec::new()));
-    tracing::subscriber::with_default(Capture(lines.clone()), run);
-    let lines = lines.lock().unwrap_or_else(|error| error.into_inner());
-    lines.clone()
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        tracing::subscriber::set_global_default(Capture)
+            .expect("no other global subscriber in this test binary");
+    });
+    // A callsite whose registration raced the install above can still hold
+    // "never"; after the install nothing can store that again, so one rebuild
+    // here settles it before `run` logs anything.
+    tracing::callsite::rebuild_interest_cache();
+    LINES.with(|lines| *lines.borrow_mut() = Some(Vec::new()));
+    run();
+    LINES
+        .with(|lines| lines.borrow_mut().take())
+        .unwrap_or_default()
 }
 
 #[test]

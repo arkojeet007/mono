@@ -1437,9 +1437,14 @@ fn cancellation_race_is_idempotent_and_terminal() {
     let mut providers = ProviderRegistry::default();
     providers.insert(
         AiProviderId::parse("mock").unwrap(),
+        // 32 characters at 200 ms: the cancel lands while the answer is still
+        // streaming, and a cancelled stream stops at the next character, so
+        // the length costs nothing. At 5 ms the whole answer took 160 ms and a
+        // loaded runner finished it first (Complete, not Cancelled); 50 ms
+        // still lost one run in 45 on four loaded cores.
         Arc::new(
             DeterministicMockProvider::new("a response long enough to cancel")
-                .with_chunk_delay(Duration::from_millis(5)),
+                .with_chunk_delay(Duration::from_millis(200)),
         ),
     );
     let worker = AiWorker::new(WorkerConfig::new(
@@ -1522,8 +1527,13 @@ fn provider_queue_saturation_fails_excess_work_without_blocking_the_worker() {
     let mut providers = ProviderRegistry::default();
     providers.insert(
         AiProviderId::parse("mock").unwrap(),
+        // The one provider thread is held for about seven seconds, so the
+        // queue behind it stays full for as long as the test needs: with
+        // "slow" it was free again after two, and on a loaded runner the
+        // excess attempt could arrive after that and simply be queued.
         Arc::new(
-            DeterministicMockProvider::new("slow").with_chunk_delay(Duration::from_millis(500)),
+            DeterministicMockProvider::new("a slow response")
+                .with_chunk_delay(Duration::from_millis(500)),
         ),
     );
     let worker = AiWorker::new(
@@ -1539,14 +1549,24 @@ fn provider_queue_saturation_fails_excess_work_without_blocking_the_worker() {
         attempts.push(send(&client, chat_id, Uuid::new_v4()).accepted.attempt_id);
     }
 
-    assert!(attempts.iter().any(|attempt_id| {
+    // Each attempt reaches the provider queue only after its context is
+    // resolved on another thread, so the refusal is waited for, not read
+    // the instant the last send returns.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !attempts.iter().any(|attempt_id| {
         client
             .read_attempt(context(), *attempt_id)
             .unwrap()
             .attempt
             .status
             == AttemptStatus::Failed
-    }));
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "no excess attempt was refused by the full provider queue"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     worker.ping().unwrap();
 
     worker.shutdown();
@@ -1700,10 +1720,8 @@ fn shutdown_cancels_active_attempt_before_database_close() {
     assert_eq!(worker.join(), WorkerExit::Clean);
 
     let repository = Repository::open(&directory.path().join("ai.db")).unwrap();
-    assert_eq!(
-        repository.attempt(attempt_id).unwrap().unwrap().status,
-        AttemptStatus::Cancelled
-    );
+    let attempt = repository.attempt(attempt_id).unwrap().unwrap();
+    assert_eq!(attempt.status, AttemptStatus::Cancelled, "{attempt:?}");
 }
 
 #[test]

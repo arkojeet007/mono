@@ -113,7 +113,10 @@ mod tests {
     fn list(bytes: &[u8]) -> Vec<String> {
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("archive");
         (0..archive.len())
-            .map(|i| archive.by_index(i).expect("entry").name().to_string())
+            .map(|i| {
+                let entry = archive.by_index(i).expect("entry");
+                entry.name().expect("name").into_owned()
+            })
             .collect()
     }
 }

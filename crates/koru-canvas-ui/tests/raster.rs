@@ -62,6 +62,12 @@ impl Gpu {
             force_fallback_adapter: false,
         }))
         .ok()?;
+        // A software rasterizer is not a GPU for this proof: vello's work
+        // crashes WARP, the only adapter on a CI runner, with an access
+        // violation. See `crates/koru-session-view/tests/raster.rs`.
+        if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+            return None;
+        }
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("canvas-raster"),
             required_features: wgpu::Features::empty(),
@@ -208,7 +214,7 @@ fn near(a: [u8; 3], b: [u8; 3]) -> bool {
 #[test]
 fn a_card_is_drawn_where_it_is_at_every_zoom_in_both_palettes() {
     let Some(mut gpu) = Gpu::open() else {
-        eprintln!("no wgpu adapter here: the rasterized canvas proof did not run");
+        eprintln!("no hardware wgpu adapter here: the rasterized canvas proof did not run");
         return;
     };
     let _guard = THEME_LOCK.lock().unwrap_or_else(|held| held.into_inner());

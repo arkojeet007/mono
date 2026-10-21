@@ -13670,6 +13670,9 @@ mod tests {
 
     #[test]
     fn choosing_a_body_tone_replaces_the_grapheme() {
+        // Committing a tone remembers it process-wide, so this holds the same
+        // lock as every test that sets or reads the preferred tone.
+        let _guard = crate::emoji::tone_test_lock();
         let (mut ws, mut e, node) = editor_over_emoji();
         let row = &e.body.rows[0];
         let lx = row.text_x() + 8.0;
@@ -13695,6 +13698,7 @@ mod tests {
         let text = node.content.as_text().unwrap_or_default();
         assert_eq!(text, *tone);
         assert!(e.view.body_tone_strip.is_none());
+        crate::emoji::set_preferred_skin_tone(emojis::SkinTone::Default);
     }
 
     #[test]

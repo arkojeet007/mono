@@ -703,8 +703,8 @@ fn the_composition_rect_covers_the_transcript() {
 // Speed
 // ---------------------------------------------------------------------------
 
-/// **A partial costs no more than a keystroke** — measured, not asserted in
-/// milliseconds, because a millisecond budget passes on a fast machine and gets
+/// **A partial costs no more than a keystroke** — measured (the median of each),
+/// not asserted in milliseconds, because a millisecond budget passes on a fast machine and gets
 /// relaxed until it asserts nothing.
 ///
 /// Typing is not flat: `rowlayout::reflow` calls `position_rows` twice and
@@ -714,11 +714,35 @@ fn the_composition_rect_covers_the_transcript() {
 #[test]
 fn a_partial_costs_no_more_than_a_keystroke() {
     const ROWS: usize = 2_000;
+    const ATTEMPTS: usize = 3;
+    // The best of a few whole measurements. The two phases run one after the
+    // other, so load that arrives between them - another test thread on a
+    // four-core runner - lands on one side only: a single loaded run read
+    // 516 us against 130 us on the medians, where every other read about 1.2
+    // times. A partial that really costs more than two keystrokes does so in
+    // every attempt; a busy machine does not stay busy for all of them.
+    let mut attempts = Vec::with_capacity(ATTEMPTS);
+    for _ in 0..ATTEMPTS {
+        let (typing, dictating) = keystroke_and_partial(ROWS);
+        // Printed rather than only asserted, so `-- --nocapture` says what
+        // the machine actually did rather than only that it was in a ratio.
+        println!("{ROWS} rows: keystroke {typing}us, partial {dictating}us");
+        if dictating <= typing * 2 {
+            return;
+        }
+        attempts.push((typing, dictating));
+    }
+    panic!("a partial cost more than two keystrokes at {ROWS} rows in every attempt: {attempts:?}");
+}
+
+/// One measurement: the median keystroke and the median partial, in
+/// microseconds, over the same freshly built document.
+fn keystroke_and_partial(rows: usize) -> (u128, u128) {
     const SAMPLES: usize = 20;
     let mut ws = WorkspaceDoc::create(WorkspaceId::new(), "acme").unwrap();
     ws.enable_undo();
     let mut first = None;
-    for i in 0..ROWS {
+    for i in 0..rows {
         let id = ws
             .insert(Parent::Root, Node::paragraph(format!("row {i}")).unwrap())
             .unwrap();
@@ -732,33 +756,33 @@ fn a_partial_costs_no_more_than_a_keystroke() {
     // A keystroke: the row writes one character and re-reads itself, then the
     // frame reflows. Exactly what `Paragraph::insert_text` does, which is the
     // whole of what typing costs.
-    let mut typing = 0u128;
+    let mut typing = Vec::with_capacity(SAMPLES);
     for _ in 0..SAMPLES {
         let start = Instant::now();
         editor.body.focused_mut().unwrap().insert_text(&mut ws, "x");
         editor.reflow();
-        typing += start.elapsed().as_micros();
+        typing.push(start.elapsed().as_micros());
     }
-    let typing = typing / SAMPLES as u128;
 
     editor.body.focus_on(first);
     caret_at(&mut editor, 0);
     assert!(editor.begin_dictation(&mut ws));
-    let mut dictating = 0u128;
+    let mut dictating = Vec::with_capacity(SAMPLES);
     for i in 1..=SAMPLES {
         let partial = "word ".repeat(i);
         let start = Instant::now();
         editor.update_dictation(&mut ws, &partial);
         editor.reflow();
-        dictating += start.elapsed().as_micros();
+        dictating.push(start.elapsed().as_micros());
     }
-    let dictating = dictating / SAMPLES as u128;
+    (median(typing), median(dictating))
+}
 
-    // Printed rather than only asserted, so `-- --nocapture` says what the
-    // machine actually did rather than only that it was inside a ratio.
-    println!("{ROWS} rows: keystroke {typing}us, partial {dictating}us");
-    assert!(
-        dictating <= typing * 2,
-        "a partial cost {dictating}us against a keystroke's {typing}us at {ROWS} rows"
-    );
+/// The middle sample. A mean of twenty ~150 us samples moves by hundreds of
+/// microseconds when one of them loses its time slice to another test thread,
+/// and on a four-core runner one does: 400 us against 190 us in one loaded run.
+/// One interrupted sample cannot move a median.
+fn median(mut samples: Vec<u128>) -> u128 {
+    samples.sort_unstable();
+    samples[samples.len() / 2]
 }

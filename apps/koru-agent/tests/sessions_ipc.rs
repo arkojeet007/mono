@@ -103,15 +103,23 @@ fn create(root: &std::path::Path, marker: &str) -> CreateSession {
 
 fn wait_for_marker(subscription: &Subscription, marker: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut frames = 0;
+    let mut last = None;
     while Instant::now() < deadline {
-        if let Ok(SubscriptionUpdate::Render { update }) =
-            subscription.recv_timeout(Duration::from_millis(250))
-            && render_text(&update).contains(marker)
-        {
-            return;
+        match subscription.recv_timeout(Duration::from_millis(250)) {
+            Ok(SubscriptionUpdate::Render { update }) => {
+                let text = render_text(&update);
+                if text.contains(marker) {
+                    return;
+                }
+                frames += 1;
+                last = Some(text);
+            }
+            Ok(other) => last = Some(format!("{other:?}")),
+            Err(_) => {}
         }
     }
-    panic!("render stream never contained {marker}");
+    panic!("render stream never contained {marker} ({frames} frames; last: {last:?})");
 }
 
 fn wait_for_output(subscription: &Subscription, expected: &[u8]) {
@@ -1512,13 +1520,16 @@ fn moving_one_project_to_a_workspace_keeps_its_identity_and_its_sessions() {
     let id = koru_session_protocol::ProjectId::mint();
     let untouched = koru_session_protocol::ProjectId::mint();
     let folder = root.path().to_string_lossy().into_owned();
+    // One wait per mutation, each before the next: the host queues a single
+    // pending invalidation per subscriber, so two creates back to back can
+    // reach this window as one event, and a second wait then never ends.
     let created = author
         .create_project(id, "Orphan", Some(folder.clone()), Some(scope()))
         .unwrap();
+    wait_for_invalidation(&watch);
     author
         .create_project(untouched, "Neighbour", None, Some(scope()))
         .unwrap();
-    wait_for_invalidation(&watch);
     wait_for_invalidation(&watch);
 
     let session = author.create(create(root.path(), "KORU:SCOPE")).unwrap();

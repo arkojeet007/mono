@@ -1054,6 +1054,9 @@ mod tests {
 
     #[test]
     fn release_without_long_press_commits() {
+        // The tone is process-wide: an unguarded reset here once landed in the
+        // middle of short_click_commits_with_preferred_tone's Medium.
+        let _guard = emoji::tone_test_lock();
         emoji::set_preferred_skin_tone(SkinTone::Default);
         let mut engine = TextEngine::new();
         let mut picker = EmojiPicker::standalone(&mut engine, Trigger::at_start());

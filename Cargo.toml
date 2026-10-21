@@ -190,7 +190,7 @@ url = { version = "2", features = ["serde"] }
 keyring = "=4.1.6"
 minisign = "0.9.1"
 minisign-verify = "0.2.5"
-zip = { version = "2.4", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 # **The publisher's archive readers, and deliberately nowhere near the product.**
 # Every speech model upstream publishes is a `.tar.bz2`, and Q-V50 settled that
 # we repackage it as a zip rather than teach `koru-voice-models` a second

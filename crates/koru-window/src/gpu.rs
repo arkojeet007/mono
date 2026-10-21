@@ -62,7 +62,13 @@ pub(crate) struct Frame {
 
 /// Every device this process draws with, and one renderer for each.
 pub(crate) struct Gpu {
-    context: RenderContext,
+    /// Made when the first window needs it, never in [`Gpu::new`]: `new` runs
+    /// on the thread that answers people, and a wgpu instance is a loader scan
+    /// of every Vulkan layer and driver — two seconds of it, on a loaded
+    /// four-core machine, held an Agent's `Status` answer while its gateway
+    /// started. The warm-up makes its own on its own thread, and it is the one
+    /// a window normally gets; this is filled only when there was no warm-up.
+    context: Option<RenderContext>,
     /// The device and renderer being made on another thread while the process
     /// starts, taken by the first [`Gpu::open`]. See [`crate::renderer::Warmup`].
     ///
@@ -75,10 +81,9 @@ pub(crate) struct Gpu {
 impl Gpu {
     pub fn new() -> Self {
         Self {
-            // A bare instance; the device and the compiled renderer arrive from
-            // the warm-up below, whose context replaces this one before the
-            // first window is drawn.
-            context: crate::renderer::context(),
+            // The device and the compiled renderer arrive from the warm-up
+            // below, with the context they were made on.
+            context: None,
             warmup: Some(crate::renderer::Warmup::start()),
             renderers: HashMap::new(),
         }
@@ -89,17 +94,27 @@ impl Gpu {
     /// Only while this pool has never had a device of its own: after a window
     /// has existed, `context` owns devices that surfaces and renderers are
     /// keyed against, and replacing it wholesale would strand them.
+    /// The context, made now if neither the warm-up nor an earlier window
+    /// has supplied one.
+    fn context(&mut self) -> &mut RenderContext {
+        self.context.get_or_insert_with(crate::renderer::context)
+    }
+
     fn absorb_warmup(&mut self) {
         let Some(warmup) = self.warmup.take() else {
             return;
         };
-        if !self.context.devices.is_empty() {
+        if self
+            .context
+            .as_ref()
+            .is_some_and(|context| !context.devices.is_empty())
+        {
             return;
         }
         let Some(warmed) = warmup.take() else {
             return;
         };
-        self.context = warmed.context;
+        self.context = Some(warmed.context);
         if let Some((dev_id, renderer)) = warmed.renderer {
             self.renderers.insert(dev_id, renderer);
         }
@@ -219,7 +234,7 @@ impl Gpu {
     /// A configured surface and a renderer for its device.
     fn surface_for(&mut self, window: &Arc<Window>) -> Option<RenderSurface<'static>> {
         let size = window.inner_size();
-        let mut surface = match pollster::block_on(self.context.create_surface(
+        let mut surface = match pollster::block_on(self.context().create_surface(
             window.clone(),
             size.width.max(1),
             size.height.max(1),
@@ -236,10 +251,10 @@ impl Gpu {
                         "surface creation failed on the configured backend ({error}); \
                          retrying with the default"
                     );
-                    self.context = RenderContext::new();
+                    self.context = Some(RenderContext::new());
                     // The renderers belong to the abandoned backend's devices.
                     self.renderers.clear();
-                    pollster::block_on(self.context.create_surface(
+                    pollster::block_on(self.context().create_surface(
                         window.clone(),
                         size.width.max(1),
                         size.height.max(1),
@@ -265,10 +280,10 @@ impl Gpu {
         // vello's helper hard-codes two, which lets the driver hold a finished
         // frame back while the next click is already waiting behind it.
         surface.config.desired_maximum_frame_latency = 1;
-        self.context.set_present_mode(&mut surface, PRESENT_MODE);
+        self.context().set_present_mode(&mut surface, PRESENT_MODE);
 
         if !self.renderers.contains_key(&surface.dev_id) {
-            match crate::renderer::build_renderer(&self.context.devices[surface.dev_id].device) {
+            match crate::renderer::build_renderer(&self.context().devices[surface.dev_id].device) {
                 Ok(renderer) => {
                     self.renderers.insert(surface.dev_id, renderer);
                 }
@@ -282,7 +297,7 @@ impl Gpu {
     }
 
     pub fn resize(&mut self, live: &mut LiveWindow, size: PhysicalSize<u32>) {
-        self.context
+        self.context()
             .resize_surface(&mut live.surface, size.width.max(1), size.height.max(1));
         if live.transparent && !crate::rounded_region::apply(&live.window) {
             live.window.set_visible(false);
@@ -336,7 +351,11 @@ impl Gpu {
             );
         }
 
-        let device = &self.context.devices[live.surface.dev_id];
+        // A live window was made on this context, so it is there.
+        let Some(context) = &self.context else {
+            return;
+        };
+        let device = &context.devices[live.surface.dev_id];
         let Some(renderer) = self.renderers.get_mut(&live.surface.dev_id) else {
             return;
         };

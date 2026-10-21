@@ -1,10 +1,22 @@
 param([Parameter(ValueFromRemainingArguments=$true)][string[]]$FixtureArgs)
 $ErrorActionPreference = 'Stop'
+# Only the language and .NET from here on, no cmdlet from a module: the first
+# use of one makes Windows PowerShell import its module, type and format files
+# and all, and on a CI runner that took seconds. The trace there showed 5.6 s
+# between this script starting and it reading its first request, spent on
+# three Add-Content calls, and the provider's 10 s initialize limit expired.
+[void][System.Reflection.Assembly]::LoadWithPartialName('System.Web.Extensions')
+$json = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+$json.MaxJsonLength = [int]::MaxValue
 function Trace-Fixture([string]$value) {
     if ($env:CODEX_FIXTURE_TRACE) {
-        Add-Content -LiteralPath $env:CODEX_FIXTURE_TRACE -Value $value
+        [System.IO.File]::AppendAllText($env:CODEX_FIXTURE_TRACE, $value + "`r`n")
     }
 }
+function Trace-Clock([string]$what) {
+    Trace-Fixture ("clock:" + $what + " " + [DateTime]::Now.ToString('HH:mm:ss.ff'))
+}
+Trace-Clock 'script'
 Trace-Fixture ("args:" + ($FixtureArgs -join ','))
 Trace-Fixture ("pid:" + $PID)
 # The bearer never rides argv (ADR-341): the launch names the variable and
@@ -18,26 +30,27 @@ Trace-Fixture ("bearer_env:" + $(if ($env:KORU_RUN_MCP_TOKEN) { 'set' } else { '
 # launch: the URL is an override on argv, the run id is inside that URL,
 # and the folder is under the working directory it was started in.
 function Invoke-RunRegistration {
-    $override = $FixtureArgs | Where-Object { $_ -like 'mcp_servers.koru_run.url=*' } | Select-Object -First 1
-    if (-not $override) { Trace-Fixture 'register:no_endpoint'; return }
-    $url = ($override -replace "^mcp_servers\.koru_run\.url=", '').Trim("'")
+    $override = @($FixtureArgs | Where-Object { $_ -like 'mcp_servers.koru_run.url=*' })
+    if ($override.Count -eq 0) { Trace-Fixture 'register:no_endpoint'; return }
+    $url = ($override[0] -replace "^mcp_servers\.koru_run\.url=", '').Trim("'")
     if ($url -notmatch '/v1/runs/([^/]+)/mcp$') { Trace-Fixture 'register:unparsable_endpoint'; return }
     $run = $Matches[1]
     if (-not $env:KORU_RUN_MCP_TOKEN) { Trace-Fixture 'register:no_bearer'; return }
-    $folder = Join-Path (Join-Path (Get-Location).Path '.artifacts') $run
-    New-Item -ItemType Directory -Force -Path $folder | Out-Null
-    # Exact bytes: `Set-Content -Encoding utf8` on Windows PowerShell adds a
-    # BOM and a line ending, and the test weighs what the blob store weighed.
+    $folder = [System.IO.Path]::Combine([System.IO.Directory]::GetCurrentDirectory(), '.artifacts', $run)
+    [void][System.IO.Directory]::CreateDirectory($folder)
+    # Exact bytes: the test weighs what the blob store weighed.
     [System.IO.File]::WriteAllBytes(
-        (Join-Path $folder 'result.md'),
+        [System.IO.Path]::Combine($folder, 'result.md'),
         [System.Text.Encoding]::UTF8.GetBytes('FIXTURE_RESULT'))
-    $body = @{
+    $body = $json.Serialize(@{
         jsonrpc = '2.0'; id = 1; method = 'tools/call'
         params = @{ name = 'create'; arguments = @{ path = 'result.md'; title = 'Fixture result'; mime = 'text/markdown' } }
-    } | ConvertTo-Json -Compress -Depth 10
+    })
     try {
-        $answer = Invoke-RestMethod -Uri $url -Method Post -ContentType 'application/json' `
-            -Headers @{ Authorization = ("Bearer " + $env:KORU_RUN_MCP_TOKEN) } -Body $body -TimeoutSec 30
+        $client = [System.Net.WebClient]::new()
+        $client.Headers['Content-Type'] = 'application/json'
+        $client.Headers['Authorization'] = "Bearer " + $env:KORU_RUN_MCP_TOKEN
+        $answer = $json.DeserializeObject($client.UploadString($url, 'POST', $body))
         if ($answer.result.isError) { Trace-Fixture ('register:refused:' + ($answer.result.structuredContent.code)) }
         else { Trace-Fixture 'register:ok' }
     } catch {
@@ -51,16 +64,21 @@ if ($FixtureArgs.Count -eq 1 -and $FixtureArgs[0] -eq '--version') {
 if ($FixtureArgs.Count -lt 1 -or $FixtureArgs[0] -ne 'app-server') { exit 2 }
 
 function Send-Frame([object]$value) {
-    [Console]::Out.WriteLine(($value | ConvertTo-Json -Compress -Depth 20))
+    [Console]::Out.WriteLine($json.Serialize($value))
     [Console]::Out.Flush()
 }
 
+Trace-Clock 'reading'
+$first = $true
 while (($line = [Console]::In.ReadLine()) -ne $null) {
-    $message = $line | ConvertFrom-Json
+    if ($first) { Trace-Clock 'read' }
+    $message = $json.DeserializeObject($line)
+    if ($first) { Trace-Clock 'parsed'; $first = $false }
     Trace-Fixture ("method:" + $message.method)
     switch ($message.method) {
         'initialize' {
             Send-Frame @{ id=$message.id; result=@{ userAgent='koru_terminal/0.150.1 (fixture)'; codexHome='fixture'; platformFamily='windows'; platformOs='windows' } }
+            Trace-Clock 'initialized'
         }
         'initialized' {}
         'model/list' {
@@ -70,10 +88,10 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
             Send-Frame @{ id=$message.id; result=@{ thread=@{ id='fixture-thread' } } }
         }
         'turn/start' {
-            $image = @($message.params.input | Where-Object { $_.type -eq 'localImage' } | Select-Object -First 1)
+            $image = @($message.params.input | Where-Object { $_.type -eq 'localImage' })
             Send-Frame @{ id=$message.id; result=@{ turn=@{ id='fixture-turn'; status='inProgress'; items=@() } } }
             Send-Frame @{ method='item/agentMessage/delta'; params=@{ threadId='fixture-thread'; turnId='fixture-turn'; itemId='message-1'; delta='FIXTURE_TEXT' } }
-            if ($image.Count -eq 1) {
+            if ($image.Count -ge 1) {
                 Send-Frame @{ method='item/completed'; params=@{ threadId='fixture-thread'; turnId='fixture-turn'; item=@{ type='imageView'; id='image-1'; path=$image[0].path } } }
             }
             # CODEX_FIXTURE_TURN=complete: the turn reports its usage and ends

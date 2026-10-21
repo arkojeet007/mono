@@ -1605,13 +1605,17 @@ even when creation began in the Manage tab. It offers:
   button per import format; *Bring your files in* with **Choose files…**;
   *Learn your way around*, which opens the handful of shortcuts right there;
   *Set up a reminder*, which opens All Reminders; and *Let us know how it
-  went* — **feedback form** opens the Feedback tab, **email** writes to
-  `support@koru.do`, and **chat** is shown but does nothing yet.
-- **Connect your devices** — *Phone* and *Another computer* open **Link another
-  device**, and so does the square beside them; the real pairing code is in
-  that window. *Watch* is not available yet.
+  went* — **feedback form** opens the Feedback tab and **email** writes to
+  `support@koru.do`.
+- **Connect your devices** — *Another computer* opens **Link another device**,
+  and so does the square beside it; the real pairing code is in that window.
 - **When you're ready to go further** — *Set up your AI* opens Providers and
-  models. The other rows there are previews of what is coming.
+  models. *Manage documents over MCP* shows the command an MCP client runs to
+  reach this installation — the `koru-mcp` program beside Koru, with
+  `serve --stdio` — and **Copy** (or clicking the command) puts the whole
+  command on the clipboard, ready to paste into the client's settings. *Run an
+  agent in a terminal* opens the list of agents from the **+** menu; choosing
+  one starts it in a new tab.
 
 Each row you complete gets a check, and the checks are kept **for this
 computer**: every Profile on it sees the same ones. *n of m done* counts the
@@ -1963,11 +1967,8 @@ which fades on its own. There are four it can do something about: the
 microphone is not allowed, no voice model is installed, another window is
 already dictating, and this installation has no voice program to run.
 
-**Three other places tell you dictation is here**, and each of them prints the
+**Two other places tell you dictation is here**, and each of them prints the
 chord rather than replacing it.
-
-The Welcome page's *Learn your way around* row opens a list that carries it, beside the chords for a
-new tab and the two side columns.
 
 **`/dictate`** in a document starts a dictation at the caret — the same thing the
 chord does, for when the chord is the part you cannot remember. The typed
@@ -5247,21 +5248,17 @@ Everything saves continuously; there is no save command.
 
 ## Usage data
 
-**Koru sends no usage data unless you say yes, on each device.** The first time
-Koru opens on a device — and once after updating from a build that sent usage
-data by default — it asks whether to share anonymous usage data: which features
-are used, how well the app runs, and basic facts about the computer such as its
-operating system and screen size, much like what most websites collect when you
-visit them. It never includes your documents, their names or anything you type.
-Nothing is sent unless you say yes; if you like Koru, saying yes tells us what
-matters most to you. *Don't share*, or closing the question, is an answer too;
-you are not asked again.
+**Koru sends no usage data unless you turn it on, on each device.** Koru does
+not ask: **Settings → System → Privacy → Share anonymous usage data** is off
+until you switch it on. What it shares is which features are used, how well the
+app runs, and basic facts about the computer such as its operating system and
+screen size, much like what most websites collect when you visit them. It never
+includes your documents, their names or anything you type. If you like Koru,
+turning it on tells us what matters most to you.
 
-To change your answer, open **Settings → System → Privacy** and use **Share
-anonymous usage data**. Turning it off takes effect at once and deletes anything
-not yet sent. Nothing recorded before you said yes is ever sent, even after you
-say yes later. The choice belongs to this device: another computer of yours
-asks for its own. The phone apps send no usage data.
+Turning it off takes effect at once and deletes anything not yet sent. Nothing
+recorded while it was off is ever sent, even after you turn it on. The choice belongs to this device: another computer of yours has
+its own switch. The phone apps send no usage data.
 
 ## The tasks in this document
 

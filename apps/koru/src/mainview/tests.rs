@@ -6253,6 +6253,19 @@ fn a_welcome_tick_reaches_the_container_and_runs_the_existing_command() {
     assert!(welcome.is_done(crate::welcome::RowId::FirstDocument));
 }
 
+/// Welcome's *Run an agent in a terminal* opens the `+` menu's list of
+/// agents, so a pick there starts the same session tab it does from `+`.
+#[test]
+fn welcome_opens_the_plus_menus_list_of_agents() {
+    let (mut v, _w) = container();
+    let agents = context_menu::shown(context_menu::agent_plus_items());
+    assert!(!agents.is_empty(), "agents are on unless set off");
+    assert!(v.open_agents_menu());
+    let menu = v.menu.as_ref().expect("the list is open");
+    assert_eq!(menu.subject, MenuSubject::NewTab);
+    assert_eq!(menu.items(), agents.as_slice());
+}
+
 /// Clicking away closes the updates modal — on the *release*, so both halves
 /// of the click are consumed and neither reaches the document beneath
 /// (ADR-150). A press inside the panel that misses every button keeps it open,
@@ -12436,54 +12449,4 @@ fn workspace_verbs_find_a_workspace_of_a_profile_that_is_not_open() {
     assert!(view.menu.is_some());
 
     assert!(!view.start_workspace_icon(WorkspaceId::new()));
-}
-
-// ------------------------------------------------------- telemetry consent
-
-/// **The telemetry question** (the opt-in contract of 2026-10-11) is a
-/// `Confirm::asking`, so Enter — a keystroke already under way when it
-/// appeared — answers *no*, and either answer closes it. The record itself is
-/// written by `koru_workspace_host::telemetry_consent`'s worker, which a test
-/// never starts; its own suite holds the reading.
-#[test]
-fn the_telemetry_question_is_asked_safely_and_closes_on_either_answer() {
-    let (mut v, mut w) = container();
-    assert!(v.ask_telemetry_consent());
-    assert!(matches!(
-        v.confirm.as_ref(),
-        Some((dialog, trash::ConfirmSubject::TelemetryConsent))
-            if dialog.title() == koru_i18n::t(crate::format::lang(), koru_i18n::Key::TelemetryConsentTitle)
-    ));
-    assert!(!v.ask_telemetry_consent(), "a question already up stays up");
-
-    let handled = View::key(
-        &mut v,
-        &mut w.ws,
-        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter),
-        None,
-        NONE,
-    );
-    assert!(handled, "a modal takes every key");
-    assert!(v.confirm.is_none(), "Enter answered, and the answer was no");
-
-    for agreed in [true, false] {
-        assert!(v.ask_telemetry_consent());
-        assert!(v.settle_confirm(agreed));
-        assert!(v.confirm.is_none());
-    }
-}
-
-/// Another question on the screen is never replaced by this one.
-#[test]
-fn the_telemetry_question_waits_for_another_question() {
-    let (mut v, _w) = container();
-    v.confirm = Some((
-        koru_ui::Confirm::new("Delete", "Sure?", "Delete"),
-        trash::ConfirmSubject::EmptyTrash,
-    ));
-    assert!(!v.ask_telemetry_consent());
-    assert!(matches!(
-        v.confirm.as_ref(),
-        Some((_, trash::ConfirmSubject::EmptyTrash))
-    ));
 }

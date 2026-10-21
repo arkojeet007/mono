@@ -236,10 +236,9 @@ fn zip_entry_names(path: &Path) -> Vec<String> {
     };
     (0..archive.len())
         .filter_map(|index| {
-            archive
-                .by_index(index)
-                .ok()
-                .map(|entry| entry.name().to_owned())
+            let entry = archive.by_index(index).ok()?;
+            let name = entry.name().ok()?.into_owned();
+            Some(name)
         })
         .collect()
 }

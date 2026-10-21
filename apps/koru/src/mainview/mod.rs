@@ -2855,6 +2855,24 @@ impl MainView {
         true
     }
 
+    /// The `+` menu's *Agents* flyout on its own, at the pointer — what
+    /// Welcome's *Run an agent in a terminal* opens. The same rows, dimmed off
+    /// the same probe, and a pick opens the same session tab as it does from
+    /// `+`. Nothing opens when this build shows no agents.
+    fn open_agents_menu(&mut self) -> bool {
+        self.profile_probe.refresh(self.agent.wake_proxy());
+        self.snapshot_plus_menu();
+        let items = context_menu::shown(context_menu::agent_plus_items());
+        if items.is_empty() {
+            return false;
+        }
+        let mut menu = ContextMenu::new(&mut self.engine, MenuSubject::NewTab, self.pointer, items);
+        let enabled = self.enabled_items(&menu);
+        menu.step(&enabled, 1);
+        self.menu = Some(menu);
+        true
+    }
+
     /// A right-click in the Agents tree, as the pane reported it: a project
     /// row's menu, or the launch-only menu for the bucket and empty space.
     /// The probe refresh is the `+` menu's own, so the profile rows dim off
@@ -7888,6 +7906,9 @@ impl MainView {
                 WelcomeWant::Email => {
                     self.ask_pane(PaneRequest::OpenUri(koru_ui::welcome::SUPPORT_MAILTO));
                 }
+                WelcomeWant::CopyMcpCommand => {
+                    koru_editor::clipboard::put_system_text(&crate::welcome::mcp_command());
+                }
                 WelcomeWant::LinkDevice => {
                     self.open_link_device();
                 }
@@ -7897,6 +7918,9 @@ impl MainView {
                 // The tab Settings → AI's *Providers and models* row opens.
                 WelcomeWant::AiSetup => {
                     self.perform_settings_request(koru_settings_ui::Request::OpenAiSetup);
+                }
+                WelcomeWant::Agents => {
+                    self.open_agents_menu();
                 }
             }
         }
@@ -7943,18 +7967,15 @@ impl MainView {
 
     /// **This device's telemetry answer, followed on the maintenance pass.**
     ///
-    /// Two jobs, both reading the shell's one reading of the record
-    /// (`koru_workspace_host::telemetry_consent`), which a worker thread keeps
-    /// current — nothing here touches a socket:
+    /// Every Settings tab's *Share anonymous usage data* switch shows what the
+    /// shell's one reading of the record says
+    /// (`koru_workspace_host::telemetry_consent`, which a worker thread keeps
+    /// current — nothing here touches a socket), including after a write that
+    /// did not land.
     ///
-    /// - Every Settings tab's *Share anonymous usage data* switch shows what
-    ///   the record says, including after a write that did not land.
-    /// - **The question**, when the record holds no answer: a fresh install
-    ///   reaching its first window, or an upgrade from the old default, which
-    ///   is not evidence of consent and is asked again (the opt-in contract of
-    ///   2026-10-11). Once per process, and only when no other question is
-    ///   up. A `Confirm::asking` like the voice step, so Enter is the safe
-    ///   answer and a keystroke already under way cannot say yes.
+    /// **Nothing asks.** A device with no answer shares nothing, and the
+    /// switch is where somebody opts in; the question that used to come up
+    /// after Welcome on a first start is gone (maintainers, 2026-10-19).
     fn maintain_telemetry_consent(&mut self) -> bool {
         use koru_workspace_host::telemetry_consent;
         let reading = telemetry_consent::current().toggle();
@@ -7966,32 +7987,7 @@ impl MainView {
                 }
             }
         }
-        // Another question on the screen is the one somebody is reading; the
-        // claim waits for it rather than being spent on a dialog not shown.
-        if self.confirm.is_none() && telemetry_consent::claim_question() {
-            changed |= self.ask_telemetry_consent();
-        }
         changed
-    }
-
-    /// Put the telemetry question up, unless another question is up already.
-    fn ask_telemetry_consent(&mut self) -> bool {
-        if self.confirm.is_some() {
-            return false;
-        }
-        let lang = crate::format::lang();
-        // The maintainers' copy (2026-10-15): what is sent, then why to say
-        // yes, as two paragraphs the wrapped body keeps apart.
-        self.confirm = Some((
-            koru_ui::Confirm::asking(
-                koru_i18n::t(lang, koru_i18n::Key::TelemetryConsentTitle),
-                koru_i18n::t(lang, koru_i18n::Key::TelemetryConsentBody),
-                koru_i18n::t(lang, koru_i18n::Key::TelemetryConsentAccept),
-                koru_i18n::t(lang, koru_i18n::Key::TelemetryConsentDecline),
-            ),
-            ConfirmSubject::TelemetryConsent,
-        ));
-        true
     }
 
     /// Take whatever the feedback outbox finished with.

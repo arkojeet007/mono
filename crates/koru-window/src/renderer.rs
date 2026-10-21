@@ -228,6 +228,14 @@ pub struct Warmup(Option<std::thread::JoinHandle<Warmed>>);
 
 impl Warmup {
     pub fn start() -> Self {
+        // The same A/B switch koru.exe reads. With it set nothing is made until
+        // the first window asks, and an Agent that never opens one never pays.
+        // CI sets it: a runner has no GPU, and every Agent a test starts would
+        // otherwise compile vello's pipelines on the software rasterizer — over
+        // ten seconds of every core, while the test waits on a 10 s start.
+        if koru_env::switch(koru_env::name::KORU_NO_GPU_WARMUP) {
+            return Self(None);
+        }
         Self(
             std::thread::Builder::new()
                 .name("koru-gpu-warmup".into())

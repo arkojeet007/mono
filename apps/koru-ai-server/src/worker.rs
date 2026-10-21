@@ -1125,6 +1125,8 @@ struct StreamState {
 
 struct WorkerState {
     repository: Repository,
+    /// The worker's stop flag, the one the pools' threads watch too.
+    shutdown: Arc<AtomicBool>,
     provider_runtime: Option<ProviderRuntime>,
     context_pool: ContextPool,
     export_pool: ExportPool,
@@ -1292,6 +1294,7 @@ fn run_worker(
 
     let mut state = WorkerState {
         repository,
+        shutdown: Arc::clone(&shutdown),
         provider_runtime: config.provider_runtime,
         context_pool,
         export_pool,
@@ -3404,6 +3407,17 @@ impl WorkerState {
 
     fn handle_provider_event(&mut self, mut event: AiEvent) {
         let attempt_id = event.attempt_id();
+        // Once the worker is stopping, every pool refuses new work — their
+        // threads watch the same flag — while this loop may still be finishing
+        // the envelope it took before the flag was set. A failure here is the
+        // stop, not the provider: leave the attempt to the shutdown pass, which
+        // records it Cancelled, rather than calling it a provider failure.
+        if matches!(event, AiEvent::Failed { .. })
+            && self.shutdown.load(Ordering::Acquire)
+            && self.cancellations.contains_key(&attempt_id)
+        {
+            return;
+        }
         let Ok(Some(before)) = self.repository.attempt(attempt_id) else {
             return;
         };

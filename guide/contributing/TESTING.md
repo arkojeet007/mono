@@ -374,6 +374,33 @@ it. See [product feature flags](FEATURE-FLAGS.md).
 
 ---
 
+## A test that passes here and fails on CI
+
+CI's Windows runner has four vCPUs and no GPU. A workstation has many cores and
+a GPU, so a test that needs something to still be running 160 ms later, or a
+child process to answer within 5 s, never misses here and misses there — and
+`cargo test --workspace` stops at the first failing binary, so one such test
+hides every binary after it.
+
+`scripts/dev/ci-like.ps1` runs the suite the way the runner sees it: every test
+process pinned to four logical cores (the Agents, workers and fixtures it starts
+inherit that), `KORU_NO_GPU_WARMUP=1` as `ci.yml` sets it, each binary from its
+package directory, a few rounds each. It reports which tests failed and how
+often, and keeps only the failing runs' output.
+
+```powershell
+scripts/dev/ci-like.ps1                                   # the workspace
+scripts/dev/ci-like.ps1 -Package koru-ai-server -Rounds 20
+scripts/dev/ci-like.ps1 -Package koru-agent -Target '^sessions_ipc$'
+```
+
+Use it before pushing a change to anything timed, and to prove a fix for a test
+that only failed on CI: the failure should reproduce under it first, then stop.
+A fix that only lengthens a deadline is the last resort — what the test waits
+for is usually the thing to change.
+
+---
+
 ## Process-global state under test
 
 The release-note generator's stdin test starts a local shell that reads through

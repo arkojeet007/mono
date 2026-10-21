@@ -289,6 +289,43 @@ fn a_parent_death_by_eof_stops_the_worker_cleanly_while_it_waits_for_its_peers()
 struct Agent {
     child: std::process::Child,
     root: tempfile::TempDir,
+    // Last, so the slot is given back only once the stack has stopped and
+    // its root is gone.
+    _slot: StackSlot,
+}
+
+/// How many whole stacks this binary runs at once: half the machine.
+///
+/// Each one is an Agent, a store, a gateway, an AI worker, a delegate worker,
+/// a session host and a PowerShell fixture, and they all start at the same
+/// moment. Four of them on CI's four vCPUs starved each other forty-fold —
+/// a fixture that answers `initialize` in 0.2 s here had not read its first
+/// line after 7.6 s there — and the provider's 10 s request limit failed
+/// four runs as `SessionCreation`. A workstation keeps its parallelism.
+struct StackSlot;
+
+static STACKS: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+impl StackSlot {
+    fn acquire() -> Self {
+        let limit = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1));
+        let (running, freed) = &STACKS;
+        let mut running = running.lock().unwrap_or_else(|held| held.into_inner());
+        while *running >= limit {
+            running = freed.wait(running).unwrap_or_else(|held| held.into_inner());
+        }
+        *running += 1;
+        Self
+    }
+}
+
+impl Drop for StackSlot {
+    fn drop(&mut self) {
+        let (running, freed) = &STACKS;
+        *running.lock().unwrap_or_else(|held| held.into_inner()) -= 1;
+        freed.notify_one();
+    }
 }
 
 impl Agent {
@@ -387,8 +424,9 @@ impl Agent {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
+        let _slot = StackSlot::acquire();
         let child = command.spawn().expect("the agent starts");
-        let agent = Self { child, root };
+        let agent = Self { child, root, _slot };
         let endpoint = agent.endpoint();
         wait_until("the agent to accept", Duration::from_secs(30), || {
             koru_ipc::connect(&endpoint).is_ok()
@@ -477,6 +515,13 @@ impl Agent {
                     eprintln!("{line}");
                 }
             }
+            // What the provider itself saw, with the fixture's clock lines:
+            // a start that times out says here whether PowerShell was slow
+            // to run or the request was slow to arrive.
+            let trace = std::fs::read_to_string(self.root().join("codex-fixture.trace"))
+                .unwrap_or_else(|_| "(the fixture was never invoked)".into());
+            eprintln!("---- codex-fixture.trace ----");
+            eprintln!("{trace}");
             std::panic::resume_unwind(panic);
         }
     }

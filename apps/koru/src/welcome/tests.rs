@@ -72,21 +72,16 @@ fn key(view: &mut WelcomeView, named: NamedKey, mods: ModifiersState) -> bool {
 fn only_rows_with_an_action_tick_and_only_checklist_rows_count() {
     let view = page();
     assert_eq!(view.progress_of(Section::FirstMinutes), (0, 6));
-    assert_eq!(view.progress_of(Section::Further), (0, 1));
+    assert_eq!(view.progress_of(Section::Further), (0, 3));
     assert_eq!(
         view.progress_of(Section::Devices),
         (0, 0),
         "devices have no count"
     );
-    for inert in [
-        RowId::TaskList,
-        RowId::Watch,
-        RowId::Mcp,
-        RowId::TerminalAgent,
-        RowId::OwnApps,
-    ] {
+    for inert in [RowId::TaskList, RowId::Watch, RowId::OwnApps] {
         assert!(!inert.ticks() && !inert.counted(), "{inert:?}");
     }
+    assert!(RowId::Mcp.ticks() && RowId::Mcp.counted());
     for device in [RowId::Phone, RowId::Computer] {
         assert!(device.ticks() && !device.counted(), "{device:?}");
     }
@@ -101,7 +96,9 @@ fn only_rows_with_an_action_tick_and_only_checklist_rows_count() {
             "feedback",
             "phone",
             "computer",
-            "ai"
+            "ai",
+            "mcp",
+            "terminal-agent"
         ]
     );
 }
@@ -156,7 +153,7 @@ fn the_header_counts_and_a_finished_checklist_folds_until_shown() {
         "showing and hiding asks for nothing"
     );
 
-    view.set_done(["ai"]);
+    view.set_done(["ai", "mcp", "terminal-agent"]);
     let further = &laid(&mut view).sections[2];
     assert!(further.folded.is_some());
     assert_eq!(Section::Further.done_line(), FURTHER_DONE);
@@ -167,7 +164,7 @@ fn the_header_counts_and_a_finished_checklist_folds_until_shown() {
 #[test]
 fn every_action_raises_its_existing_command_and_ticks_its_row() {
     let _hints = guide();
-    let cases: [(Target, Option<WelcomeWant>, Option<RowId>); 13] = [
+    let cases: [(Target, Option<WelcomeWant>, Option<RowId>); 14] = [
         (Target::Customize, Some(WelcomeWant::Settings), None),
         (
             Target::Row(RowId::FirstDocument),
@@ -202,11 +199,6 @@ fn every_action_raises_its_existing_command_and_ticks_its_row() {
             Some(RowId::Feedback),
         ),
         (
-            Target::Row(RowId::Phone),
-            Some(WelcomeWant::LinkDevice),
-            Some(RowId::Phone),
-        ),
-        (
             Target::Row(RowId::Computer),
             Some(WelcomeWant::LinkDevice),
             Some(RowId::Computer),
@@ -216,6 +208,16 @@ fn every_action_raises_its_existing_command_and_ticks_its_row() {
             Target::Row(RowId::Ai),
             Some(WelcomeWant::AiSetup),
             Some(RowId::Ai),
+        ),
+        (
+            Target::CopyMcp,
+            Some(WelcomeWant::CopyMcpCommand),
+            Some(RowId::Mcp),
+        ),
+        (
+            Target::Row(RowId::TerminalAgent),
+            Some(WelcomeWant::Agents),
+            Some(RowId::TerminalAgent),
         ),
     ];
     for (target, want, tick) in cases {
@@ -271,14 +273,11 @@ fn rows_with_nothing_behind_them_do_nothing() {
     let mut view = page();
     for row in [
         RowId::TaskList,
-        RowId::Watch,
-        RowId::Mcp,
-        RowId::TerminalAgent,
-        RowId::OwnApps,
         // These rows act only through their links, chips and buttons.
         RowId::Documents,
         RowId::Files,
         RowId::Feedback,
+        RowId::Mcp,
     ] {
         let rect = row_rect(&mut view, row);
         // The left edge of the row: no link, chip or button lives there.
@@ -293,16 +292,92 @@ fn rows_with_nothing_behind_them_do_nothing() {
     assert!(view.take_newly_done().is_empty());
 }
 
+/// *Phone*, *Watch* and *Write your own apps* are hidden for now, and the
+/// feedback sentence offers the form and email only.
 #[test]
-fn chat_is_visible_but_inert_until_the_webview_lands() {
+fn the_hidden_rows_and_chat_are_not_on_the_page() {
     let mut view = page();
-    let chat = rect_of(&mut view, Target::Chat);
-    assert!(
-        press(&mut view, chat),
-        "it does not fall through to the row"
+    let drawn: Vec<RowId> = laid(&mut view)
+        .sections
+        .iter()
+        .flat_map(|s| s.rows.iter().map(|r| r.id))
+        .collect();
+    for hidden in [RowId::Phone, RowId::Watch, RowId::OwnApps] {
+        assert!(!drawn.contains(&hidden), "{hidden:?} is drawn");
+    }
+    assert_eq!(Section::Devices.rows(), [RowId::Computer]);
+    let feedback: String = laid(&mut view)
+        .sections
+        .iter()
+        .flat_map(|s| s.rows.iter())
+        .find(|r| r.id == RowId::Feedback)
+        .expect("drawn")
+        .sentence
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(!feedback.contains("chat"), "{feedback}");
+    assert!(feedback.contains("feedback form") && feedback.contains("email"));
+}
+
+/// **The MCP command**: the bridge beside this executable, `serve --stdio`,
+/// shown on the row and copied whole by its chip and by *Copy*.
+#[test]
+fn the_mcp_row_shows_the_command_and_copies_it() {
+    let mut view = page();
+    let (shown, _) = laid(&mut view)
+        .sections
+        .iter()
+        .flat_map(|s| s.rows.iter())
+        .find(|r| r.id == RowId::Mcp)
+        .and_then(|r| r.code.clone())
+        .expect("the command is drawn");
+    assert!(shown.ends_with("serve --stdio"), "{shown}");
+    assert_eq!(view.mcp_command, mcp::command());
+    let copy_targets = laid(&mut view)
+        .hits
+        .iter()
+        .filter(|(t, _)| *t == Target::CopyMcp)
+        .count();
+    assert_eq!(copy_targets, 2, "the chip and the button");
+}
+
+#[test]
+fn the_mcp_command_quotes_paths_with_spaces_and_carries_the_root() {
+    use std::path::Path;
+    assert_eq!(
+        mcp::command_line(Path::new("/opt/koru/koru-mcp"), None),
+        "/opt/koru/koru-mcp serve --stdio"
     );
-    assert!(view.take_wants().is_empty());
-    assert!(view.take_newly_done().is_empty());
+    assert_eq!(
+        mcp::command_line(
+            Path::new(r"C:\Program Files\Koru\koru-mcp.exe"),
+            Some(Path::new(r"D:\dev data")),
+        ),
+        r#""C:\Program Files\Koru\koru-mcp.exe" serve --stdio --root "D:\dev data""#
+    );
+}
+
+#[test]
+fn a_long_command_is_shortened_in_the_middle_to_fit() {
+    let mut engine = TextEngine::new();
+    let long = format!(
+        "{}koru-mcp.exe serve --stdio",
+        r"C:\Users\someone\AppData\Local\Programs\Koru\".repeat(4)
+    );
+    let max = layout::key_w(&mut engine, "koru-mcp.exe serve --stdio") + 120.0;
+    let shown = layout::elide_middle(&mut engine, &long, max);
+    assert!(layout::key_w(&mut engine, &shown) <= max);
+    assert!(
+        shown.contains('\u{2026}') && shown.ends_with("--stdio"),
+        "{shown}"
+    );
+    assert_eq!(
+        layout::elide_middle(&mut engine, "koru-mcp serve --stdio", 10_000.0),
+        "koru-mcp serve --stdio",
+        "what fits is left alone"
+    );
 }
 
 #[test]
@@ -383,10 +458,6 @@ fn tab_walks_the_actions_in_page_order_and_enter_presses_the_focused_one() {
     assert_eq!(view.take_wants(), [WelcomeWant::VoiceSettings]);
 
     let order = view.focus_order();
-    assert!(
-        !order.contains(&Target::Chat),
-        "an inert link is never focused"
-    );
     assert!(order.contains(&Target::Email) && order.contains(&Target::PairQr));
     assert!(key(&mut view, NamedKey::Tab, ModifiersState::SHIFT));
     assert!(key(&mut view, NamedKey::Tab, ModifiersState::SHIFT));
@@ -512,7 +583,12 @@ fn the_inspector_shows_one_named_tree_with_no_loose_primitives() {
     assert_eq!(count("Welcome pair QR"), 1);
     assert_eq!(count("KoruLogo"), 0, "no header, so no mark");
     assert_eq!(count("KoruTextTitle"), 0, "no header, so no greeting");
-    assert_eq!(count("Welcome row"), 14, "every row of all three sections");
+    assert_eq!(
+        count("Welcome row"),
+        11,
+        "every row of all three sections but the three hidden for now"
+    );
+    assert_eq!(count("Welcome command"), 1, "the MCP command");
     // Every row sits inside a section, and every section inside the page.
     for (i, record) in snapshot.records.iter().enumerate() {
         if record.name == "Welcome row" {
@@ -568,22 +644,23 @@ fn the_embedded_logo_is_square() {
 
 // ------------------------------------------------- shortcuts from the registry
 
-/// **Where a person finds out dictation exists**, and the chord is the
-/// registry's rather than a string written here.
+/// The dictation chord is hidden for now; the other chords are the
+/// registry's rather than strings written here.
 #[test]
-fn the_shortcut_lines_teach_the_dictation_chord_from_the_registry() {
+fn the_shortcut_lines_leave_dictation_out_and_come_from_the_registry() {
     let _hints = guide();
-    let dictate = hints::hint_lines()
-        .into_iter()
-        .find(|(_, what)| *what == "dictate into anything");
-    if !koru_dictation::available() {
-        assert!(dictate.is_none());
-        return;
-    }
-    let (chord, _) = dictate.expect("the Welcome page offers dictation");
+    let lines = hints::hint_lines();
+    assert!(
+        lines.iter().all(|(_, what)| !what.contains("dictate")),
+        "{lines:?}"
+    );
+    let (chord, _) = lines
+        .iter()
+        .find(|(_, what)| *what == "new tab")
+        .expect("the Welcome page teaches a new tab");
     assert_eq!(
         chord,
-        koru_keys::registry::label_of(koru_keys::ShortcutId::Dictate),
+        &koru_keys::registry::label_of(koru_keys::ShortcutId::NewTab),
         "the chord was written out rather than looked up"
     );
 }
@@ -638,8 +715,8 @@ fn a_published_build_shows_its_release_time_in_local_time() {
 }
 
 /// **The simplified product's Welcome** (koru-features all off): no *Task
-/// list*, *Reminder* or *Koru AI* row, and *Further* — left with nothing to
-/// count — shows no *0 of 0*. The inert rows stay drawn.
+/// list*, *Reminder*, *Koru AI* or agent row; *Further* still counts its MCP
+/// row.
 #[test]
 fn hidden_surfaces_rows_leave_the_page() {
     use super::rows::{RowId, Section};
@@ -651,10 +728,10 @@ fn hidden_surfaces_rows_leave_the_page() {
         let further = Section::Further.rows();
         assert_eq!(
             further,
-            [RowId::Mcp, RowId::TerminalAgent, RowId::OwnApps],
-            "the inert rows stay as they were"
+            [RowId::Mcp],
+            "the row that does not hang on a hidden surface stays"
         );
-        assert!(!Section::Further.counts());
+        assert!(Section::Further.counts());
         assert!(Section::FirstMinutes.counts());
     });
     assert!(Section::Further.rows().contains(&RowId::Ai));

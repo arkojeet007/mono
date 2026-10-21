@@ -178,6 +178,8 @@ pub struct Sweeps(Arc<SweepSignal>);
 struct SweepSignal {
     state: Mutex<SweepState>,
     requested: Condvar,
+    /// Set only by [`Sweeps::answering_for_test`].
+    answering: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -194,6 +196,10 @@ impl Sweeps {
     pub fn request(&self, workspace: WorkspaceId) -> u64 {
         let mut state = self.lock();
         let ticket = next_ticket(&mut state, workspace);
+        if self.0.answering.load(std::sync::atomic::Ordering::Acquire) {
+            state.finished.insert(workspace, ticket);
+            return ticket;
+        }
         state.requested.insert(workspace, ticket);
         drop(state);
         // A query never waits for this generation — it reports the workspace
@@ -244,6 +250,24 @@ impl Sweeps {
     pub fn record_for_test(&self, workspace: WorkspaceId) {
         let ticket = self.issue(workspace);
         self.record(workspace, ticket);
+    }
+
+    /// Sweeps whose every request is finished as it is issued: the state of a
+    /// projector that has caught up, for a consumer's tests to read through.
+    ///
+    /// A query requests its sweep and reads the completion in one call, with
+    /// no wait between (a query never waits for a sweep). A test thread that
+    /// completes the request with [`Self::take_request_and_record_for_test`]
+    /// therefore has to be scheduled inside that gap, and on a loaded runner
+    /// it is not; this makes "the sweep finished" a fact instead of a race.
+    #[doc(hidden)]
+    pub fn answering_for_test() -> Self {
+        let sweeps = Self::default();
+        sweeps
+            .0
+            .answering
+            .store(true, std::sync::atomic::Ordering::Release);
+        sweeps
     }
 
     /// Atomically observe the exact queued request a test is waiting for and

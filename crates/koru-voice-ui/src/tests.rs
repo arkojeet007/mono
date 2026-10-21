@@ -44,6 +44,12 @@ impl Gpu {
             force_fallback_adapter: false,
         }))
         .ok()?;
+        // A software rasterizer is not a GPU for these proofs: vello's work
+        // crashes WARP, the only adapter on a CI runner, with an access
+        // violation. See `crates/koru-session-view/tests/raster.rs`.
+        if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+            return None;
+        }
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("koru-voice-ui-raster"),
             required_features: wgpu::Features::empty(),
@@ -538,7 +544,7 @@ fn every_required_state_language_and_scale_builds_a_nonempty_scene() {
 #[test]
 fn representative_languages_states_and_fractional_scales_reach_real_pixels() {
     let Some(mut gpu) = Gpu::open() else {
-        eprintln!("no wgpu adapter here: Voice raster proof did not run");
+        eprintln!("no hardware wgpu adapter here: Voice raster proof did not run");
         return;
     };
     let mut cases = Vec::new();
@@ -620,7 +626,7 @@ fn picker_and_no_shortcut_are_explicit_render_states() {
 #[test]
 fn hud_states_reach_distinct_real_pixels() {
     let Some(mut gpu) = Gpu::open() else {
-        eprintln!("no wgpu adapter here: HUD raster proof did not run");
+        eprintln!("no hardware wgpu adapter here: HUD raster proof did not run");
         return;
     };
     let mut signatures = std::collections::HashSet::new();
