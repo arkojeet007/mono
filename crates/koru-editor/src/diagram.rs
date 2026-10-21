@@ -37,6 +37,7 @@
 //! [`Editing::diagram_result`]: crate::Editing::diagram_result
 //! [`ViewState::diagrams`]: crate::ViewState::diagrams
 
+use std::collections::HashMap;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -254,6 +255,10 @@ impl DiagramRowState {
 /// text closes when its row no longer holds the focus (a click elsewhere, a
 /// deleted block).
 pub(crate) fn sync(body: &mut Body, view: &mut ViewState) {
+    // The startup table's one row about diagrams, with the counts as its
+    // note. Nothing when the switch is off, and nothing for a document with
+    // no diagram, which is most of them.
+    let span = koru_core::timing::Span::start("diagrams");
     if let Some(open) = view.diagram_text_open
         && body.focused().map(|row| row.id) != Some(open)
     {
@@ -310,6 +315,28 @@ pub(crate) fn sync(body: &mut Body, view: &mut ViewState) {
     if view.diagrams.len() != seen.len() {
         view.diagrams.retain(|id, _| seen.contains(id));
     }
+    if !seen.is_empty() {
+        span.stop_with(|| startup_note(&view.diagrams));
+    }
+}
+
+/// The row `KORU_STARTUP_STATS` prints for a view's diagrams: how many rows,
+/// and how many of them are waiting, drawn and not drawn. **The host's cache
+/// hits are not here yet**: when the host reports how many answers came from
+/// its session cache rather than a layout, that number joins this note.
+pub(crate) fn startup_note(entries: &HashMap<NodeId, DiagramEntry>) -> String {
+    let (mut pending, mut drawn, mut failed) = (0usize, 0usize, 0usize);
+    for entry in entries.values() {
+        match entry.state {
+            DiagramState::Pending => pending += 1,
+            DiagramState::Drawn(_) => drawn += 1,
+            DiagramState::Failed(_) => failed += 1,
+        }
+    }
+    format!(
+        "{} rows, {pending} pending, {drawn} drawn, {failed} failed",
+        entries.len()
+    )
 }
 
 /// Land the host's answer for `node`'s text `text_hash` on the view's entry.

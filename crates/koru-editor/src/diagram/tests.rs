@@ -970,3 +970,26 @@ fn every_language_narrates_every_state() {
         }
     }
 }
+
+// ----------------------------------------------------------- the startup row
+
+/// The note the startup table prints beside its `diagrams` row: the view's
+/// entries, counted by state. Nothing about the switch itself is testable
+/// here — it is read from the environment once per process.
+#[test]
+fn the_startup_row_counts_the_views_diagrams_by_state() {
+    assert_eq!(
+        startup_note(&HashMap::new()),
+        "0 rows, 0 pending, 0 drawn, 0 failed"
+    );
+    let (_ws, mut e, node) = diagram_doc(TEXT);
+    assert_eq!(
+        startup_note(&e.view.diagrams),
+        "1 rows, 1 pending, 0 drawn, 0 failed"
+    );
+    assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(100.0, 50.0))));
+    assert_eq!(
+        startup_note(&e.view.diagrams),
+        "1 rows, 0 pending, 1 drawn, 0 failed"
+    );
+}

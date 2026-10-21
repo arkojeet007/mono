@@ -967,10 +967,128 @@ fn paint_diagram(
     drawing: rowlayout::DrawingBox,
     oy: f32,
 ) {
+    // The same stall guard the host puts around `editor.reflow`: a slow paint
+    // shows up in `KORU_JANK` like a slow reflow would, and costs a load of a
+    // flag when the switch is off.
+    let _watch = koru_core::timing::Watch::start("diagram.paint");
     let transform = root
         * Affine::translate((drawing.x as f64, (oy + drawing.y) as f64))
         * Affine::scale(drawing.scale as f64);
     koru_draw::diagram::paint(prepared, theme::p(), transform, drawing.scale as f64, scene);
+}
+
+/// What the F12 inspector sees on a diagram row, recorded inside the block's
+/// scope and nowhere else — so it costs nothing while the inspector is closed,
+/// because `inspect::scope` never evaluates its closure then.
+///
+/// Which of the three states the block is in; the status behind a failure,
+/// which is **the one place the engine's English `message` and `code` are
+/// shown** — an inspector reads them, a page never does; whether the drawing
+/// is the current text's or the last one that worked; whether the text is
+/// open; and the engine's process-wide counters, so a slow or refused layout
+/// can be seen from the row it happened on.
+fn diagram_inspection(
+    record: &mut koru_draw::inspect::Record,
+    implementation: &'static str,
+    state: &crate::diagram::DiagramRowState,
+) {
+    record.property(
+        "implementation",
+        implementation,
+        "diagram block renderer; not an approved Koru component",
+    );
+    let phase = if state.pending {
+        "pending"
+    } else if state.reason.is_some() || state.empty {
+        "failed"
+    } else if state.drawing.is_some() {
+        "drawn"
+    } else {
+        "failed"
+    };
+    record.property(
+        "state",
+        phase,
+        "koru_editor::diagram::DiagramRowState, mirrored from the view's entry",
+    );
+    if let Some(status) = &state.reason {
+        record.property(
+            "status",
+            diagram_status_text(status),
+            "koru_diagram::Status; the engine's English message and code, shown here only",
+        );
+    } else if state.empty {
+        record.property(
+            "status",
+            "empty",
+            "koru_diagram::Status; the text is empty or whitespace",
+        );
+    }
+    record.property(
+        "text",
+        if state.open { "open" } else { "closed" },
+        "ViewState::diagram_text_open; a reading position, per view",
+    );
+    record.property(
+        "drawing",
+        match (&state.drawing, state.last_good) {
+            (None, _) => "none",
+            (Some(_), true) => "last good",
+            (Some(_), false) => "current text",
+        },
+        "DiagramRowState::drawing; the last good drawing shows only under the open text",
+    );
+    let counters = koru_diagram::Counters::snapshot();
+    record.property(
+        "inspections",
+        format!(
+            "{} (draws {}, not parsed {}, kind not drawn {}, too large {}, empty {})",
+            counters.inspections,
+            counters.draws,
+            counters.not_parsed,
+            counters.kind_not_drawn,
+            counters.too_large,
+            counters.empty
+        ),
+        "koru_diagram::Counters::snapshot(); process-wide since launch",
+    );
+    record.property(
+        "layouts",
+        format!(
+            "{} (cancelled {}, timed out {}, failed {})",
+            counters.layouts,
+            counters.layout_cancelled,
+            counters.layout_timed_out,
+            counters.layout_failed
+        ),
+        "koru_diagram::Counters::snapshot(); process-wide since launch",
+    );
+    record.property(
+        "layout ms",
+        format!(
+            "last {}, max {}",
+            counters.layout_ms_last, counters.layout_ms_max
+        ),
+        "koru_diagram::Counters::snapshot(); wall time of a layout, whatever it answered",
+    );
+}
+
+/// A status as the inspector shows it: the engine's English message and
+/// code for a text it could not read, the kind or the count otherwise.
+fn diagram_status_text(status: &koru_diagram::Status) -> String {
+    use koru_diagram::Status;
+    match status {
+        Status::Draws(_) => "draws".to_owned(),
+        Status::NotParsed {
+            line,
+            message,
+            code,
+        } => format!("not parsed: line {line}: {message} ({code})"),
+        Status::KindNotDrawn { kind: Some(kind) } => format!("kind not drawn: {kind}"),
+        Status::KindNotDrawn { kind: None } => "kind not drawn: no diagram keyword".to_owned(),
+        Status::TooLarge { kind, count } => format!("too large: {kind:?}, {count}"),
+        Status::Empty => "empty".to_owned(),
+    }
 }
 
 /// A closed diagram's picture: the drawing scaled to the column, or nothing
@@ -987,18 +1105,24 @@ fn draw_diagram_picture(
     selected: bool,
 ) {
     let layout = rowlayout::diagram_layout(row, state, row.height, vw);
-    let ring = match (&state.drawing, layout.drawing) {
-        (Some(prepared), Some(drawing)) => {
-            paint_diagram(scene, root, prepared, drawing, oy);
-            rect(drawing.x, oy + drawing.y, drawing.w, drawing.h)
-        }
-        _ => rect(
+    let ring = match layout.drawing {
+        Some(drawing) => rect(drawing.x, oy + drawing.y, drawing.w, drawing.h),
+        None => rect(
             row.text_x(),
             oy,
             rowlayout::diagram_column_width(row, vw),
             row.height,
         ),
     };
+    // The block's own record, which the painter's *Diagram* record nests
+    // under when there is a drawing to paint.
+    let _inspection =
+        koru_draw::inspect::scope("Diagram block", "unregistered", root, ring, |record| {
+            diagram_inspection(record, "koru_editor::draw::draw_diagram_picture", state);
+        });
+    if let (Some(prepared), Some(drawing)) = (&state.drawing, layout.drawing) {
+        paint_diagram(scene, root, prepared, drawing, oy);
+    }
     if selected {
         stroke(scene, root, theme::p().focus_ring, 2.0, &ring);
     }
@@ -1025,6 +1149,22 @@ fn draw_diagram_under_text(
     vw: f32,
 ) {
     let lang = koru_i18n::current();
+    let layout = rowlayout::diagram_layout(row, state, row.layout.height(), vw);
+    // The block's record spans the text and everything drawn under it.
+    let _inspection = koru_draw::inspect::scope(
+        "Diagram block",
+        "unregistered",
+        root,
+        rect(
+            ox,
+            oy,
+            rowlayout::diagram_column_width(row, vw),
+            layout.height,
+        ),
+        |record| {
+            diagram_inspection(record, "koru_editor::draw::draw_diagram_under_text", state);
+        },
+    );
     if state.empty && row.text.is_empty() {
         let hint = engine.placeholder_layout(
             koru_i18n::t(lang, koru_i18n::Key::DiagramEmptyHint),
@@ -1034,7 +1174,6 @@ fn draw_diagram_under_text(
         );
         draw_layout(scene, root, &hint, ox, oy, Some(theme::p().placeholder));
     }
-    let layout = rowlayout::diagram_layout(row, state, row.layout.height(), vw);
     if let (Some(status), Some(y)) = (&state.reason, layout.reason_y)
         && let Some(text) = crate::diagram::reason_text(lang, status)
     {
@@ -2455,5 +2594,170 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ------------------------------------------------------------- diagrams
+
+    /// A `mermaid` row shaped for real, with `state` mirrored onto it the way
+    /// a frame's `diagram::sync` would.
+    fn diagram_row(engine: &mut TextEngine, state: crate::diagram::DiagramRowState) -> Paragraph {
+        let node = koru_core::Node::code("flowchart LR\n  A --> B").unwrap();
+        let mut row = Paragraph::from_node(&node, 0, Vec::new(), HashMap::new(), None, 0);
+        row.language = Some(crate::diagram::LANGUAGE.to_owned());
+        row.diagram = Some(state);
+        crate::rowlayout::build_row(engine, &mut row, 600.0);
+        // `build_row` shapes; `position_rows` is what gives a row its height,
+        // and the painter reads that for a placeholder's box.
+        row.height = row.layout.height().max(24.0);
+        row
+    }
+
+    fn property<'a>(record: &'a koru_draw::inspect::Record, name: &str) -> &'a str {
+        &record
+            .properties
+            .iter()
+            .find(|property| property.name == name)
+            .unwrap_or_else(|| panic!("the block records no {name:?}"))
+            .value
+    }
+
+    fn block(records: &[koru_draw::inspect::Record]) -> &koru_draw::inspect::Record {
+        records
+            .iter()
+            .find(|record| record.name == "Diagram block")
+            .expect("the diagram block is captured")
+    }
+
+    #[test]
+    fn the_inspector_sees_a_waiting_picture_and_the_engines_counters() {
+        let mut engine = TextEngine::new();
+        let row = diagram_row(
+            &mut engine,
+            crate::diagram::DiagramRowState {
+                open: false,
+                pending: true,
+                empty: false,
+                reason: None,
+                drawing: None,
+                last_good: false,
+                shown: 1,
+            },
+        );
+        let mut scene = Scene::new();
+        let root = Affine::IDENTITY;
+        let capture = koru_draw::inspect::Frame::begin(1, root, rect(0.0, 0.0, 600.0, 400.0));
+        draw_diagram_picture(
+            &mut scene,
+            root,
+            &row,
+            row.diagram.as_ref().unwrap(),
+            600.0,
+            0.0,
+            true,
+        );
+        let records = capture.finish().records;
+        let block = block(&records);
+        assert_eq!(property(block, "state"), "pending");
+        assert_eq!(property(block, "text"), "closed");
+        assert_eq!(property(block, "drawing"), "none");
+        assert!(
+            block
+                .properties
+                .iter()
+                .all(|property| property.name != "status"),
+            "a waiting block has no status to show"
+        );
+        // The engine's process-wide totals, whatever they are by now.
+        assert!(property(block, "inspections").contains("(draws "));
+        assert!(property(block, "layouts").contains("(cancelled "));
+        assert!(property(block, "layout ms").starts_with("last "));
+        assert!(
+            block.rect().width() > 0.0 && block.rect().height() > 0.0,
+            "the record spans the placeholder: {:?}",
+            block.rect()
+        );
+    }
+
+    /// The one place the engine's English is shown: an inspector reads it,
+    /// a page never does.
+    #[test]
+    fn the_inspector_names_a_failure_in_the_engines_words() {
+        let mut engine = TextEngine::new();
+        let row = diagram_row(
+            &mut engine,
+            crate::diagram::DiagramRowState {
+                open: true,
+                pending: false,
+                empty: false,
+                reason: Some(koru_diagram::Status::NotParsed {
+                    line: 7,
+                    message: "unexpected token".into(),
+                    code: "merman.parse.diagram_parse".into(),
+                }),
+                drawing: None,
+                last_good: false,
+                shown: 2,
+            },
+        );
+        let mut scene = Scene::new();
+        let root = Affine::IDENTITY;
+        let capture = koru_draw::inspect::Frame::begin(1, root, rect(0.0, 0.0, 600.0, 400.0));
+        draw_diagram_under_text(
+            &mut scene,
+            root,
+            &row,
+            row.diagram.as_ref().unwrap(),
+            &mut engine,
+            0.0,
+            0.0,
+            600.0,
+        );
+        let records = capture.finish().records;
+        let block = block(&records);
+        assert_eq!(property(block, "state"), "failed");
+        assert_eq!(
+            property(block, "status"),
+            "not parsed: line 7: unexpected token (merman.parse.diagram_parse)"
+        );
+        assert_eq!(property(block, "text"), "open");
+        assert_eq!(property(block, "drawing"), "none");
+        // The reason line is drawn inside the block.
+        assert!(
+            records
+                .iter()
+                .any(|record| record.parent.is_some() && record.name == "text line"),
+            "the reason line is captured under the block"
+        );
+    }
+
+    /// With no inspector frame armed, the scope never evaluates its closure:
+    /// the state and the counters are not even formatted.
+    #[test]
+    fn nothing_is_recorded_about_a_diagram_while_the_inspector_is_closed() {
+        assert!(!koru_draw::inspect::enabled());
+        let mut engine = TextEngine::new();
+        let row = diagram_row(
+            &mut engine,
+            crate::diagram::DiagramRowState {
+                open: false,
+                pending: true,
+                empty: false,
+                reason: None,
+                drawing: None,
+                last_good: false,
+                shown: 3,
+            },
+        );
+        let mut scene = Scene::new();
+        draw_diagram_picture(
+            &mut scene,
+            Affine::IDENTITY,
+            &row,
+            row.diagram.as_ref().unwrap(),
+            600.0,
+            0.0,
+            false,
+        );
+        assert!(!koru_draw::inspect::enabled());
     }
 }
