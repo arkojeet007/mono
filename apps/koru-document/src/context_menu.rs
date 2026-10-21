@@ -875,7 +875,8 @@ fn full_rows(
         if diagram.drawn {
             rows.push(
                 menu::Row::item(koru_i18n::t(lang, koru_i18n::Key::MenuSaveAs))
-                    .with_icon(icons::FILE_ARROW_UP),
+                    .with_icon(icons::FILE_ARROW_UP)
+                    .with_shortcut(menu::Chord::Id(koru_keys::ShortcutId::SaveDiagramAs)),
             );
         }
     }

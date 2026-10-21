@@ -436,6 +436,13 @@ impl View for DocumentPane {
         View::take_wants_file_action(&mut self.doc)
     }
 
+    fn take_wants_save_diagram_as(
+        &mut self,
+        ws: &WorkspaceDoc,
+    ) -> Option<koru_workspace_host::SaveDiagram> {
+        View::take_wants_save_diagram_as(&mut self.doc, ws)
+    }
+
     fn take_wants_create_tag(&mut self) -> Option<(Vec<NodeId>, String)> {
         View::take_wants_create_tag(&mut self.doc)
     }
@@ -1858,6 +1865,16 @@ impl View for ManagerView {
         match self {
             Self::Container(v) => v.take_wants_file_action(),
             Self::Document(v) => v.take_wants_file_action(),
+        }
+    }
+
+    fn take_wants_save_diagram_as(
+        &mut self,
+        ws: &WorkspaceDoc,
+    ) -> Option<koru_workspace_host::SaveDiagram> {
+        match self {
+            Self::Container(v) => v.take_wants_save_diagram_as(ws),
+            Self::Document(v) => v.take_wants_save_diagram_as(ws),
         }
     }
 
