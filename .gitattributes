@@ -28,6 +28,9 @@
 *.swift text eol=lf
 *.proto text eol=lf
 *.sql   text eol=lf
+# Mermaid sources: the diagram tests compare their lines byte for byte, and a
+# CRLF checkout leaves a `\r` before every `\n` they look for.
+*.mmd   text eol=lf
 Dockerfile text eol=lf
 *.dockerignore text eol=lf
 
