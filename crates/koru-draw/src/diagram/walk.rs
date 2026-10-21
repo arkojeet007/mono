@@ -321,6 +321,24 @@ fn draw_sequence<S: Sink>(
             &Paint::stroke(palette.text_dim, dashed(LIFELINE_W, LIFELINE_DASH, scale)),
         );
     }
+    // The page shows through around a frame's title and its dividers'
+    // labels, so a lifeline never runs through the words — under the
+    // activation bars, which a patch must not notch.
+    for frame in &sequence.frames {
+        let labels = std::iter::once(&frame.title).chain(
+            frame
+                .sections
+                .iter()
+                .filter_map(|section| section.label.as_ref()),
+        );
+        for label in labels.filter(|label| !label.lines.is_empty()) {
+            sink.shape(
+                transform,
+                &label.rect.inflate(EDGE_LABEL_PAD, EDGE_LABEL_PAD),
+                &Paint::fill(palette.bg),
+            );
+        }
+    }
     for bar in &sequence.activations {
         sink.shape(
             transform,

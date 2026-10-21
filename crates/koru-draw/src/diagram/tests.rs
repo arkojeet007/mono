@@ -431,6 +431,32 @@ fn a_sequence_scene_paints_and_its_svg_dashes_the_lifelines() {
     );
 }
 
+/// A frame's title and its divider's label sit on page-colored patches, so
+/// a lifeline does not run through the words — and the patches go down
+/// before the activation bars, which they must not notch.
+#[test]
+fn frame_titles_sit_on_page_patches_under_the_activation_bars() {
+    // Dark, where the number's ink is not the page color: in light both are
+    // white, and the glyph would count as a patch.
+    assert_ne!(DARK.on_accent, DARK.bg);
+    let prepared = PreparedDiagram::new(sequence_scene());
+    let (document, _) = svg_counted(&prepared, &DARK);
+    let patch = format!(r#" fill="{}"/>"#, super::svg::hex(DARK.bg));
+    let paths: Vec<&str> = document
+        .lines()
+        .filter(|line| line.starts_with("<path"))
+        .collect();
+    let patches: Vec<usize> = (0..paths.len())
+        .filter(|&i| paths[i].ends_with(&patch))
+        .collect();
+    assert_eq!(patches.len(), 2, "the loop's title and its `else` label");
+    let bar = paths
+        .iter()
+        .position(|line| line.contains(r#"fill-opacity="0.25""#))
+        .expect("the activation bar");
+    assert!(patches.iter().all(|&i| i < bar), "{patches:?} before {bar}");
+}
+
 /// The keyword on a frame's tag has to be legible against the tag: of the
 /// three candidates, the one with the most contrast on `panel_border`.
 #[test]
