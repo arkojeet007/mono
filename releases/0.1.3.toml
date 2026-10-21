@@ -1,0 +1,37 @@
+title = "A tidier Welcome page, with MCP and agents one click away"
+
+summary = [
+  "Welcome shows the command that connects an MCP client to Koru, and copies it in one click.",
+  "Run an agent in a terminal now opens the list of coding agents and starts the one you pick in a tab.",
+  "Rows for things that are not ready yet are hidden from Welcome.",
+  "Koru no longer asks about usage data on first start; it stays off unless you turn it on in Settings.",
+]
+
+body = """
+## Welcome
+
+*Manage documents over MCP* now shows the command an MCP client runs to
+reach this installation of Koru: the `koru-mcp` program installed beside
+Koru, with `serve --stdio`. **Copy**, or clicking the command, puts it on the
+clipboard, ready to paste into the client's settings.
+
+*Run an agent in a terminal* opens the same list of coding agents as the `+`
+menu. Choosing one starts it in a new tab.
+
+Rows and links with nothing ready behind them are hidden for now: the
+dictation shortcut under *Learn your way around*, the chat link under *Let
+us know how it went*, the *Phone* and *Watch* rows, and *Write your own
+apps*.
+
+## Usage data
+
+Koru no longer asks whether to share anonymous usage data the first time it
+opens. Nothing is shared unless you turn on **Settings → System → Privacy →
+Share anonymous usage data**.
+
+## macOS
+
+Opening Koru from the disk image while an older copy sits in Applications no
+longer offers to open that older copy. It names both versions and asks you
+to replace the installed one.
+"""
