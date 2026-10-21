@@ -74,12 +74,19 @@ fn errors_say_what_happened() {
 
 /// The flowchart showcase at 2×: the pixels come back at twice the natural
 /// size and are not all the background — something was drawn. Skips, saying
-/// so, on a machine with no adapter.
+/// so, on a machine with no adapter or only a software one.
 #[test]
 fn the_flowchart_showcase_rasters_at_two_x() {
     let mut context = crate::renderer::context_with(crate::renderer::default_backends());
-    if pollster::block_on(context.device(None)).is_none() {
+    let Some(device_id) = pollster::block_on(context.device(None)) else {
         eprintln!("skipping: no GPU adapter in this process");
+        return;
+    };
+    // A software rasterizer is not a GPU for this proof: vello's work
+    // crashes WARP, the only adapter on a CI runner, with an access
+    // violation. See `crates/koru-session-view/tests/raster.rs`.
+    if context.devices[device_id].adapter().get_info().device_type == wgpu::DeviceType::Cpu {
+        eprintln!("skipping: the only adapter is a software rasterizer");
         return;
     }
     let measure: Arc<dyn TextMeasure> = Arc::new(InterMeasure);
