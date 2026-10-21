@@ -21,7 +21,7 @@ use koru_diagram::{
 };
 use kurbo::{
     Affine, BezPath, Cap, Circle, Join, Line, ParamCurve, ParamCurveDeriv, PathSeg, Point, Rect,
-    Shape, Stroke, Vec2,
+    RoundedRect, Shape, Stroke, Vec2,
 };
 use parley::Layout;
 use peniko::{Color, Fill};
@@ -32,7 +32,7 @@ use super::{
     ACTOR_MIN_H, ACTOR_W, ARROW_LEN, ARROW_W, BOX_OUTLINE_W, CIRCLE_R, CLUSTER_OUTLINE_W,
     CLUSTER_RADIUS, CROSS_SIZE, EDGE_DASH, EDGE_LABEL_PAD, EDGE_THICK_W, EDGE_W, FRAME_DASH,
     FRAME_OUTLINE_W, FRAME_TAG_PAD_X, FRAME_TAG_PAD_Y, LIFELINE_DASH, LIFELINE_W, NODE_OUTLINE_W,
-    NOTE_OUTLINE_W, NUMBER_R, PARTICIPANT_RADIUS, PreparedDiagram, ink,
+    NOTE_OUTLINE_W, NUMBER_PAD_X, NUMBER_R, PARTICIPANT_RADIUS, PreparedDiagram, ink,
 };
 use crate::inspect;
 use crate::theme::{Brush, Palette};
@@ -407,7 +407,7 @@ fn draw_sequence<S: Sink>(
         if let Some(number) = &message.number {
             sink.shape(
                 transform,
-                &Circle::new(number.rect.center(), NUMBER_R / scale),
+                &number_badge(number, scale),
                 &Paint::fill(palette.accent),
             );
         }
@@ -471,6 +471,18 @@ fn draw_actor<S: Sink>(room: Rect, palette: &Palette, transform: Affine, scale: 
 }
 
 /// The tag box a frame's keyword sits in, at the frame's top-left corner.
+/// The badge under a message's number: a circle of [`NUMBER_R`] on screen
+/// whatever the column scale, widened into a capsule of the same height
+/// when the number with [`NUMBER_PAD_X`] either side does not fit in it.
+pub(super) fn number_badge(number: &Label, scale: f64) -> RoundedRect {
+    let radius = NUMBER_R / scale;
+    let half_width = radius.max(number.rect.width() / 2.0 + NUMBER_PAD_X / scale);
+    RoundedRect::from_rect(
+        Rect::from_center_size(number.rect.center(), (half_width * 2.0, radius * 2.0)),
+        radius,
+    )
+}
+
 fn frame_tag_rect(frame: &Frame, tag: &Layout<Brush>) -> Rect {
     let line_height = tag
         .lines()

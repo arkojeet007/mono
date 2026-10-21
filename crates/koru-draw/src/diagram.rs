@@ -87,8 +87,11 @@ pub const ACTOR_MIN_H: f64 = 24.0;
 /// A lifeline: dashed, in `text_dim`.
 pub const LIFELINE_W: f64 = 1.0;
 pub const LIFELINE_DASH: [f64; 2] = [5.0, 5.0];
-/// The `autonumber` badge: a filled `accent` circle with the number on it.
+/// The `autonumber` badge: a filled `accent` circle with the number on it,
+/// stretched into a capsule of the same height when the number is wider
+/// than the circle leaves room for (`10` and up).
 pub const NUMBER_R: f64 = 8.0;
+pub const NUMBER_PAD_X: f64 = 3.0;
 /// A note: `panel_bg` fill, `panel_border` outline.
 pub const NOTE_OUTLINE_W: f64 = 1.0;
 /// An activation bar: `accent` at this alpha, outlined in `accent`.

@@ -457,6 +457,37 @@ fn frame_titles_sit_on_page_patches_under_the_activation_bars() {
     assert!(patches.iter().all(|&i| i < bar), "{patches:?} before {bar}");
 }
 
+/// One digit wears the circle; a number wider than the circle leaves room
+/// for stretches it into a capsule of the same height, and either keeps its
+/// size on screen when the column scales the drawing down.
+#[test]
+fn a_two_digit_number_gets_a_badge_it_fits_in() {
+    let one = label("1", Point::new(50.0, 50.0), Role::Accent);
+    let badge = super::walk::number_badge(&one, 1.0);
+    assert_eq!(
+        (badge.width(), badge.height()),
+        (NUMBER_R * 2.0, NUMBER_R * 2.0)
+    );
+    assert_eq!(badge.center(), one.rect.center());
+
+    let twelve = label("12", Point::new(50.0, 50.0), Role::Accent);
+    assert!(
+        twelve.rect.width() + NUMBER_PAD_X * 2.0 > NUMBER_R * 2.0,
+        "the case at hand"
+    );
+    let badge = super::walk::number_badge(&twelve, 1.0);
+    assert_eq!(badge.width(), twelve.rect.width() + NUMBER_PAD_X * 2.0);
+    assert_eq!(badge.height(), NUMBER_R * 2.0);
+    assert_eq!(badge.radii().top_left, NUMBER_R, "a capsule, not a box");
+
+    let half = super::walk::number_badge(&one, 0.5);
+    assert_eq!(
+        half.height(),
+        NUMBER_R * 4.0,
+        "the same 16 px once scaled by 0.5"
+    );
+}
+
 /// The keyword on a frame's tag has to be legible against the tag: of the
 /// three candidates, the one with the most contrast on `panel_border`.
 #[test]
