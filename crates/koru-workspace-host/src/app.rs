@@ -5708,8 +5708,12 @@ Nothing was written. The store starts on demand, so this usually means it could 
         modifiers::forget_released(mods, &mut self.down_keys);
     }
 
+    /// Every window draws its next frame. The flag is what `redraw` checks:
+    /// a bare `request_redraw` is dropped on macOS, where `RedrawRequested`
+    /// arrives whether anything changed or not.
     fn request_redraw_all(&self) {
         for pane in self.panes.values() {
+            pane.needs_frame.set(true);
             pane.window.request_redraw();
         }
     }
@@ -13165,6 +13169,7 @@ Nothing was written. The store starts on demand, so this usually means it could 
     fn invalidate_everywhere(&mut self) {
         for pane in self.panes.values_mut() {
             pane.view.invalidate();
+            pane.needs_frame.set(true);
             pane.window.request_redraw();
         }
     }
