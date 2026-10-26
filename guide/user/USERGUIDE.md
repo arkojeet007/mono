@@ -4008,12 +4008,14 @@ inline, and a paste back into Koru restores the same order.
 
 ### Code blocks
 
-Type `` ``` `` — three backticks — at the start of a line and the line becomes
-a code block on the third backtick: the fence text disappears and the block
-renders in a mono font on a tinted panel, ready to type into. (A pasted fence
-followed by `Enter` works too, and `` ```rust `` + `Enter` pasted keeps the
-language.) `Ctrl+` `` ` `` toggles the focused line between a paragraph and a
-code block, and `/code` converts without pinning a language.
+Type `` ``` `` — three backticks — at the start of a line, then `Space` or
+`Enter`, and the line becomes a code block: the fence text disappears and the
+block renders in a mono font on a tinted panel, ready to type into. Name a
+language straight after the backticks — `` ```rust `` then `Space` or
+`Enter` — and the block keeps it; a pasted fence works the same way. The
+fence waits for that last key so the language can be typed first.
+`Ctrl+` `` ` `` toggles the focused line between a paragraph and a code
+block, and `/code` converts without pinning a language.
 
 Inside a code block, `Enter` starts a new line **in the same block** rather
 than a new row — a code block is one block that holds many lines. To **leave**
@@ -4036,8 +4038,9 @@ it is never stored, so it follows the theme and never bloats a sync.
 A code block whose language is **Mermaid** is a diagram: Koru draws it in
 place of the text. Write a flowchart or a sequence diagram in
 [Mermaid](https://mermaid.js.org) notation inside a fence that opens with
-`` ```mermaid `` — or paste a Markdown document that holds one, or let an
-agent write one over MCP — and the page shows the drawing, in the page's own
+`` ```mermaid `` — type `` ```mermaid `` and `Enter` on an empty line to
+start one, paste a Markdown document that holds one, or let an agent write
+one over MCP — and the page shows the drawing, in the page's own
 colors and font, in light and dark alike. The text is the truth and the
 drawing is derived from it: it is never stored or synced, so every device
 draws its own, and a page with a diagram opens as fast as one with a picture.

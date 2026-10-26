@@ -2330,7 +2330,9 @@ pub trait Editing {
     /// If the focused prose line is a markdown fence, convert it to a code
     /// block — clearing the fence text and pinning the captured language — and
     /// return true. Only when the whole line is the fence and the caret is at
-    /// its end, so a backtick typed mid-sentence is left alone.
+    /// its end, so a backtick typed mid-sentence is left alone. Enter and a
+    /// space both come here: the fence waits for one of them, so its language
+    /// can be typed first.
     fn try_fence(&mut self, ws: &mut WorkspaceDoc) -> bool {
         let Some(row) = self.body().focused() else {
             return false;
@@ -5040,33 +5042,6 @@ pub trait Editing {
         if text == "\t" && self.title_focused() {
             return;
         }
-        // The markdown fence: a third backtick at the start of a line opens a
-        // code block immediately, no Enter needed. The line is "``" and this
-        // keystroke is the third backtick; with no selection it is the fence
-        // rather than the inline-code gesture below.
-        if text == "`"
-            && self.view().code_enabled
-            && !self.title_focused()
-            && self.body().focused().is_some_and(|r| {
-                r.kind != Kind::Code
-                    && r.image.is_none()
-                    && r.range().is_empty()
-                    && r.caret() == r.text.len()
-                    && r.text == "``"
-            })
-        {
-            let id = self.body().focused().unwrap().id;
-            ws.checkpoint();
-            ws.begin_group();
-            let _ = ws.set_text(id, "");
-            let _ = ws.set_kind(id, Kind::Code);
-            ws.checkpoint();
-            self.body_mut().rebuild(ws);
-            self.body_mut().focus_on(id);
-            self.place_caret(0);
-            self.reflow();
-            return;
-        }
         // Selecting text and pressing `` ` `` wraps it in inline code — the
         // praised gesture from GitHub/Obsidian/Slack — rather than replacing the
         // selection with a backtick. Toggling: press it again on an all-code
@@ -5093,6 +5068,19 @@ pub trait Editing {
             .body()
             .focused()
             .is_some_and(|r| r.kind == koru_core::node::Kind::Divider || r.diagram_shows_picture())
+        {
+            return;
+        }
+        // The markdown fence waits for its language. A third backtick stays
+        // text, so ```` ```mermaid ```` can be typed whole; a space at the end
+        // of a line that is exactly a fence opens the code block, the same
+        // moment `## ` makes a heading. Enter does the same through the split
+        // path. With a selection the space replaces it instead, as anywhere.
+        if text == " "
+            && self.view().code_enabled
+            && !self.title_focused()
+            && self.body().focused().is_some_and(|r| r.range().is_empty())
+            && self.try_fence(ws)
         {
             return;
         }
@@ -12121,11 +12109,10 @@ mod tests {
         assert_eq!(ws.read(id).unwrap().content.as_text(), Some("\n"));
     }
 
-    /// Typing the third backtick at the start of a line opens a code block
-    /// immediately — the markdown fence, no Enter needed. The "``" is cleared
-    /// and the block starts empty (the language is set with the chip).
+    /// The markdown fence waits for its language: three typed backticks stay
+    /// text, so the line can go on to name one. Nothing is a code block yet.
     #[test]
-    fn typing_three_backticks_opens_a_code_block() {
+    fn three_typed_backticks_stay_text_until_enter_or_space() {
         let (mut ws, mut e) = doc_editor(&[""]);
         e.view.active = true;
         type_str(&mut e, &mut ws, "```");
@@ -12133,23 +12120,155 @@ mod tests {
         let node = ws.read(id).unwrap();
         assert_eq!(
             node.kind,
-            Kind::Code,
-            "the third backtick opened a code block"
+            Kind::Paragraph,
+            "the third backtick converts nothing"
         );
         assert_eq!(
             node.content.as_text(),
+            Some("```"),
+            "the fence is still text"
+        );
+    }
+
+    /// A space after a bare fence opens a plain code block, the moment `## `
+    /// makes a heading: the backticks are cleared and no language is pinned.
+    #[test]
+    fn a_fence_and_a_space_open_a_plain_code_block() {
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "``` ");
+        let id = e.body.focused().unwrap().id;
+        let node = ws.read(id).unwrap();
+        assert_eq!(node.kind, Kind::Code);
+        assert_eq!(
+            node.content.as_text(),
             Some(""),
-            "the fence backticks were cleared"
+            "neither the fence nor the space is kept"
         );
         assert_eq!(
             node.meta.language, None,
             "no language until the chip picks one"
         );
+        type_str(&mut e, &mut ws, "x");
+        assert_eq!(
+            ws.read(id).unwrap().content.as_text(),
+            Some("x"),
+            "the caret is in the block"
+        );
     }
 
-    /// A pasted fence with a language still converts on Enter — the instant
-    /// fence only fires on the typed third backtick, so pasted "```rust" goes
-    /// through the Enter path and keeps its language.
+    /// A typed fence keeps the language it names, through a space or Enter.
+    #[test]
+    fn a_typed_fence_keeps_its_language_through_a_space_or_enter() {
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "```rust ");
+        let id = e.body.focused().unwrap().id;
+        let node = ws.read(id).unwrap();
+        assert_eq!(node.kind, Kind::Code);
+        assert_eq!(node.content.as_text(), Some(""));
+        assert_eq!(node.meta.language.as_deref(), Some("rust"));
+
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "```python");
+        e.act(&mut ws, Action::SplitLine);
+        let id = e.body.focused().unwrap().id;
+        let node = ws.read(id).unwrap();
+        assert_eq!(node.kind, Kind::Code);
+        assert_eq!(node.meta.language.as_deref(), Some("python"));
+        assert_eq!(
+            e.body.rows.len(),
+            1,
+            "Enter converted the line rather than splitting it"
+        );
+    }
+
+    /// ```` ```mermaid ```` and Enter is how a diagram is started by hand: an
+    /// empty `mermaid` code block, the caret in its text and no picture yet,
+    /// so the hint is what the block shows.
+    #[test]
+    fn a_typed_mermaid_fence_starts_an_empty_diagram() {
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "```mermaid");
+        e.act(&mut ws, Action::SplitLine);
+        let row = e.body.focused().unwrap();
+        let id = row.id;
+        assert!(
+            !row.diagram_shows_picture(),
+            "an empty diagram is its text, not a picture"
+        );
+        let node = ws.read(id).unwrap();
+        assert_eq!(node.kind, Kind::Code);
+        assert_eq!(node.meta.language.as_deref(), Some("mermaid"));
+        assert_eq!(node.content.as_text(), Some(""));
+        type_str(&mut e, &mut ws, "flowchart LR");
+        assert_eq!(ws.read(id).unwrap().content.as_text(), Some("flowchart LR"));
+    }
+
+    /// Only a line that is the whole fence converts: backticks mid-sentence,
+    /// a space with the fence selected, and a view without code blocks all
+    /// type as text.
+    #[test]
+    fn a_fence_converts_only_as_a_whole_line_where_code_is_offered() {
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "see ``` ");
+        let id = e.body.focused().unwrap().id;
+        assert_eq!(ws.read(id).unwrap().kind, Kind::Paragraph);
+        assert_eq!(ws.read(id).unwrap().content.as_text(), Some("see ``` "));
+
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "```");
+        let id = e.body.focused().unwrap().id;
+        e.place_selection_pair((0, 3));
+        e.reflow();
+        assert!(
+            !e.body.focused().unwrap().range().is_empty(),
+            "the fence is selected"
+        );
+        type_str(&mut e, &mut ws, " ");
+        assert_eq!(
+            ws.read(id).unwrap().kind,
+            Kind::Paragraph,
+            "a selection is replaced, not fenced"
+        );
+
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        e.view.code_enabled = false;
+        type_str(&mut e, &mut ws, "```rust ");
+        let id = e.body.focused().unwrap().id;
+        assert_eq!(
+            ws.read(id).unwrap().kind,
+            Kind::Paragraph,
+            "no code blocks here"
+        );
+    }
+
+    /// One Ctrl+Z takes the code block away and gives the typed fence back.
+    #[test]
+    fn one_undo_brings_the_typed_fence_back() {
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        type_str(&mut e, &mut ws, "```rust ");
+        let id = e.body.focused().unwrap().id;
+        assert_eq!(ws.read(id).unwrap().kind, Kind::Code);
+        e.key(
+            &mut ws,
+            &Key::Character("z".into()),
+            None,
+            koru_keys::PRIMARY,
+        );
+        let node = ws.read(id).unwrap();
+        assert_eq!(node.kind, Kind::Paragraph);
+        assert_eq!(node.content.as_text(), Some("```rust"));
+        assert_eq!(node.meta.language, None);
+    }
+
+    /// A pasted fence with a language converts on Enter and keeps it.
     #[test]
     fn a_pasted_fence_with_language_converts_on_enter() {
         let (mut ws, mut e) = doc_editor(&[""]);
