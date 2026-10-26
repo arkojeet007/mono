@@ -1,8 +1,7 @@
 # Licensing
 
 Koru is licensed under the **[Mozilla Public License 2.0](../LICENSE)**, and
-contributions come in under the **[DCO](../DCO)** (see
-[CONTRIBUTING.md](../CONTRIBUTING.md)). This page says what that covers in
+contributions come in under it too (see [CONTRIBUTING.md](../CONTRIBUTING.md)). This page says what that covers in
 this tree, what it does not, and how the headers are kept true.
 [THIRD-PARTY.md](THIRD-PARTY.md) is the audit of everything we did not write.
 

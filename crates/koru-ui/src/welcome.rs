@@ -21,7 +21,7 @@ use crate::button::{
 
 pub const TERMS_URL: &str = "https://www.koru.do/terms";
 pub const PRIVACY_URL: &str = "https://www.koru.do/privacy";
-pub const CHAT_URL: &str = "https://www.koru.do/?utm_source=desktop-welcome&chat=true";
+pub const CHAT_URL: &str = "https://www.koru.do/?utm_source=desktop-welcome&utm_medium=app&utm_campaign=welcome&chat=true";
 pub const SUPPORT_ADDRESS: &str = "support@koru.do";
 pub const SUPPORT_MAILTO: &str = "mailto:support@koru.do";
 
@@ -1789,7 +1789,7 @@ mod tests {
         assert_eq!(PRIVACY_URL, "https://www.koru.do/privacy");
         assert_eq!(
             CHAT_URL,
-            "https://www.koru.do/?utm_source=desktop-welcome&chat=true"
+            "https://www.koru.do/?utm_source=desktop-welcome&utm_medium=app&utm_campaign=welcome&chat=true"
         );
         assert_eq!(SUPPORT_MAILTO, format!("mailto:{SUPPORT_ADDRESS}"));
     }

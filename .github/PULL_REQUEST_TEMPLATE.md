@@ -10,10 +10,6 @@
 
 ## Checklist
 
-- [ ] **Every commit is signed off** (`git commit -s`). The DCO check fails
-      otherwise; `git commit --amend -s --no-edit` or
-      `git rebase --signoff main` fixes it
-      ([CONTRIBUTING.md](../CONTRIBUTING.md#sign-off-every-commit-dco)).
 - [ ] `cargo test --workspace` passes (`koru.bat test` / `./koru.sh test`).
 - [ ] `cargo fmt --all --check` is clean.
 - [ ] New files have their SPDX header (`python scripts/checks/spdx-headers.py`).

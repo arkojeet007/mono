@@ -259,10 +259,10 @@ if defined KORU_DEVICE (echo   Device:       %KORU_DEVICE%) else (echo   Device:
 echo.
 "%JAVA_HOME%\bin\java.exe" -version
 echo.
-if exist "%ANDROID_HOME%\platforms\android-36\android.jar" (
-    echo [ok] Android platform 36 installed
+if exist "%ANDROID_HOME%\platforms\android-37.0\android.jar" (
+    echo [ok] Android platform 37 installed
 ) else (
-    echo [missing] Android platform 36
+    echo [missing] Android platform 37
 )
 if exist "%ANDROID_HOME%\build-tools" (
     echo [ok] Android build-tools directory found

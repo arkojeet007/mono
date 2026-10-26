@@ -2,8 +2,8 @@
 
 This is the orientation for everyone who works on the code, people and coding
 agents alike. Building and running from a fresh clone is in
-[README.md](README.md); how to send a change, and the sign-off every commit
-needs, is in [CONTRIBUTING.md](CONTRIBUTING.md).
+[README.md](README.md); how to send a change is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 Koru is a workspace: **a tree of typed nodes** — tasks, documents, contacts,
 images — with attributes that are data rather than text. **Views are projections
@@ -208,10 +208,9 @@ your own.
 
 ## Proposing a change and recording a decision
 
-- **Every commit is signed off** under the [Developer Certificate of Origin](DCO)
-  (`git commit -s`); a pull request with an unsigned commit cannot be merged.
-  [CONTRIBUTING.md](CONTRIBUTING.md) has the details, including for code
-  written with an AI assistant.
+- **Contributions come in under MPL-2.0**, with no contributor license
+  agreement and no sign-off line. [CONTRIBUTING.md](CONTRIBUTING.md) says what
+  sending a change certifies, including for code written with an AI assistant.
 - **A proposal starts as a public issue or discussion.** Anything with a large
   blast radius — a new shared KoruX component or contract, a change to the data
   model or a stored format, a new dependency, a new process or service —
@@ -282,7 +281,7 @@ Rust source cites docs by path in hundreds of places. Then
 - **`scripts/` is what the launchers run**, in four folders: `setup/` fetches
   and builds what a fresh clone lacks and checks the machine, `dev/` starts,
   stops, captures and probes the app, `checks/` holds the repository's checks
-  (links, the publication scan, SPDX headers, DCO sign-off), and `icons/`
+  (links, the publication scan, SPDX headers), and `icons/`
   regenerates the icons from the logo.
 - **The skills come from [koruworks/skills](https://github.com/koruworks/skills)**,
   not from this tree: `scripts/setup/setup-skills.sh` runs `npx skills add` into

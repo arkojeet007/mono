@@ -1,65 +1,25 @@
 # Contributing to Koru
 
-Thank you for wanting to help. This page covers the one rule every contribution
-has to meet, sign-off, and then the short list of things that keep a change
-easy to review.
+Thank you for wanting to help. This page covers the license a contribution
+comes in under, and then the short list of things that keep a change easy to
+review.
 
 The [contributor guides](guide/contributing/README.md) cover building, testing,
 Rust, and library behavior. The [user guides](guide/user/README.md) describe
 the behavior a change must preserve. Both are part of this repository and need
 no access to the private documentation submodule.
 
-## Sign off every commit (DCO)
-
-Koru does not ask you to sign a contributor license agreement. Instead, every
-commit carries a **sign-off**: a line at the end of the commit message that
-certifies the [Developer Certificate of Origin](DCO) (DCO 1.1). In short: you
-wrote the change, or otherwise have the right to submit it under the project's
-license, and you understand the contribution and your sign-off are public and
-kept permanently.
-
-```text
-Signed-off-by: Ada Lovelace <ada@example.com>
-```
-
-Git adds it for you with `-s`:
-
-```sh
-git commit -s -m "Explain what the change does"
-```
-
-The name and email must be yours and must match the commit's author. A
-pseudonym you are publicly known by is fine; an anonymous or placeholder
-identity is not.
-
-Dependabot's pull requests are the one exception: a version bump has no
-person behind it to certify anything. CI recognises them by the GitHub
-account that opened the pull request and pushed to it, which GitHub
-authenticates, never by a commit's author email, which anyone can set. A
-commit anyone else pushes to such a branch makes the check run again, in
-full.
-
-Forgot? Fix it before pushing again:
-
-```sh
-git commit --amend -s --no-edit          # the last commit
-git rebase --signoff main                # every commit on your branch
-git push --force-with-lease
-```
-
-A pull request with an unsigned commit cannot be merged. You keep the copyright
-in your contribution; the sign-off licenses it to the project under the
-license of the files it touches.
-
-**Code written with an AI assistant** is held to the same standard. Your
-sign-off is your statement that you reviewed the change, that you have the
-right to submit it, and that it does not reproduce code under an incompatible
-license.
-
 ## License
 
 Koru is licensed under the [Mozilla Public License 2.0](LICENSE). By
 contributing, you agree that your contribution is licensed under MPL-2.0 too.
+Koru does not ask you to sign a contributor license agreement, and commits need
+no sign-off line. You keep the copyright in your contribution.
+
+Sending a change is your statement that you wrote it, or otherwise have the
+right to submit it under MPL-2.0. **Code written with an AI assistant** is held
+to the same standard: you reviewed the change, and it does not reproduce code
+under an incompatible license.
 
 Every first-party source file starts with an SPDX identifier:
 

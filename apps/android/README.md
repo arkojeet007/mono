@@ -92,7 +92,8 @@ temporary read grant follows the intent.
 ## Requirements
 
 - JDK 17 or newer. The project compiles Java/Kotlin to Java 17 bytecode.
-- Android SDK 36.
+- Android SDK Platform 37 (`platforms;android-37.0`). AndroidX Core 1.19
+  needs it to compile against; the app still targets API 36.
 - Android NDK `30.0.15729638`.
 - Rust Android targets `aarch64-linux-android` and `x86_64-linux-android`.
 - An API 29 or newer emulator or physical device.

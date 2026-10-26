@@ -1347,7 +1347,7 @@ fn commit_release_notes(root: &Path) {
     // the whole index, including anything staged before the publish began.
     match git(
         root,
-        &["commit", "-s", "-m", "Updated releases", "--", "releases"],
+        &["commit", "-m", "Updated releases", "--", "releases"],
     ) {
         Ok(_) => println!(
             "[Koru] committed {} release descriptor path(s)",
@@ -1606,8 +1606,6 @@ mod tests {
 
         commit_release_notes(root);
 
-        let message = git(root, &["log", "-1", "--format=%B"]).unwrap();
-        assert!(message.contains("Signed-off-by: Release <release@example.invalid>"));
         let committed = git(root, &["show", "--stat", "--format=", "HEAD"]).unwrap();
         assert!(committed.contains("releases/new.toml"), "{committed}");
         assert!(

@@ -21,11 +21,11 @@ that the existing maintainers approve.
 
 | Platform | Status |
 | --- | --- |
-| **Windows** (x64) | **Supported.** Official builds on every channel; CI builds, tests and packages every change on Windows |
+| **Windows** (x64) | **Supported.** Official builds on every channel; CI builds and tests every change on Windows, and packages every merge |
 | **Android** | **Maintained.** Built with Gradle from `apps/android`. It uses Google Play services, which are proprietary |
 | **macOS** (Apple silicon and Intel) | **Held.** The source builds on a Mac, and it now links upstream's text-to-speech-free voice runtime, with no eSpeak NG (GPL-3.0), as Windows does. Official macOS releases wait for that to be verified on a Mac ([licensing](licensing/THIRD-PARTY.md#espeak-ng-gpl-30-in-three-shipped-binaries)) |
 | **iOS** | **Held.** The source is here, with its license notices; the first release waits for it to be built and verified on a Mac ([licensing](licensing/README.md#android)) |
-| Linux | **Not a Koru target.** CI runs only platform-independent checks there (the repository's own checks, formatting, licenses and advisories, sign-off). Nothing claims the app builds or runs on Linux, and there are no packages |
+| Linux | **Not a Koru target.** CI runs only platform-independent checks there (the repository's own checks, formatting, licenses and advisories). Nothing claims the app builds or runs on Linux, and there are no packages |
 
 **Apple platforms have limits we cannot remove.** Building for macOS or iOS
 needs a Mac with Xcode. Running a build on an iPhone needs an Apple developer
@@ -109,5 +109,6 @@ Problems with the hosted service are reported here too: security issues as
 
 ## Licensing
 
-Koru is [MPL-2.0](LICENSE); contributions are signed off under the
-[DCO](DCO). The name and logo are trademarks ([TRADEMARKS.md](TRADEMARKS.md)).
+Koru is [MPL-2.0](LICENSE), and contributions come in under it
+([CONTRIBUTING.md](CONTRIBUTING.md)). The name and logo are trademarks
+([TRADEMARKS.md](TRADEMARKS.md)).

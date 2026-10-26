@@ -5,7 +5,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -39,7 +38,7 @@ fun accountBuildValue(name: String): String {
 
 android {
     namespace = "app.koru.mobile"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "30.0.15729638"
 
     defaultConfig {
@@ -94,7 +93,10 @@ android {
         // assets/fonts/ stays out of the APK. Fetched, not committed:
         // `koru.bat fonts` or `./koru.sh fonts` at the repository root.
         assets.srcDir("../../../assets/fonts/android")
-        jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
+        // A File, not a Provider: AGP 9 refuses providers in the source set
+        // API. The native tasks below write here, and mergeDebugNativeLibs
+        // depends on them, so the provider's task wiring is not needed.
+        jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs").get().asFile)
     }
     sourceSets.named("test") {
         resources.srcDir("../../../contracts/testdata")
@@ -389,7 +391,7 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")

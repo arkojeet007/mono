@@ -224,7 +224,7 @@ koru.bat test                  REM cargo test --workspace, the whole suite
 koru.bat dist-local beta       REM an unsigned local package under dist\ (needs the voice archive)
 ```
 
-Android needs JDK 17 and Android SDK 36. The Gradle wrapper is fetched, not
+Android needs JDK 17 and Android SDK 37. The Gradle wrapper is fetched, not
 committed, so on a fresh clone run `scripts\setup\fetch-third-party.ps1` (or
 `bash scripts/setup/fetch-third-party.sh`) once, then `cd apps/android` and
 `./gradlew testDebugUnitTest assembleDebug`. See the
@@ -236,7 +236,7 @@ The launchers are thin: what they run lives under `scripts/`, in four folders.
 third-party code, the voice runtime, the skills) and checks the machine;
 `dev/` starts, stops, captures and probes the app while you work on it;
 `checks/` holds the repository's own checks (links, the publication scan, SPDX
-headers, sign-off), which CI runs too; and `icons/` regenerates the app and
+headers), which CI runs too; and `icons/` regenerates the app and
 mobile icons from the logo.
 
 ## Where to go next
@@ -249,7 +249,7 @@ notes, and hosted-service operations remain in the private `docs/` submodule.
 | --- | --- |
 | How to work on the code — for people and coding agents alike | [AGENTS.md](AGENTS.md) |
 | Where to start with the public documentation | [guide/](guide/README.md) |
-| How to contribute, and the sign-off every commit needs | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| How to contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | How to use it | [guide/user/USERGUIDE.md](guide/user/USERGUIDE.md) |
 | Building, testing, Rust, and library behavior | [Contributor guides](guide/contributing/README.md) |
 | The local API and wire schemas | [Generated references](reference/README.md) |
@@ -286,10 +286,9 @@ project get found. Follow the build on X: [@liechti_dev](https://x.com/liechti_d
 
 Koru is free software under the [Mozilla Public License 2.0](LICENSE). Change a
 Koru file and distribute it, and that file stays open; add your own files beside
-ours under whatever license you like. Every commit is signed off under the
-[Developer Certificate of Origin](DCO); [CONTRIBUTING.md](CONTRIBUTING.md) says
-how. Third-party components and what they require are listed in
-[licensing/](licensing/README.md).
+ours under whatever license you like. Contributions come in under MPL-2.0 too
+([CONTRIBUTING.md](CONTRIBUTING.md)). Third-party components and what they
+require are listed in [licensing/](licensing/README.md).
 
 The Koru name, logo and icons are trademarks of Koru Works, Inc. and are not
 covered by the license; see [TRADEMARKS.md](TRADEMARKS.md).
