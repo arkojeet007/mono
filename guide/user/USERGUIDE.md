@@ -4038,9 +4038,8 @@ it is never stored, so it follows the theme and never bloats a sync.
 A code block whose language is **Mermaid** is a diagram: Koru draws it in
 place of the text. Write a flowchart or a sequence diagram in
 [Mermaid](https://mermaid.js.org) notation inside a fence that opens with
-`` ```mermaid `` — type `` ```mermaid `` and `Enter` on an empty line to
-start one, paste a Markdown document that holds one, or let an agent write
-one over MCP — and the page shows the drawing, in the page's own
+`` ```mermaid `` — or paste a Markdown document that holds one, or let an
+agent write one over MCP — and the page shows the drawing, in the page's own
 colors and font, in light and dark alike. The text is the truth and the
 drawing is derived from it: it is never stored or synced, so every device
 draws its own, and a page with a diagram opens as fast as one with a picture.
@@ -4052,6 +4051,14 @@ other Mermaid kind keeps its text and says so beneath it: *Koru does not draw
 this kind of diagram yet*. Styling and interaction lines in the text —
 `%%{init}`, `classDef`, `style`, `click` — are kept exactly as written and
 ignored for drawing; the theme decides how a diagram looks.
+
+**Starting one.** Type `/diagram` — or `/mermaid` — or choose *Diagram*
+from a row's `+`. The block arrives with a small three-box example already
+drawn and its text open with the example selected: type or paste your own
+over it, or press an arrow to keep it and edit. On an empty line the line
+becomes the diagram; on a line with words, the words stay and the diagram
+goes below them. Typing `` ```mermaid `` and `Enter` (or `Space`) on an empty
+line starts an empty one.
 
 **Editing.** Click a drawing to select it, like a picture; arrow onto it and
 the *Edit text* control appears at its corner. Press `Enter` (or click the

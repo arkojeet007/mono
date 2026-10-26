@@ -476,7 +476,7 @@ pub fn for_command(engine: &mut TextEngine, trigger: Trigger, cmd: Command) -> O
         Command::Emoji => Overlay::Emoji(crate::components::emoji_picker::EmojiPicker::standalone(
             engine, trigger,
         )),
-        // Image, Code, Divider, the lists and a heading have no sub-picker —
+        // Image, Code, Diagram, Divider, the lists and a heading have no sub-picker —
         // all are intercepted in `Editing::choose_command` before this is
         // reached. The attribute commands are intercepted there too,
         // because their pickers open seeded with document state (the node's
@@ -485,6 +485,7 @@ pub fn for_command(engine: &mut TextEngine, trigger: Trigger, cmd: Command) -> O
         Command::Image
         | Command::Attachment
         | Command::Code
+        | Command::Diagram
         | Command::Table
         | Command::Divider
         | Command::Quote

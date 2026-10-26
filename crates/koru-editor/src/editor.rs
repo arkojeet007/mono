@@ -5545,6 +5545,13 @@ pub trait Editing {
             }
             return;
         }
+        if cmd == command_menu::Command::Diagram {
+            self.view_mut().overlay = Overlay::None;
+            if let Some(t) = trigger {
+                self.commit_diagram(ws, t);
+            }
+            return;
+        }
         if cmd == command_menu::Command::Table {
             self.view_mut().overlay = Overlay::None;
             if let Some(t) = trigger {
@@ -6599,6 +6606,58 @@ pub trait Editing {
         self.body_mut().rebuild(ws);
         self.body_mut().focus_on(id);
         self.place_caret(trigger.start);
+    }
+
+    /// Take `/diagram` back out and start a diagram: a `mermaid` code block
+    /// holding [`diagram::example`](crate::diagram::example), its text open
+    /// with the whole example selected and the drawing below it — so typing
+    /// or pasting replaces the example at once, and an arrow keeps it.
+    ///
+    /// **A line that has words keeps them.** Unlike `/code`, which makes the
+    /// line itself code, the diagram goes in a new block below: a sentence is
+    /// never Mermaid, and turning it into a block that cannot draw would only
+    /// move the person's words somewhere they have to fetch them back from.
+    /// An empty line — and the margin `+`'s fresh paragraph — becomes the
+    /// diagram in place. One undo group either way.
+    fn commit_diagram(&mut self, ws: &mut WorkspaceDoc, trigger: Trigger) {
+        if !self.view().code_enabled {
+            return;
+        }
+        let Some(row) = self.body_mut().row(trigger.node) else {
+            return;
+        };
+        let (len, caret) = (row.text.len(), row.caret());
+        let end = caret.clamp(trigger.start, len);
+        let id = trigger.node;
+        let example = crate::diagram::example(koru_i18n::current());
+        self.body_mut().focus_on(id);
+        ws.checkpoint();
+        ws.begin_group();
+        if end > trigger.start {
+            let _ = ws.delete_text(id, trigger.start..end);
+        }
+        let block = if ws.text_len(id).unwrap_or(0) == 0 {
+            let _ = ws.set_heading(id, None);
+            let _ = ws.set_kind(id, Kind::Code);
+            let _ = ws.set_text(id, &example);
+            id
+        } else {
+            let Some(below) = Node::code(example.as_str())
+                .ok()
+                .and_then(|node| ws.insert_after(id, node).ok())
+            else {
+                ws.checkpoint();
+                return;
+            };
+            below
+        };
+        let _ = ws.set_language(block, Some(crate::diagram::LANGUAGE));
+        ws.checkpoint();
+        self.body_mut().rebuild(ws);
+        if self.open_diagram_text(block) {
+            self.place_selection_pair((0, example.len()));
+            self.reflow();
+        }
     }
 
     /// Take the typed `/command` back out and leave the caret where it was.

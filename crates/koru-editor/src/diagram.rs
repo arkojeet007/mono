@@ -391,6 +391,21 @@ pub fn chip_label(language: Option<&str>) -> &str {
     }
 }
 
+/// The text a new diagram starts with: three boxes, left to right, drawn the
+/// moment `/diagram` lands. Three lines, the smallest text that shows both
+/// halves of the notation — a box and an arrow — and replaced in one
+/// keystroke, since it arrives selected. The labels are `lang`'s; the
+/// Mermaid around them is written here, so a translation can never be what
+/// stops it drawing.
+pub fn example(lang: Lang) -> String {
+    format!(
+        "flowchart LR\n    A[{}] --> B[{}]\n    B --> C[{}]",
+        t(lang, Key::DiagramExampleStart),
+        t(lang, Key::DiagramExampleNext),
+        t(lang, Key::DiagramExampleDone),
+    )
+}
+
 /// The line a block says when its text is not drawn, in Koru's words.
 ///
 /// `None` for a text that draws. The engine's English detail is not here and

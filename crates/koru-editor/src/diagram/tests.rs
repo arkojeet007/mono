@@ -1049,3 +1049,198 @@ fn the_save_chord_does_nothing_on_a_diagram_that_does_not_draw() {
     assert!(!e.act(&mut ws, Action::SaveDiagramAs));
     assert_eq!(e.view.wants_save_diagram_as, None);
 }
+
+// ---------------------------------------------------- starting a diagram
+
+/// A document of paragraphs, focused on the first, with code blocks offered.
+fn prose_doc(lines: &[&str]) -> (WorkspaceDoc, Editor) {
+    let mut ws = WorkspaceDoc::create(WorkspaceId::new(), "t").unwrap();
+    let doc = ws
+        .insert(Parent::Root, Node::document("D").unwrap())
+        .unwrap();
+    for line in lines {
+        ws.insert(Parent::Node(doc), Node::paragraph(*line).unwrap())
+            .unwrap();
+    }
+    ws.enable_undo();
+    let mut e = Editor::rooted_at(&ws, doc, true);
+    e.view.code_enabled = true;
+    e.view.active = true;
+    e.body.rebuild(&ws);
+    e.set_viewport(900.0, 560.0);
+    (ws, e)
+}
+
+fn type_in(e: &mut Editor, ws: &mut WorkspaceDoc, s: &str) {
+    for c in s.chars() {
+        let t = c.to_string();
+        e.key(
+            ws,
+            &InputKey::Character(t.as_str().into()),
+            Some(&t),
+            ModifiersState::empty(),
+        );
+    }
+}
+
+fn slash_diagram(e: &mut Editor, ws: &mut WorkspaceDoc, typed: &str) {
+    type_in(e, ws, typed);
+    press(e, ws, NamedKey::Enter);
+}
+
+/// What a freshly started diagram must be: a `mermaid` code block holding the
+/// example, its text open, the whole example selected, not a picture.
+fn assert_started(e: &Editor, ws: &WorkspaceDoc, node: NodeId) {
+    let read = ws.read(node).unwrap();
+    let example = example(koru_i18n::current());
+    assert_eq!(read.kind, Kind::Code);
+    assert_eq!(read.meta.language.as_deref(), Some(LANGUAGE));
+    assert_eq!(read.content.as_text(), Some(example.as_str()));
+    assert_eq!(e.view.diagram_text_open, Some(node), "the text is open");
+    assert_eq!(e.body.focused().map(|r| r.id), Some(node));
+    assert_eq!(
+        row(e, node).range(),
+        0..example.len(),
+        "the whole example is selected, so typing replaces it"
+    );
+}
+
+/// The example draws in every language: the labels are translated and the
+/// Mermaid around them is not, so no translation can stop it drawing.
+#[test]
+fn the_example_draws_in_every_language() {
+    for lang in koru_i18n::Lang::ALL {
+        let text = example(lang);
+        assert_eq!(text.lines().count(), 3, "{lang:?}: three lines");
+        assert_eq!(
+            koru_diagram::inspect(&text, &koru_diagram::Limits::default()),
+            Status::Draws(Counts::Flowchart {
+                nodes: 3,
+                edges: 2,
+                groups: 0
+            }),
+            "{lang:?}: {text}"
+        );
+    }
+}
+
+/// `/diagram` on an empty line makes that line the diagram.
+#[test]
+fn slash_diagram_on_an_empty_line_starts_a_diagram_there() {
+    let (mut ws, mut e) = prose_doc(&["", "after"]);
+    let node = e.body.focused().unwrap().id;
+    slash_diagram(&mut e, &mut ws, "/diagram");
+    assert_started(&e, &ws, node);
+    assert_eq!(e.body.rows.len(), 2, "no block was added");
+}
+
+/// Typing *mermaid* in the menu finds the same row.
+#[test]
+fn slash_mermaid_finds_the_diagram_row() {
+    let (mut ws, mut e) = prose_doc(&[""]);
+    let node = e.body.focused().unwrap().id;
+    slash_diagram(&mut e, &mut ws, "/mermaid");
+    assert_started(&e, &ws, node);
+}
+
+/// On a line with words the words stay, and the diagram is the block below.
+#[test]
+fn slash_diagram_on_a_line_with_words_keeps_them_and_starts_below() {
+    let (mut ws, mut e) = prose_doc(&["Checkout"]);
+    let line = e.body.focused().unwrap().id;
+    let end = e.body.focused().unwrap().text.len();
+    e.place_caret(end);
+    e.reflow();
+    slash_diagram(&mut e, &mut ws, " /diagram");
+    let read = ws.read(line).unwrap();
+    assert_eq!(read.kind, Kind::Paragraph, "the line is still prose");
+    assert_eq!(read.content.as_text(), Some("Checkout "));
+    assert_eq!(e.body.rows.len(), 2);
+    let below = e.body.rows[1].id;
+    assert_started(&e, &ws, below);
+}
+
+/// The margin `+` reaches the same command: the menu makes its new block
+/// only once *Diagram* is chosen, and that block is the diagram.
+#[test]
+fn the_margin_plus_starts_a_diagram_in_a_new_block() {
+    let (mut ws, mut e) = prose_doc(&["Checkout"]);
+    let line = e.body.focused().unwrap().id;
+    let trigger = crate::trigger::Trigger {
+        kind: crate::trigger::TriggerKind::Slash,
+        start: 0,
+        node: line,
+        anchor: crate::trigger::Anchor::NewBlock { above: false },
+        stable: None,
+    };
+    e.choose_command(
+        &mut ws,
+        Some(trigger),
+        crate::components::command_menu::Command::Diagram,
+    );
+    assert_eq!(ws.read(line).unwrap().content.as_text(), Some("Checkout"));
+    assert_eq!(e.body.rows.len(), 2);
+    let below = e.body.rows[1].id;
+    assert_started(&e, &ws, below);
+}
+
+/// The example arrives selected: the first keystroke replaces it.
+#[test]
+fn typing_replaces_the_selected_example() {
+    let (mut ws, mut e) = prose_doc(&[""]);
+    let node = e.body.focused().unwrap().id;
+    slash_diagram(&mut e, &mut ws, "/diagram");
+    type_in(&mut e, &mut ws, "s");
+    assert_eq!(ws.read(node).unwrap().content.as_text(), Some("s"));
+}
+
+/// One Ctrl+Z takes the started diagram away whole and gives back the line.
+#[test]
+fn one_undo_takes_a_started_diagram_away() {
+    let (mut ws, mut e) = prose_doc(&[""]);
+    let node = e.body.focused().unwrap().id;
+    slash_diagram(&mut e, &mut ws, "/diagram");
+    e.key(
+        &mut ws,
+        &InputKey::Character("z".into()),
+        None,
+        koru_keys::PRIMARY,
+    );
+    let read = ws.read(node).unwrap();
+    assert_ne!(read.kind, Kind::Code, "no longer a code block");
+    assert_eq!(read.meta.language, None);
+    assert!(
+        !read.content.as_text().unwrap_or("").contains("flowchart"),
+        "the example is gone: {:?}",
+        read.content.as_text()
+    );
+}
+
+/// Where code blocks are not offered, neither is *Diagram*.
+#[test]
+fn the_diagram_row_is_offered_only_where_code_is() {
+    use crate::components::command_menu::{Allows, Command, matching};
+    let with = Allows {
+        image: true,
+        image_offline: false,
+        divider: true,
+        quote: true,
+        headings: true,
+        code: true,
+        table: true,
+        tasks: true,
+        blocks: true,
+        pills: true,
+        attrs: true,
+        task_capable: true,
+        task: false,
+        voice: false,
+    };
+    let without = Allows {
+        code: false,
+        ..with
+    };
+    assert!(matching("diag", &with).contains(&Command::Diagram));
+    assert!(matching("mer", &with).contains(&Command::Diagram));
+    assert!(!matching("diag", &without).contains(&Command::Diagram));
+}

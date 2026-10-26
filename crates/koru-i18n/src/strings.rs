@@ -2426,13 +2426,21 @@ pub enum Key {
     /// so there is no number of boxes or messages to name.
     DiagramTooLargeUncounted,
     DiagramEmptyHint,
+    /// The slash menu's and the margin `+`'s row that starts a diagram.
+    DiagramCommand,
+    /// The three boxes of the example a new diagram starts with. Labels only:
+    /// the Mermaid around them is written in code, so no translation can
+    /// break the syntax. Kept free of `[`, `]` and quotes for that reason.
+    DiagramExampleStart,
+    DiagramExampleNext,
+    DiagramExampleDone,
 }
 
 impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1642] = [
+    pub const ALL: [Key; 1646] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -4075,6 +4083,10 @@ impl Key {
         Key::DiagramTooLargeMessagesMany,
         Key::DiagramTooLargeUncounted,
         Key::DiagramEmptyHint,
+        Key::DiagramCommand,
+        Key::DiagramExampleStart,
+        Key::DiagramExampleNext,
+        Key::DiagramExampleDone,
     ];
 }
 
@@ -12503,4 +12515,9 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     // (a source over its size budget), so there is no number to name.
     Row { key: Key::DiagramTooLargeUncounted, en: "Too large to draw", es: "Demasiado grande para dibujar", pt_br: "Grande demais para desenhar", de: "Zu groß zum Zeichnen", fr: "Trop grand pour être dessiné", ar: "أكبر من أن يُرسم", zh_hans: "太大，无法绘制", ja: "大きすぎて描けません" },
     Row { key: Key::DiagramEmptyHint, en: "Describe a flowchart or a sequence diagram here", es: "Describe aquí un diagrama de flujo o un diagrama de secuencia", pt_br: "Descreva aqui um fluxograma ou um diagrama de sequência", de: "Beschreiben Sie hier ein Flussdiagramm oder ein Sequenzdiagramm", fr: "Décrivez ici un organigramme ou un diagramme de séquence", ar: "صِف هنا مخططًا انسيابيًا أو مخططًا تسلسليًا", zh_hans: "在此描述流程图或时序图", ja: "ここにフローチャートまたはシーケンス図を記述してください" },
+    Row { key: Key::DiagramCommand, en: "Diagram", es: "Diagrama", pt_br: "Diagrama", de: "Diagramm", fr: "Diagramme", ar: "مخطط", zh_hans: "图表", ja: "図" },
+    // The example a new diagram opens on: three boxes, left to right.
+    Row { key: Key::DiagramExampleStart, en: "Start", es: "Inicio", pt_br: "Início", de: "Start", fr: "Début", ar: "البداية", zh_hans: "开始", ja: "開始" },
+    Row { key: Key::DiagramExampleNext, en: "Next step", es: "Siguiente paso", pt_br: "Próximo passo", de: "Nächster Schritt", fr: "Étape suivante", ar: "الخطوة التالية", zh_hans: "下一步", ja: "次のステップ" },
+    Row { key: Key::DiagramExampleDone, en: "Done", es: "Hecho", pt_br: "Concluído", de: "Fertig", fr: "Terminé", ar: "تم", zh_hans: "完成", ja: "完了" },
 ];
