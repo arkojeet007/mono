@@ -16,10 +16,10 @@
 use std::sync::mpsc::{Receiver, channel};
 
 use super::*;
-use crate::control::Outgoing;
 use crate::engine::Script;
 use crate::fixtures;
 use crate::models::MemoryModelStore;
+use koru_voice::control::Outgoing;
 use koru_voice::{
     EndReason, EngineEvent, ErrorCode, Event, ModelId, ModelTier, Requested, SessionId, State,
     Transcript, VoiceLanguage,

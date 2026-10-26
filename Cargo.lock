@@ -1734,6 +1734,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-queue"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5047,10 +5056,10 @@ dependencies = [
  "koru-voice-consent",
  "koru-voice-models",
  "koru-voice-ui",
- "koru-voice-worker",
  "koru-window",
  "koru-windows-input",
  "koru-winres",
+ "ksni",
  "libc",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -6629,6 +6638,7 @@ version = "0.0.3"
 dependencies = [
  "bzip2 0.6.1",
  "chrono",
+ "flate2",
  "fs2",
  "hmac 0.12.1",
  "image",
@@ -7336,6 +7346,7 @@ name = "koru-update"
 version = "0.0.3"
 dependencies = [
  "directories",
+ "flate2",
  "fs2",
  "koru-channel",
  "minisign",
@@ -7345,6 +7356,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tar",
  "tempfile",
  "url",
  "uuid",
@@ -7355,6 +7367,7 @@ dependencies = [
 name = "koru-updater"
 version = "0.0.3"
 dependencies = [
+ "flate2",
  "koru-channel",
  "koru-free-space",
  "koru-update",
@@ -7362,6 +7375,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "uuid",
  "windows-sys 0.59.0",
@@ -7486,6 +7500,7 @@ dependencies = [
  "koru-ipc",
  "koru-log",
  "koru-voice",
+ "koru-voice-client",
  "koru-voice-consent",
  "koru-voice-models",
  "koru-voice-sherpa",
@@ -7688,6 +7703,26 @@ dependencies = [
  "koru-i18n",
  "koru-store-core",
  "koru-ui",
+]
+
+[[package]]
+name = "ksni"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bcc1cb43797140f74b711f1c4a49f48a7a7429f211c5fb78264e7bcd1e99caf"
+dependencies = [
+ "arc-swap",
+ "async-executor",
+ "async-io",
+ "async-lock",
+ "crossbeam-queue",
+ "futures-channel",
+ "futures-lite",
+ "futures-util",
+ "pastey 0.2.3",
+ "serde",
+ "task-local",
+ "zbus",
 ]
 
 [[package]]
@@ -12436,6 +12471,15 @@ name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
+
+[[package]]
+name = "task-local"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2972044a9e5e448a506a7ff6f0d03b566d8ef4cd6918a58fc59835a0f8666626"
+dependencies = [
+ "pin-project-lite",
+]
 
 [[package]]
 name = "tempfile"

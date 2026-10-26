@@ -456,6 +456,9 @@ pub enum Key {
     VoiceErrorOutdated,
     VoiceErrorSurface,
     VoiceErrorGeneric,
+    // Settings' Voice section on a platform where this build offers no
+    // dictation yet (`koru_voice::availability::Off::Platform`).
+    VoiceNotOnLinuxYet,
 
     // ------------------------------------------------ voice: consent
     // The consent step, the download's persistent progress toast, and the
@@ -2429,7 +2432,7 @@ impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1641] = [
+    pub const ALL: [Key; 1642] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -2766,6 +2769,7 @@ impl Key {
         Key::VoiceErrorOutdated,
         Key::VoiceErrorSurface,
         Key::VoiceErrorGeneric,
+        Key::VoiceNotOnLinuxYet,
         Key::VoiceConsentTitle,
         Key::VoiceConsentBody,
         Key::VoiceConsentAccept,
@@ -6550,6 +6554,17 @@ pub const ROWS: &[Row] = &[
         ar: "توقّف الإملاء.",
         zh_hans: "听写已停止。",
         ja: "音声入力が停止しました。",
+    },
+    Row {
+        key: Key::VoiceNotOnLinuxYet,
+        en: "Dictation isn't available on Linux yet.",
+        es: "El dictado aún no está disponible en Linux.",
+        pt_br: "O ditado ainda não está disponível no Linux.",
+        de: "Diktieren ist unter Linux noch nicht verfügbar.",
+        fr: "La dictée n’est pas encore disponible sur Linux.",
+        ar: "الإملاء غير متاح على لينكس بعد.",
+        zh_hans: "Linux 上暂不支持听写。",
+        ja: "Linux では音声入力はまだ利用できません。",
     },
     // ---------------------------------------------------- voice: consent
     Row {

@@ -16,7 +16,7 @@
 //! ([LOGGING.md](../../../docs/contributing/operations/LOGGING.md)). There is no transcript,
 //! no device name, no path and no audio here — not "redacted", *absent*. A
 //! report that held one and printed it carefully would be one `{:?}` away from
-//! a log line, which is the mistake `koru_voice::Transcript` exists to make
+//! a log line, which is the mistake [`crate::Transcript`] exists to make
 //! impossible at the leaf.
 //!
 //! Two absences worth naming out loud, because both would be natural to add:
@@ -25,8 +25,8 @@
 //!   often `C:\Users\<a person's name>\…`, and `docs/contributing/operations/LOGGING.md`
 //!   names filesystem paths beside credentials. Whether a model is *installed*
 //!   is the question; where its bytes are is `koru-voice-models`' business.
-//! - **the device's name is not here**, only [`crate::capture::DeviceCategory`].
-//!   See that type's note: it cannot leak a name it does not hold.
+//! - **the device's name is not here**, only [`DeviceCategory`]. See that
+//!   type's note: it cannot leak a name it does not hold.
 //!
 //! ## It is free, so it is always on
 //!
@@ -35,9 +35,21 @@
 //! there is no flag to turn this on: the worker counts as it goes and `status`
 //! reads the counters.
 
-use serde::{Deserialize, Serialize};
+//! ## Why it lives in the contract crate
+//!
+//! The worker writes this report and the Agent reads it, and the Agent must not
+//! link the worker to name it: the worker links both speech runtimes and
+//! `cpal`. So the report and the device categories it carries are declared
+//! here, beside the other wire messages, and the worker keeps only what reads
+//! a real device (`capture::category_of`).
+//!
+//! A device has a category and a name, and only the category may be said. A
+//! capture device's *name* is a person's hardware, and
+//! `docs/contributing/operations/LOGGING.md` is explicit that a log carries
+//! bounded categorical states rather than that. So [`DeviceCategory`] **never
+//! holds the name at all**: it cannot leak a name it does not have.
 
-use crate::capture::{CaptureInfo, DeviceCategory};
+use serde::{Deserialize, Serialize};
 
 /// How long one named step took, the last time it happened.
 ///
@@ -87,7 +99,7 @@ pub struct EngineSummary {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct StatusReport {
     pub worker_version: String,
-    /// `koru_voice::PROTOCOL_VERSION`. Here because a client that will not
+    /// [`crate::PROTOCOL_VERSION`]. Here because a client that will not
     /// connect is the first thing somebody runs `status` about, and the refusal
     /// names both numbers for the same reason.
     pub protocol_version: u32,
@@ -118,17 +130,18 @@ pub struct StatusReport {
     pub device: Option<DeviceCategory>,
     /// The live capture's device rate and channel count, when one is open.
     pub capture: Option<CaptureInfo>,
-    /// What the engine is fed: [`koru_voice::SAMPLE_RATE`], always.
+    /// What the engine is fed: [`crate::SAMPLE_RATE`], always.
     pub sample_rate: u32,
     /// Samples the capture callback overwrote because nothing drained them.
-    /// Cumulative for the life of the process; see [`crate::ring::Ring::dropped`].
+    /// Cumulative for the life of the process: the worker's capture ring counts
+    /// them.
     pub ring_overruns: u64,
     pub ring_capacity: usize,
     /// The session machine's own counters — sessions, samples, partials,
     /// finals, and the three separate kinds of dropped message.
-    pub session: koru_voice::SessionStats,
+    pub session: crate::SessionStats,
     /// Which of the four states the session machine is in.
-    pub state: koru_voice::State,
+    pub state: crate::State,
     /// The last code this worker produced, from either the session machine or
     /// an engine. A token, never prose.
     pub last_error: Option<String>,
@@ -266,6 +279,178 @@ impl StatusReport {
         line("uptime", format!("{}ms", self.uptime_millis));
         out
     }
+}
+
+/// What kind of device this is, without saying which one.
+///
+/// Two bounded categorical states and nothing else — our own closed enums
+/// rather than `cpal`'s, for three reasons. `cpal`'s are `#[non_exhaustive]`,
+/// so an upgrade that adds a device kind must not stop this compiling. They are
+/// not `Serialize`, and a status report crosses a socket. And a token that
+/// reaches a log line should be spelled where somebody can read the list, not
+/// derived from a dependency's variant names.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct DeviceCategory {
+    /// What the device *is*.
+    pub device_type: DeviceKind,
+    /// How it is attached.
+    pub interface_type: InterfaceKind,
+}
+
+/// What a capture device is.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeviceKind {
+    Speaker,
+    Microphone,
+    Headphones,
+    Headset,
+    Earpiece,
+    Handset,
+    HearingAid,
+    Dock,
+    Tuner,
+    Virtual,
+    #[default]
+    Unknown,
+}
+
+impl DeviceKind {
+    /// The stable token, and the same string serde writes — pinned by a test,
+    /// because a `rename_all` change would otherwise move the wire spelling and
+    /// leave every log line behind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeviceKind::Speaker => "speaker",
+            DeviceKind::Microphone => "microphone",
+            DeviceKind::Headphones => "headphones",
+            DeviceKind::Headset => "headset",
+            DeviceKind::Earpiece => "earpiece",
+            DeviceKind::Handset => "handset",
+            DeviceKind::HearingAid => "hearing-aid",
+            DeviceKind::Dock => "dock",
+            DeviceKind::Tuner => "tuner",
+            DeviceKind::Virtual => "virtual",
+            DeviceKind::Unknown => "unknown",
+        }
+    }
+
+    /// Every kind, so a test can walk them.
+    pub const ALL: [DeviceKind; 11] = [
+        DeviceKind::Speaker,
+        DeviceKind::Microphone,
+        DeviceKind::Headphones,
+        DeviceKind::Headset,
+        DeviceKind::Earpiece,
+        DeviceKind::Handset,
+        DeviceKind::HearingAid,
+        DeviceKind::Dock,
+        DeviceKind::Tuner,
+        DeviceKind::Virtual,
+        DeviceKind::Unknown,
+    ];
+}
+
+impl std::fmt::Display for DeviceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How a capture device is attached.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InterfaceKind {
+    BuiltIn,
+    Usb,
+    Bluetooth,
+    Pci,
+    FireWire,
+    Thunderbolt,
+    Hdmi,
+    Line,
+    Spdif,
+    Network,
+    Virtual,
+    DisplayPort,
+    Aggregate,
+    #[default]
+    Unknown,
+}
+
+impl InterfaceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InterfaceKind::BuiltIn => "built-in",
+            InterfaceKind::Usb => "usb",
+            InterfaceKind::Bluetooth => "bluetooth",
+            InterfaceKind::Pci => "pci",
+            InterfaceKind::FireWire => "fire-wire",
+            InterfaceKind::Thunderbolt => "thunderbolt",
+            InterfaceKind::Hdmi => "hdmi",
+            InterfaceKind::Line => "line",
+            InterfaceKind::Spdif => "spdif",
+            InterfaceKind::Network => "network",
+            InterfaceKind::Virtual => "virtual",
+            InterfaceKind::DisplayPort => "display-port",
+            InterfaceKind::Aggregate => "aggregate",
+            InterfaceKind::Unknown => "unknown",
+        }
+    }
+
+    pub const ALL: [InterfaceKind; 14] = [
+        InterfaceKind::BuiltIn,
+        InterfaceKind::Usb,
+        InterfaceKind::Bluetooth,
+        InterfaceKind::Pci,
+        InterfaceKind::FireWire,
+        InterfaceKind::Thunderbolt,
+        InterfaceKind::Hdmi,
+        InterfaceKind::Line,
+        InterfaceKind::Spdif,
+        InterfaceKind::Network,
+        InterfaceKind::Virtual,
+        InterfaceKind::DisplayPort,
+        InterfaceKind::Aggregate,
+        InterfaceKind::Unknown,
+    ];
+}
+
+impl std::fmt::Display for InterfaceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl DeviceCategory {
+    /// What is known before any device has been looked at.
+    pub const UNKNOWN: DeviceCategory = DeviceCategory {
+        device_type: DeviceKind::Unknown,
+        interface_type: InterfaceKind::Unknown,
+    };
+}
+
+impl std::fmt::Display for DeviceCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.device_type, self.interface_type)
+    }
+}
+
+/// What a live capture is doing, for `koru-voice-worker status`.
+///
+/// The device's own rate and channel count are here beside the category because
+/// they are what makes a resampling bug diagnosable: 48 kHz stereo into 16 kHz
+/// mono is the ordinary case, and a transcript that reads like slow nonsense is
+/// the symptom of getting it wrong.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct CaptureInfo {
+    pub category: DeviceCategory,
+    /// What the device delivers, before the worker resamples it.
+    pub device_sample_rate: u32,
+    pub device_channels: u16,
+    /// What the engine is fed. Always [`crate::SAMPLE_RATE`]; carried so a
+    /// status line answers the question rather than implying it.
+    pub engine_sample_rate: u32,
 }
 
 #[cfg(test)]

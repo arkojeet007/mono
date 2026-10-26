@@ -201,6 +201,9 @@ zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 # so a publisher's machine needs no C toolchain to build the workspace.
 tar = "0.4"
 bzip2 = "0.6"
+# The gzip half of the Linux package (`koru-release`'s `tar_gz_dir`). Already
+# in the graph; its default backend is the pure-Rust `miniz_oxide`.
+flate2 = "1"
 # HMAC-SHA256, for AWS SigV4. R2's Cloudflare REST API refuses a body over
 # 300 MB and has no multipart endpoint at all, so an archive of several hundred
 # megabytes can only be published through the S3-compatible API — which is

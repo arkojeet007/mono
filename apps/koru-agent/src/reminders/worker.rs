@@ -90,7 +90,12 @@ pub(crate) struct ReminderActivationIngress {
     signal: Arc<Signal>,
 }
 
+/// **Nothing raises these on Linux yet.** Windows hears `WM_TIMECHANGE` and
+/// resume in the Agent's message hook and macOS from `NSWorkspace`; Linux has
+/// no equivalent wired (logind's `PrepareForSleep` would be it), so a reminder
+/// there notices a zone change or a resume only at its next scheduled check.
 #[derive(Clone)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(crate) struct ReminderWakeIngress {
     signal: Arc<Signal>,
 }
@@ -113,6 +118,7 @@ impl ReminderControlIngress {
 }
 
 impl ReminderWakeIngress {
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn wake(&self, command: Command) {
         self.signal.raise(command);
     }

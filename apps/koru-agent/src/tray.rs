@@ -43,15 +43,22 @@
 //! could not draw a picture would be a worse outcome than the one it was
 //! avoiding.
 //!
-//! ## Windows and macOS; the gtk objection was Linux's
+//! ## Windows and macOS share `tray-icon`; Linux speaks StatusNotifierItem
 //!
 //! This section used to say *Windows only*, because `tray-icon` "reaches for
 //! gtk and libxdo elsewhere". [ADR-118](../../../docs/decisions/README.md) checked:
 //! that weight is Linux's — on macOS the crate wraps `NSStatusItem` and pulls
-//! neither — so one implementation serves both platforms and the `cfg`s are
-//! what change. On Linux [`Tray::show`] still answers `None` and the agent
-//! runs headless — not a degraded mode, just a platform whose port has not
-//! been paid for.
+//! neither — so one implementation, `imp`, serves both platforms and the
+//! `cfg`s are what change.
+//!
+//! Linux has its own, `linux`: the StatusNotifierItem D-Bus protocol through
+//! `ksni`, which needs no gtk. Its menu is a pure function of the tray's
+//! state, [`linux_menu`], built from the same text helpers `imp` uses, so the
+//! platforms cannot tell different stories. With no notification-area host on
+//! the session bus — GNOME without the AppIndicator extension — `show`
+//! answers `None` and the agent runs headless, as it does wherever there is
+//! no tray. Linux leaves out the same two rows macOS does, for reasons of its
+//! own (see [`linux_menu`]), and keeps the Windows left click.
 //!
 //! Two rows are Windows-only and are **left out** of the macOS menu rather
 //! than shipped dead ([ADR-118](../../../docs/decisions/ADR-101-125.md#adr-118--the-tray-is-windows-and-macos-the-gtk-objection-was-linuxs)):
@@ -63,12 +70,16 @@
 //! the workspace window in use, or Search when there is none) stays
 //! Windows-only.
 
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 use crate::event::TrayAsk;
 
 #[cfg(any(windows, target_os = "macos"))]
 pub use imp::Tray;
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+pub use linux::Tray;
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub use stub::Tray;
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -368,9 +379,7 @@ mod imp {
             // icon that depends on a path is an icon that goes missing.
             #[cfg(target_os = "macos")]
             let icon = {
-                let rgba = image::load_from_memory(super::MACOS_ICON_PNG)
-                    .ok()?
-                    .to_rgba8();
+                let rgba = image::load_from_memory(super::ICON_PNG).ok()?.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 Icon::from_rgba(rgba.into_raw(), width, height).ok()?
             };
@@ -1126,12 +1135,322 @@ mod imp {
     }
 }
 
-/// The tray picture on macOS, compiled in — tracked in git, not a fetched
-/// asset, so a fresh clone builds. See the icon note in [`imp::Tray::show`].
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const MACOS_ICON_PNG: &[u8] = include_bytes!("../../../assets/logo.png");
+/// The tray picture on macOS and Linux, compiled in — tracked in git, not a
+/// fetched asset, so a fresh clone builds. See the icon note in
+/// `imp::Tray::show`.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) const ICON_PNG: &[u8] = include_bytes!("../../../assets/logo.png");
 
-#[cfg(not(any(windows, target_os = "macos")))]
+/// **Linux: a StatusNotifierItem**, served over D-Bus by `ksni`.
+///
+/// The same menu `imp` builds, derived from [`super::MenuState`] by
+/// [`super::linux_menu`] — see there for the two rows Linux leaves out and
+/// why. The setters keep that state and push it to the service only when it
+/// moved; the host asks for the layout when it opens the menu.
+///
+/// `None` when no notification-area host is listening — vanilla GNOME without
+/// the AppIndicator extension. `ksni` asks the StatusNotifierWatcher at spawn
+/// and fails when there is none, so the Agent then runs as it did before, with
+/// the console line telling the person how to stop it.
+///
+/// ## Three things that differ from `tray-icon`
+///
+/// **Clicks arrive on `ksni`'s own thread.** Its service runs on a thread it
+/// spawns, and an item's `activate` closure runs there with the service's lock
+/// held — so, as in `imp`, a click only carries its ask through the [`Waker`]
+/// and the loop does the work. Nothing here may block in a closure: the menu
+/// would freeze until it returned.
+///
+/// **An underscore is a mnemonic.** DBusMenu reads `_x` as *x is the access
+/// key* and drops the underscore, the way Windows reads `&`; a workspace named
+/// `my_notes` would show as `mynotes`. Every label is escaped on its way out —
+/// see [`escape`] — which is `imp`'s `&` → `&&` rule in this protocol's
+/// spelling.
+///
+/// **Left click is `activate`**, and it raises [`TrayAsk::IconClick`] — the
+/// Windows gesture: bring back the workspace window in use, or Search. Hosts
+/// decide whether a left click activates or opens the menu; GNOME's
+/// AppIndicator extension may open the menu, which is a host's convention the
+/// Agent does not fight.
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{MenuRow, MenuState, Shortcut, Surfaces, VoiceMenu};
+    use crate::event::{AgentEvent, TrayAsk, Waker};
+    use crate::registry::OpenWorkspace;
+    use ksni::blocking::TrayMethods;
+
+    /// What the service thread owns: the state the menu is derived from, and
+    /// what a click needs to raise its ask.
+    struct Item {
+        state: MenuState,
+        tooltip: String,
+        icon: Option<ksni::Icon>,
+        waker: Waker,
+    }
+
+    impl ksni::Tray for Item {
+        fn id(&self) -> String {
+            "koru-agent".into()
+        }
+        fn title(&self) -> String {
+            "Koru Agent".into()
+        }
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            self.icon.iter().cloned().collect()
+        }
+        fn tool_tip(&self) -> ksni::ToolTip {
+            ksni::ToolTip {
+                title: self.tooltip.clone(),
+                ..Default::default()
+            }
+        }
+        fn activate(&mut self, _x: i32, _y: i32) {
+            self.waker.wake(AgentEvent::Tray(TrayAsk::IconClick));
+        }
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            super::linux_menu(&self.state)
+                .into_iter()
+                .map(native)
+                .collect()
+        }
+    }
+
+    /// One [`MenuRow`] as a `ksni` item. A pressable row gets a closure that
+    /// raises its ask and nothing else; a reading or a greyed row gets one
+    /// that does nothing — see [`raise`].
+    fn native(row: MenuRow) -> ksni::MenuItem<Item> {
+        match row {
+            MenuRow::Separator => ksni::MenuItem::Separator,
+            MenuRow::Item {
+                label,
+                enabled,
+                ask,
+                shortcut,
+            } => ksni::menu::StandardItem {
+                label: escape(&label),
+                enabled,
+                shortcut: shortcut.map(|press| vec![press]).unwrap_or_default(),
+                activate: raise(ask.filter(|_| enabled)),
+                ..Default::default()
+            }
+            .into(),
+            // **The tick is not flipped here.** `ksni` leaves `checked` to the
+            // tray, and the loop answers the ask by reading the real state
+            // fresh — `imp`'s read-back rule — so the tick changes when the
+            // next setter reports it, never on the strength of the click.
+            MenuRow::Check {
+                label,
+                enabled,
+                checked,
+                ask,
+            } => ksni::menu::CheckmarkItem {
+                label: escape(&label),
+                enabled,
+                checked,
+                activate: raise(Some(ask).filter(|_| enabled)),
+                ..Default::default()
+            }
+            .into(),
+            MenuRow::Submenu { label, rows } => ksni::menu::SubMenu {
+                label: escape(&label),
+                submenu: rows.into_iter().map(native).collect(),
+                ..Default::default()
+            }
+            .into(),
+        }
+    }
+
+    /// The closure a row carries: wake the loop with its ask, or do nothing.
+    ///
+    /// **A greyed row is given nothing to raise**, rather than trusted not to
+    /// be clicked: `ksni` passes a `clicked` event to the closure whatever the
+    /// item's `enabled` says, so the guarantee `tray-icon` gives `imp` — a
+    /// disabled row raises no event — is made here, not left to the host.
+    fn raise(ask: Option<TrayAsk>) -> Box<dyn Fn(&mut Item) + Send> {
+        match ask {
+            Some(ask) => {
+                Box::new(move |item: &mut Item| item.waker.wake(AgentEvent::Tray(ask.clone())))
+            }
+            None => Box::new(|_: &mut Item| {}),
+        }
+    }
+
+    /// A label as DBusMenu should draw it: every `_` doubled, so none is read
+    /// as an access-key marker. See the module note.
+    pub(super) fn escape(label: &str) -> String {
+        label.replace('_', "__")
+    }
+
+    /// The same compiled-in picture macOS uses, as the ARGB32 big-endian
+    /// pixmap the protocol carries.
+    fn icon() -> Option<ksni::Icon> {
+        let rgba = image::load_from_memory(super::ICON_PNG).ok()?.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let mut data = rgba.into_raw();
+        for pixel in data.chunks_exact_mut(4) {
+            pixel.rotate_right(1);
+        }
+        Some(ksni::Icon {
+            width: i32::try_from(width).ok()?,
+            height: i32::try_from(height).ok()?,
+            data,
+        })
+    }
+
+    /// A live icon. **Dropping it removes the icon**, as `imp`'s does.
+    pub struct Tray {
+        handle: ksni::blocking::Handle<Item>,
+        /// What the service was last given — the setters' equality guard.
+        ///
+        /// **A guard, not a nicety.** The loop calls every setter on every
+        /// wake, and each `Handle::update` is a blocking round trip to the
+        /// service thread that re-derives the menu and diffs it; nothing here
+        /// should cost a D-Bus conversation when nothing changed — `imp`'s
+        /// rule for native calls.
+        state: MenuState,
+    }
+
+    impl Tray {
+        pub fn show(segment: &str, root: Option<&std::path::Path>, waker: Waker) -> Option<Self> {
+            let info = koru_update::build_info();
+            let lang =
+                koru_i18n::Lang::for_system(koru_window::system_locale::system_locale().as_deref());
+            // Read once, as `imp` reads each of these when it builds its menu;
+            // the setters correct whatever moves afterwards.
+            let state = MenuState {
+                lang,
+                surfaces: Surfaces {
+                    ai: koru_features::ai(),
+                    reminders: koru_features::reminders(),
+                    agents: koru_features::agents(),
+                },
+                shortcut: Shortcut::Unknown,
+                ai_shortcut: None,
+                store_running: None,
+                voice: super::voice_state(root, koru_voice::InputChoice::SystemDefault),
+                dictation_shortcut: Shortcut::Unknown,
+                workspaces: Vec::new(),
+                agents: Vec::new(),
+                relay: super::relay_state(),
+                relay_status: super::relay_connection(),
+                about: super::about_line(info.version, info.build_number, info.build_label()),
+                about_enabled: super::release_notes_url().is_some(),
+            };
+            let item = Item {
+                state: state.clone(),
+                tooltip: super::tooltip(info.version, segment, root, super::branch()),
+                icon: icon(),
+                waker,
+            };
+            match item.spawn() {
+                Ok(handle) => Some(Self { handle, state }),
+                Err(error) => {
+                    tracing::info!(%error, "no notification-area host; running without an icon");
+                    None
+                }
+            }
+        }
+
+        /// Hand the service the current state. Called only after a setter has
+        /// seen its field move.
+        fn push(&self) {
+            let state = self.state.clone();
+            // `None` is a service that has shut down. There is nothing to
+            // update and nothing the loop could do about it.
+            let _ = self.handle.update(move |item| item.state = state);
+        }
+
+        pub fn set_workspaces(&mut self, rows: &[OpenWorkspace]) {
+            if self.state.workspaces == rows {
+                return;
+            }
+            self.state.workspaces = rows.to_vec();
+            self.push();
+        }
+
+        pub fn set_agent_sessions(&mut self, catalog: &crate::agents_menu::AgentsCatalog) {
+            let lines = super::agents_menu_lines(catalog, self.state.lang);
+            if self.state.agents == lines {
+                return;
+            }
+            self.state.agents = lines;
+            self.push();
+        }
+
+        pub fn set_store_running(&mut self, running: bool) {
+            if self.state.store_running == Some(running) {
+                return;
+            }
+            self.state.store_running = Some(running);
+            self.push();
+        }
+
+        pub fn set_voice(&mut self, state: &VoiceMenu) {
+            if &self.state.voice == state {
+                return;
+            }
+            self.state.voice = state.clone();
+            self.push();
+        }
+
+        pub fn set_relay(&mut self, state: Option<bool>) {
+            if self.state.relay == state {
+                return;
+            }
+            self.state.relay = state;
+            self.push();
+        }
+
+        pub fn set_relay_status(&mut self, state: koru_network_iroh::RelayConnectionStatus) {
+            if self.state.relay_status == state {
+                return;
+            }
+            self.state.relay_status = state;
+            self.push();
+        }
+
+        /// `Unknown` leaves the row as it was — `imp`'s rule: saying anything
+        /// before the hotkey thread answers is guessing.
+        pub fn set_shortcut(&mut self, shortcut: &Shortcut) {
+            if &self.state.shortcut == shortcut || *shortcut == Shortcut::Unknown {
+                return;
+            }
+            self.state.shortcut = shortcut.clone();
+            self.push();
+        }
+
+        pub fn set_dictation_shortcut(&mut self, shortcut: &Shortcut) {
+            if &self.state.dictation_shortcut == shortcut {
+                return;
+            }
+            self.state.dictation_shortcut = shortcut.clone();
+            self.push();
+        }
+
+        pub fn set_ai_shortcut(&mut self, available: bool) {
+            if self.state.ai_shortcut == Some(available) {
+                return;
+            }
+            self.state.ai_shortcut = Some(available);
+            self.push();
+        }
+
+        /// A no-op: Linux has no Links submenu (see [`super::linux_menu`]).
+        /// Kept so the loop calls every platform's tray the same way.
+        pub fn set_url_scheme(&mut self, _state: &koru_url_scheme::Registration) {}
+    }
+
+    impl Drop for Tray {
+        /// Unregister from the host, so the icon goes when the Agent does
+        /// rather than when its D-Bus connection happens to close. Not waited
+        /// for: a quitting Agent has nothing to gain from blocking on it.
+        fn drop(&mut self) {
+            let _ = self.handle.shutdown();
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod stub {
     use crate::event::Waker;
     use crate::registry::OpenWorkspace;
@@ -1314,7 +1633,7 @@ pub(crate) const OFFERED: &[TrayAsk] = &[
     TrayAsk::NewAgent,
     // The two Links rows and the backup row are appended on Windows only —
     // registration is bundle-level work on macOS and the folder picker is a
-    // threading redesign there. See the module note.
+    // threading redesign there; Linux's reasons are at `linux_menu`.
     #[cfg(windows)]
     TrayAsk::RegisterUrlScheme,
     #[cfg(windows)]
@@ -1359,6 +1678,10 @@ pub(crate) fn url_scheme_state() -> koru_url_scheme::Registration {
 /// installs side by side and only one of them opens `koru://`, so the state has
 /// to be readable at the moment somebody is deciding whether to press the row
 /// beneath it.
+///
+/// Windows and macOS only, with its sibling below: Linux draws no Links
+/// submenu (see [`linux_menu`]).
+#[cfg(any(windows, target_os = "macos", test))]
 fn url_scheme_line(state: &koru_url_scheme::Registration) -> String {
     use koru_url_scheme::Registration;
     match state {
@@ -1387,6 +1710,7 @@ fn url_scheme_line(state: &koru_url_scheme::Registration) -> String {
 }
 
 /// What the action row beneath it offers.
+#[cfg(any(windows, target_os = "macos", test))]
 fn url_scheme_action(state: &koru_url_scheme::Registration) -> &'static str {
     match state {
         koru_url_scheme::Registration::ThisBuild => "Stop handling koru:// links",
@@ -1460,15 +1784,16 @@ pub(crate) fn relay_connection() -> koru_network_iroh::RelayConnectionStatus {
 /// in and an honest status display, so the state has to be a value rather than
 /// a sentence assembled at the menu.
 ///
-/// Four states and no fifth. `Unavailable` is `KORU_VOICE_DISABLED`, read
-/// through `koru_voice::available()` — the one predicate the worker's
-/// supervisor, the welcome hint and the `/dictate` row also ask, so the four
-/// surfaces cannot answer it four ways (Q-V44).
+/// Four states and no fifth. `Unavailable` is `koru_voice::off()` — the
+/// `KORU_VOICE_DISABLED` switch, or a platform with no voice yet (Linux) — the
+/// one predicate the worker's supervisor, the welcome hint and the `/dictate`
+/// row also ask, so the four surfaces cannot answer it four ways (Q-V44). It
+/// carries which, because the two are different sentences.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum VoiceRow {
     /// This installation offers no dictation. The submenu says so and offers
     /// nothing; nothing is dialled and no worker is started.
-    Unavailable,
+    Unavailable(koru_voice::Off),
     /// Nothing is installed yet.
     ///
     /// `megabytes` is what the download costs, when that is known — it comes
@@ -1561,7 +1886,7 @@ impl VoiceMenu {
     /// carrying a stale one would let the submenu offer *Stop* on a build that
     /// may not start anything.
     pub fn keeping_worker(mut self, worker: Option<VoiceWorker>) -> VoiceMenu {
-        if !matches!(self.row, VoiceRow::Unavailable) {
+        if !matches!(self.row, VoiceRow::Unavailable(_)) {
             self.worker = worker;
         }
         self
@@ -1574,7 +1899,7 @@ impl VoiceMenu {
     /// blanking the list on one would empty the picker every time a model was
     /// installed.
     pub fn keeping_devices(mut self, devices: Vec<koru_voice::InputDevice>) -> VoiceMenu {
-        if !matches!(self.row, VoiceRow::Unavailable) {
+        if !matches!(self.row, VoiceRow::Unavailable(_)) {
             self.devices = devices;
         }
         self
@@ -1777,10 +2102,10 @@ fn voice_menu_localized(
     // **One line, and nothing that could dial or start anything.** A build with
     // `KORU_VOICE_DISABLED` set offers no dictation at all, so a submenu of
     // greyed rows would be four ways of saying the same thing.
-    if matches!(state.row, VoiceRow::Unavailable) {
+    if let VoiceRow::Unavailable(off) = state.row {
         return vec![VoiceLine::Status(
             VoiceStatus::Summary,
-            "Voice input is switched off on this installation".to_owned(),
+            unavailable_line(off, lang),
         )];
     }
 
@@ -1859,12 +2184,24 @@ fn live_line(state: koru_voice::State) -> Option<&'static str> {
     }
 }
 
+/// Why there is no voice, in one line. A platform without it gets the sentence
+/// Settings shows, localized; the switch keeps its own, which names what a
+/// developer set.
+fn unavailable_line(off: koru_voice::Off, lang: koru_i18n::Lang) -> String {
+    match off {
+        koru_voice::Off::Platform => {
+            koru_i18n::t(lang, koru_i18n::Key::VoiceNotOnLinuxYet).to_owned()
+        }
+        koru_voice::Off::Switch => "Voice input is switched off on this installation".to_owned(),
+    }
+}
+
 /// **Does this work, and with what** — one line.
 fn summary_line(state: &VoiceMenu) -> String {
     match &state.row {
         // Answered by the caller, and repeated here so this stays total rather
         // than relying on a `return` several screens up.
-        VoiceRow::Unavailable => "Voice input is switched off on this installation".to_owned(),
+        VoiceRow::Unavailable(off) => unavailable_line(*off, koru_i18n::Lang::En),
         VoiceRow::NotInstalled { megabytes: None } => "Not set up — no model yet".to_owned(),
         VoiceRow::NotInstalled {
             megabytes: Some(mb),
@@ -1926,7 +2263,7 @@ fn tier_label(tier: koru_voice_models::ModelTier) -> &'static str {
 /// channel's process — while the menu sits there. See [`TrayAsk::Voice`].
 fn act_label(row: &VoiceRow) -> &'static str {
     match row {
-        VoiceRow::Unavailable => "Voice input is unavailable",
+        VoiceRow::Unavailable(_) => "Voice input is unavailable",
         VoiceRow::NotInstalled { .. } => "Set voice input up…",
         VoiceRow::Downloading { .. } => "Show the download",
         VoiceRow::Installed => "Start dictation",
@@ -1985,9 +2322,9 @@ pub(crate) fn voice_state(
     root: Option<&std::path::Path>,
     input: koru_voice::InputChoice,
 ) -> VoiceMenu {
-    if !koru_voice::available() {
+    if let Some(off) = koru_voice::off() {
         return VoiceMenu {
-            row: VoiceRow::Unavailable,
+            row: VoiceRow::Unavailable(off),
             installed: Vec::new(),
             worker: None,
             devices: Vec::new(),
@@ -2107,6 +2444,358 @@ fn tooltip(
         Some(branch) => format!("{base} — {branch}"),
         None => base,
     }
+}
+
+/// **Everything the Linux menu draws, as one value.**
+///
+/// `imp` keeps this state in native items it relabels one by one; a
+/// StatusNotifierItem's menu is instead *asked for* — the host calls
+/// `GetLayout` over D-Bus and `ksni` answers with `ksni::Tray::menu` — so
+/// Linux keeps the state and derives the whole menu from it with
+/// [`linux_menu`]. That makes the menu a pure function a test can hold, which
+/// is the property the shared helpers below already have.
+///
+/// Each field is what one of `Tray`'s setters reports, stored the way `imp`
+/// stores its equality guards, so the setters can skip a D-Bus round trip
+/// when nothing moved.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct MenuState {
+    /// The menu's language, decided once when the icon is shown — `imp`'s
+    /// rule.
+    pub(crate) lang: koru_i18n::Lang,
+    /// Which surfaces this build shows (`koru-features`), read once at show
+    /// like `imp`'s.
+    pub(crate) surfaces: Surfaces,
+    pub(crate) shortcut: Shortcut,
+    /// `None` until the hotkey thread reports, like `imp`'s `ai_shortcut`.
+    pub(crate) ai_shortcut: Option<bool>,
+    /// `None` until supervision first reports — *Checking…*.
+    pub(crate) store_running: Option<bool>,
+    pub(crate) voice: VoiceMenu,
+    pub(crate) dictation_shortcut: Shortcut,
+    pub(crate) workspaces: Vec<crate::registry::OpenWorkspace>,
+    /// [`agents_menu_lines`]' projection, stored rather than the catalog: it
+    /// is what `imp` compares, and all the menu needs.
+    pub(crate) agents: Vec<AgentsLine>,
+    pub(crate) relay: Option<bool>,
+    pub(crate) relay_status: koru_network_iroh::RelayConnectionStatus,
+    /// [`about_line`]'s text, and whether this build has a release-notes page
+    /// to open — decided once, as `imp` decides it.
+    pub(crate) about: String,
+    pub(crate) about_enabled: bool,
+}
+
+/// The `koru-features` switches the menu consults, as a value — so a test can
+/// build the simplified product without touching process state.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Surfaces {
+    pub(crate) ai: bool,
+    pub(crate) reminders: bool,
+    pub(crate) agents: bool,
+}
+
+/// One row of the Linux menu, before it is a `ksni` item.
+///
+/// **`ask` is what pressing raises, and `None` is a reading** — a heading or a
+/// status line. A row can carry an ask and still be greyed (*Release model
+/// from memory* with nothing loaded), and then pressing it raises nothing —
+/// the guarantee `imp` gets from `tray-icon`, which `linux` makes itself.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum MenuRow {
+    Separator,
+    Item {
+        label: String,
+        enabled: bool,
+        ask: Option<TrayAsk>,
+        /// The registered chord, in DBusMenu's shape — see [`dbus_shortcut`].
+        shortcut: Option<Vec<String>>,
+    },
+    Check {
+        label: String,
+        enabled: bool,
+        checked: bool,
+        ask: TrayAsk,
+    },
+    Submenu {
+        label: String,
+        rows: Vec<MenuRow>,
+    },
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl MenuRow {
+    /// A pressable row.
+    fn action(label: impl Into<String>, ask: TrayAsk) -> MenuRow {
+        MenuRow::Item {
+            label: label.into(),
+            enabled: true,
+            ask: Some(ask),
+            shortcut: None,
+        }
+    }
+
+    /// A row that says something and cannot be pressed.
+    fn reading(label: impl Into<String>) -> MenuRow {
+        MenuRow::Item {
+            label: label.into(),
+            enabled: false,
+            ask: None,
+            shortcut: None,
+        }
+    }
+}
+
+/// **The Linux menu, as a pure function of what the tray has been told.**
+///
+/// The same rows, in the same order, with the same labels and the same asks as
+/// `imp::Tray::show` builds — every label comes from the helpers `imp` uses, so
+/// the two cannot tell different stories. Two rows are deliberately absent,
+/// each for a reason that is Linux's own:
+///
+/// - **Backup Store…** — its folder picker is `rfd`, which this crate links on
+///   Windows only, and `service::backup_store` is a no-op everywhere else. On
+///   Linux `rfd`'s default backend is gtk3 — exactly the weight ADR-118 kept
+///   `tray-icon` off Linux for — so a row here would be a button that does
+///   nothing. `imp` leaves it out of the macOS menu for the same shape of
+///   reason.
+/// - **Links** — `koru://` registration on Linux is a `.desktop` file and
+///   `xdg-mime`, desktop-integration work for a later rung;
+///   `koru_url_scheme::state` answers `Unsupported` here, and a submenu whose
+///   only action cannot act is furniture (ADR-118: prefer omission).
+///
+/// Quit is last and unconditional — the rule this module exists to keep.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn linux_menu(state: &MenuState) -> Vec<MenuRow> {
+    let lang = state.lang;
+    let mut rows = Vec::new();
+    if state.surfaces.ai {
+        rows.push(ai_chat_row(state.ai_shortcut));
+    }
+    rows.push(search_row(&state.shortcut));
+    if state.surfaces.reminders {
+        rows.push(MenuRow::action(
+            koru_i18n::t(lang, koru_i18n::Key::ReminderAll),
+            TrayAsk::Reminders,
+        ));
+    }
+    rows.push(MenuRow::Submenu {
+        label: voice_line(&state.voice.row),
+        rows: voice_rows(&state.voice, &state.dictation_shortcut, lang),
+    });
+    let mut workspaces = vec![MenuRow::action("Open Workspace", TrayAsk::Restore)];
+    if !state.workspaces.is_empty() {
+        workspaces.push(MenuRow::Separator);
+        for row in &state.workspaces {
+            workspaces.push(MenuRow::action(
+                row.label.clone(),
+                TrayAsk::OpenWorkspace(row.connection),
+            ));
+        }
+    }
+    rows.push(MenuRow::Submenu {
+        label: "Workspaces".to_owned(),
+        rows: workspaces,
+    });
+    if state.surfaces.agents {
+        let mut agents = vec![MenuRow::action(
+            koru_i18n::t(lang, koru_i18n::Key::TerminalNew),
+            TrayAsk::NewAgent,
+        )];
+        for line in &state.agents {
+            agents.push(match line {
+                AgentsLine::Separator => MenuRow::Separator,
+                AgentsLine::Header(name) => MenuRow::reading(name.clone()),
+                AgentsLine::Session { session, label } => {
+                    MenuRow::action(label.clone(), TrayAsk::ShowAgentSession(*session))
+                }
+            });
+        }
+        rows.push(MenuRow::Submenu {
+            label: koru_i18n::t(lang, koru_i18n::Key::TerminalAgents).to_owned(),
+            rows: agents,
+        });
+    }
+    rows.push(MenuRow::Submenu {
+        label: "API Gateway".to_owned(),
+        rows: vec![MenuRow::action("Docs", TrayAsk::OpenGatewayDocs)],
+    });
+    rows.push(MenuRow::Submenu {
+        label: "Store".to_owned(),
+        rows: vec![
+            // Pressable, as in `imp`: pressing the status asks for a fresh one.
+            MenuRow::action(
+                match state.store_running {
+                    None => "Store running: Checking…",
+                    Some(true) => "Store running: Yes",
+                    Some(false) => "Store running: No",
+                },
+                TrayAsk::RefreshStore,
+            ),
+            MenuRow::Separator,
+            MenuRow::action("Open store stats", TrayAsk::OpenStoreStats),
+            MenuRow::action("Open store location", TrayAsk::OpenStoreLocation),
+        ],
+    });
+    rows.push(MenuRow::Separator);
+    rows.push(MenuRow::Submenu {
+        label: "Data locations".to_owned(),
+        rows: vec![
+            MenuRow::action("Show root", TrayAsk::OpenLocation),
+            MenuRow::action("Show local data", TrayAsk::OpenLocalDataLocation),
+            MenuRow::action("Show remote data", TrayAsk::OpenSharedLocation),
+        ],
+    });
+    let relay = relay_row(state.relay);
+    rows.push(MenuRow::Check {
+        label: koru_i18n::t(lang, koru_i18n::Key::RelayUse).to_owned(),
+        enabled: relay.enabled,
+        checked: relay.checked,
+        ask: TrayAsk::ToggleRelay,
+    });
+    rows.push(MenuRow::reading(relay_status_line(
+        lang,
+        &state.relay_status,
+    )));
+    rows.push(MenuRow::Separator);
+    rows.push(MenuRow::Submenu {
+        label: "About Koru".to_owned(),
+        rows: vec![
+            MenuRow::Item {
+                label: state.about.clone(),
+                enabled: state.about_enabled,
+                ask: Some(TrayAsk::About),
+                shortcut: None,
+            },
+            MenuRow::action("Send feedback", TrayAsk::SendFeedback),
+        ],
+    });
+    rows.push(MenuRow::action(
+        "Check for updates",
+        TrayAsk::CheckForUpdates,
+    ));
+    rows.push(MenuRow::Separator);
+    rows.push(MenuRow::action("Quit Koru Agent", TrayAsk::Quit));
+    rows
+}
+
+/// The Search row, saying what `imp::Tray::set_shortcut` makes it say.
+///
+/// **The chord is DBusMenu's `shortcut` property**, the counterpart of `imp`'s
+/// accelerator, parsed from the label the registration reported for the same
+/// reason: the menu must not be able to name a chord nobody registered. One the
+/// property cannot carry is written into the text, as `imp` does with one
+/// `Accelerator` cannot parse. Whether the host draws the property is the
+/// host's business; not every one does.
+#[cfg(any(target_os = "linux", test))]
+fn search_row(shortcut: &Shortcut) -> MenuRow {
+    let (label, shortcut) = match shortcut {
+        Shortcut::Unknown => ("Search".to_owned(), None),
+        Shortcut::Chord(chord) => match dbus_shortcut(chord) {
+            Some(keys) => ("Search".to_owned(), Some(keys)),
+            None => (format!("Search ({chord})"), None),
+        },
+        Shortcut::Absent => ("Search (no global shortcut)".to_owned(), None),
+    };
+    MenuRow::Item {
+        label,
+        enabled: true,
+        ask: Some(TrayAsk::Search),
+        shortcut,
+    }
+}
+
+/// The Koru AI Chat row, saying what `imp::Tray::set_ai_shortcut` makes it
+/// say. `None` is *not reported yet* and draws the plain label, as `imp`'s
+/// freshly built row does.
+#[cfg(any(target_os = "linux", test))]
+fn ai_chat_row(available: Option<bool>) -> MenuRow {
+    let (label, shortcut) = match available {
+        None => ("Koru AI Chat", None),
+        Some(true) => ("Koru AI Chat", dbus_shortcut("Ctrl+Shift+I")),
+        Some(false) => ("Koru AI Chat (no global shortcut)", None),
+    };
+    MenuRow::Item {
+        label: label.to_owned(),
+        enabled: true,
+        ask: Some(TrayAsk::AiChat),
+        shortcut,
+    }
+}
+
+/// The *Voice input* submenu's rows, from [`voice_menu_localized`] — the lines
+/// `imp`'s `fill_voice` draws, with each [`VoiceAsk`] raised as the same
+/// [`TrayAsk`] `imp`'s handler maps it to.
+#[cfg(any(target_os = "linux", test))]
+fn voice_rows(state: &VoiceMenu, dictation: &Shortcut, lang: koru_i18n::Lang) -> Vec<MenuRow> {
+    let chord = match dictation {
+        Shortcut::Chord(label) => Some(label.as_str()),
+        Shortcut::Unknown | Shortcut::Absent => None,
+    };
+    voice_menu_localized(state, chord, lang)
+        .into_iter()
+        .map(|line| match line {
+            VoiceLine::Separator => MenuRow::Separator,
+            VoiceLine::Status(_, text) => MenuRow::reading(text),
+            VoiceLine::Input(inputs) => MenuRow::Submenu {
+                label: input_title(state),
+                rows: inputs
+                    .into_iter()
+                    .map(|row| MenuRow::Check {
+                        label: row.label,
+                        enabled: true,
+                        checked: row.chosen,
+                        ask: TrayAsk::ChooseVoiceInput(row.choice),
+                    })
+                    .collect(),
+            },
+            VoiceLine::Action {
+                ask,
+                label,
+                enabled,
+            } => MenuRow::Item {
+                label,
+                enabled,
+                ask: Some(match ask {
+                    VoiceAsk::Act => TrayAsk::Voice,
+                    VoiceAsk::Settings => TrayAsk::VoiceSettings,
+                    VoiceAsk::Release => TrayAsk::VoiceRelease,
+                    VoiceAsk::Stop => TrayAsk::VoiceStop,
+                }),
+                shortcut: None,
+            },
+        })
+        .collect()
+}
+
+/// A chord label (`Ctrl+Shift+K`) as one DBusMenu key press — modifiers
+/// first, then the key, with the modifiers spelled the way the property
+/// requires (`Control`, `Alt`, `Shift`, `Super`).
+///
+/// `None` for anything that is not modifiers-then-one-key, so the caller can
+/// say the chord in the text instead of drawing a wrong one.
+#[cfg(any(target_os = "linux", test))]
+fn dbus_shortcut(label: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = label.split('+').map(str::trim).collect();
+    let (key, modifiers) = parts.split_last()?;
+    if key.is_empty() || modifiers.is_empty() {
+        return None;
+    }
+    let mut press = modifiers
+        .iter()
+        .map(|modifier| match *modifier {
+            "Ctrl" | "Control" => Some("Control"),
+            "Alt" => Some("Alt"),
+            "Shift" => Some("Shift"),
+            "Win" | "Super" | "Cmd" => Some("Super"),
+            _ => None,
+        })
+        .map(|modifier| modifier.map(str::to_owned))
+        .collect::<Option<Vec<String>>>()?;
+    press.push((*key).to_owned());
+    Some(press)
 }
 
 #[cfg(test)]
@@ -2296,7 +2985,7 @@ mod tests {
     /// broken PNG would otherwise be found by the first Mac to show an icon.
     #[test]
     fn the_macos_icon_decodes() {
-        let rgba = image::load_from_memory(MACOS_ICON_PNG)
+        let rgba = image::load_from_memory(ICON_PNG)
             .expect("assets/logo.png decodes")
             .to_rgba8();
         assert!(rgba.width() > 0 && rgba.height() > 0);
@@ -2375,7 +3064,7 @@ mod tests {
     #[test]
     fn the_voice_title_is_stable_in_every_state() {
         for row in [
-            VoiceRow::Unavailable,
+            VoiceRow::Unavailable(koru_voice::Off::Switch),
             VoiceRow::NotInstalled { megabytes: None },
             VoiceRow::NotInstalled {
                 megabytes: Some(650),
@@ -2399,7 +3088,7 @@ mod tests {
             })
         };
         assert_eq!(
-            summary(VoiceRow::Unavailable, Vec::new()),
+            summary(VoiceRow::Unavailable(koru_voice::Off::Switch), Vec::new()),
             "Voice input is switched off on this installation"
         );
         assert_eq!(
@@ -2712,7 +3401,7 @@ mod tests {
     /// nothing here is no use behind a submenu nobody can open.
     #[test]
     fn a_switched_off_installation_says_so_and_offers_nothing() {
-        let off = menu(VoiceRow::Unavailable);
+        let off = menu(VoiceRow::Unavailable(koru_voice::Off::Switch));
         assert_eq!(
             voice_menu(&off, Some("Ctrl+Shift+D")),
             vec![VoiceLine::Status(
@@ -2736,7 +3425,8 @@ mod tests {
     fn a_fresh_disk_reading_keeps_what_the_worker_said() {
         let kept = ready().keeping_worker(Some(idle_worker()));
         assert_eq!(kept.worker, Some(idle_worker()));
-        let off = menu(VoiceRow::Unavailable).keeping_worker(Some(idle_worker()));
+        let off = menu(VoiceRow::Unavailable(koru_voice::Off::Switch))
+            .keeping_worker(Some(idle_worker()));
         assert_eq!(off.worker, None);
     }
 
@@ -3138,7 +3828,7 @@ mod input_tests {
     #[test]
     fn a_switched_off_installation_has_no_input_picker() {
         let state = VoiceMenu {
-            row: VoiceRow::Unavailable,
+            row: VoiceRow::Unavailable(koru_voice::Off::Switch),
             installed: Vec::new(),
             worker: None,
             devices: vec![koru_voice::InputDevice::new("Yeti Nano", true)],
@@ -3314,3 +4004,6 @@ mod input_tests {
         assert_eq!(labels, ["retired-agent", "Session"], "{lines:?}");
     }
 }
+
+#[cfg(test)]
+mod menu_tests;

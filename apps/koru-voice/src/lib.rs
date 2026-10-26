@@ -39,7 +39,7 @@
 //! | [`worker`] | loads the model and runs the engine |
 //!
 //! An overrun in the middle one drops the **oldest** frames and increments a
-//! counter [`status`] reports, rather than blocking — because a device callback
+//! counter `koru_voice::status` reports, rather than blocking — because a device callback
 //! that waited would glitch the whole machine's audio, and the newest audio is
 //! what a person is still saying.
 //!
@@ -58,7 +58,6 @@
 //! Agent sibling resolution, launchers, logs, docs, and tests. Koru Agent
 //! roadmap Plan 1.1 and `Cargo.toml` name the synchronized inventory.
 
-pub mod ask;
 pub mod bootstrap;
 pub mod capture;
 pub mod cli;
@@ -70,7 +69,6 @@ pub mod models;
 pub mod resample;
 pub mod ring;
 pub mod server;
-pub mod status;
 pub mod worker;
 
 /// **The whole of `main`.**
@@ -106,12 +104,12 @@ pub fn run() -> std::process::ExitCode {
     };
 
     match invocation.command {
-        cli::Command::Status => report(ask::status(&root)),
-        cli::Command::Stop => match ask::stop(&root) {
+        cli::Command::Status => report(koru_voice_client::ask::status(&root)),
+        cli::Command::Stop => match koru_voice_client::ask::stop(&root) {
             // Already gone is the state `stop` names, so it is a success and it
             // says so rather than printing a report about a worker that is not
             // there.
-            ask::Asked::NotRunning => {
+            koru_voice_client::ask::Asked::NotRunning => {
                 println!("not running");
                 std::process::ExitCode::SUCCESS
             }
@@ -120,23 +118,23 @@ pub fn run() -> std::process::ExitCode {
         // **The report is the answer, not an acknowledgement.** A worker that
         // refused because a dictation is running answers with `loaded yes`,
         // which is the one line that says what actually happened.
-        cli::Command::Release => report(ask::release(&root)),
+        cli::Command::Release => report(koru_voice_client::ask::release(&root)),
         cli::Command::Serve => serve(&root, &invocation),
         cli::Command::Help | cli::Command::Version => unreachable!("answered above"),
     }
 }
 
-fn report(asked: ask::Asked) -> std::process::ExitCode {
+fn report(asked: koru_voice_client::ask::Asked) -> std::process::ExitCode {
     match asked {
-        ask::Asked::Answered(report) => {
+        koru_voice_client::ask::Asked::Answered(report) => {
             print!("{}", report.render());
             std::process::ExitCode::SUCCESS
         }
-        ask::Asked::NotRunning => {
+        koru_voice_client::ask::Asked::NotRunning => {
             println!("not running");
             std::process::ExitCode::SUCCESS
         }
-        ask::Asked::Failed(why) => {
+        koru_voice_client::ask::Asked::Failed(why) => {
             eprintln!("koru-voice-worker: {why}");
             std::process::ExitCode::FAILURE
         }

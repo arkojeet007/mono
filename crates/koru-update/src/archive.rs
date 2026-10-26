@@ -329,6 +329,125 @@ pub fn extract_zip(
     Ok(())
 }
 
+/// The Linux package: a gzipped tarball laid out exactly like the Windows zip,
+/// extracted under exactly [`extract_zip`]'s rules.
+///
+/// **Two passes, as the zip path does.** Every header is checked — path,
+/// type, duplicates, entry count, the running expanded size — before a single
+/// byte is written, so a refused archive leaves nothing behind for the caller
+/// to clean up beyond the staging directory it created. A tarball has no
+/// central directory to read up front, so the first pass is a full read that
+/// skips the data; the expanded-size check runs per header, which bounds what
+/// that pass decompresses to the limit itself.
+///
+/// The same refusals as the zip: an absolute path, a `..`, a backslash, a NUL,
+/// a duplicate, and anything that is not a regular file or a directory —
+/// symlinks and hard links above all, because either one would let a later
+/// entry write through it to wherever it points. `./` prefixes, which GNU
+/// `tar -C dir .` writes, are dropped rather than refused.
+///
+/// **The mode comes along**, which is the reason this format exists here: a
+/// binary extracted without its execute bit is an update that cannot start.
+/// The permission bits are kept and nothing above them — no setuid, setgid or
+/// sticky — and the owner can always read and write, because the updater
+/// reopens a restored file for writing to flush it during a rollback.
+pub fn extract_tar_gz(
+    archive: &Path,
+    destination: &Path,
+    limits: ArchiveLimits,
+) -> Result<(), String> {
+    let mut names = HashSet::new();
+    let mut expanded = 0u64;
+    let mut count = 0usize;
+    let mut tar = open_tar_gz(archive)?;
+    for entry in tar.entries().map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        count += 1;
+        if count > limits.max_entries {
+            return Err("archive contains too many entries".into());
+        }
+        let kind = entry.header().entry_type();
+        if !(kind.is_file() || kind.is_dir()) {
+            return Err("archive contains a link or unsupported file type".into());
+        }
+        let Some(relative) = tar_entry_path(&entry)? else {
+            continue;
+        };
+        if !names.insert(relative) {
+            return Err("archive contains duplicate paths".into());
+        }
+        expanded = expanded
+            .checked_add(entry.size())
+            .ok_or("archive expanded-size overflow")?;
+        if expanded > limits.max_extracted_size {
+            return Err("archive expands beyond the configured limit".into());
+        }
+    }
+    fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    let mut tar = open_tar_gz(archive)?;
+    for entry in tar.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let Some(relative) = tar_entry_path(&entry)? else {
+            continue;
+        };
+        let output = destination.join(relative);
+        ensure_within(destination, &output)?;
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if !kind.is_file() {
+            return Err("archive contains a link or unsupported file type".into());
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mode = entry.header().mode().map_err(|e| e.to_string())?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output)
+            .map_err(|e| e.to_string())?;
+        io::copy(
+            &mut (&mut entry).take(limits.max_extracted_size + 1),
+            &mut file,
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode((mode & 0o777) | 0o600))
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn open_tar_gz(archive: &Path) -> Result<tar::Archive<flate2::read::GzDecoder<File>>, String> {
+    let file = File::open(archive).map_err(|e| e.to_string())?;
+    Ok(tar::Archive::new(flate2::read::GzDecoder::new(file)))
+}
+
+/// An entry's path, under [`strict_relative_path`], with `.` components
+/// dropped. `None` is the archive root itself (`./`), which names nothing to
+/// create. The raw bytes must be UTF-8, because a lossy decode could turn two
+/// different names into one.
+fn tar_entry_path<R: Read>(entry: &tar::Entry<'_, R>) -> Result<Option<PathBuf>, String> {
+    let raw = entry.path_bytes();
+    let name = std::str::from_utf8(&raw)
+        .map_err(|_| format!("unsafe archive path: {}", String::from_utf8_lossy(&raw)))?;
+    let path = strict_relative_path(name).map_err(|_| format!("unsafe archive path: {name}"))?;
+    let normal: PathBuf = path
+        .components()
+        .filter(|part| matches!(part, Component::Normal(_)))
+        .collect();
+    Ok((!normal.as_os_str().is_empty()).then_some(normal))
+}
+
 /// Validate one package-owned relative path before it is joined to an install,
 /// staging, or backup directory. Journals reuse this because a corrupted local
 /// transaction file must not gain more path authority than an archive entry.
@@ -760,6 +879,200 @@ mod tests {
             ],
         };
         assert!(list.validate(WindowsIdentity::NotStaged).is_err());
+    }
+
+    /// One crafted tarball entry. The name is written into the header raw,
+    /// because `tar::Builder` refuses the very paths these tests need.
+    struct Raw<'a> {
+        name: &'a [u8],
+        kind: tar::EntryType,
+        mode: u32,
+        data: &'a [u8],
+        link: &'a [u8],
+    }
+
+    fn file<'a>(name: &'a str, mode: u32, data: &'a [u8]) -> Raw<'a> {
+        Raw {
+            name: name.as_bytes(),
+            kind: tar::EntryType::Regular,
+            mode,
+            data,
+            link: b"",
+        }
+    }
+
+    fn dir(name: &str) -> Raw<'_> {
+        Raw {
+            name: name.as_bytes(),
+            kind: tar::EntryType::Directory,
+            mode: 0o755,
+            data: b"",
+            link: b"",
+        }
+    }
+
+    fn tarball(entries: &[Raw<'_>]) -> tempfile::NamedTempFile {
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let gz = flate2::write::GzEncoder::new(out.reopen().unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(gz);
+        for entry in entries {
+            let mut header = tar::Header::new_gnu();
+            {
+                let old = header.as_old_mut();
+                old.name[..entry.name.len()].copy_from_slice(entry.name);
+                old.linkname[..entry.link.len()].copy_from_slice(entry.link);
+            }
+            header.set_entry_type(entry.kind);
+            header.set_mode(entry.mode);
+            header.set_size(entry.data.len() as u64);
+            header.set_cksum();
+            builder.append(&header, entry.data).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+        out
+    }
+
+    fn extract(
+        entries: &[Raw<'_>],
+        limits: ArchiveLimits,
+    ) -> (tempfile::TempDir, PathBuf, Result<(), String>) {
+        let archive = tarball(entries);
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join("staging");
+        let result = extract_tar_gz(archive.path(), &staging, limits);
+        (root, staging, result)
+    }
+
+    /// The Windows zip's layout, files at the root and data in folders, with
+    /// the `./` prefix GNU tar writes — and every mode where it belongs.
+    #[cfg(unix)]
+    #[test]
+    fn a_tarball_extracts_like_the_zip_and_keeps_its_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, staging, result) = extract(
+            &[
+                dir("./"),
+                file("./koru", 0o755, b"elf"),
+                file("koru-updater", 0o4755, b"elf"),
+                dir("assets/"),
+                file("assets/fonts/a.ttf", 0o644, b"font"),
+                file("VERSION", 0o444, b"build_number=2\n"),
+            ],
+            ArchiveLimits::default(),
+        );
+        result.unwrap();
+        let mode = |path: &str| {
+            fs::metadata(staging.join(path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(fs::read(staging.join("koru")).unwrap(), b"elf");
+        assert_eq!(mode("koru"), 0o755, "the execute bit survives");
+        assert_eq!(
+            mode("koru-updater"),
+            0o755,
+            "nothing above the permission bits"
+        );
+        assert_eq!(mode("assets/fonts/a.ttf"), 0o644);
+        assert_eq!(mode("VERSION"), 0o644, "the owner can always write");
+    }
+
+    /// Every way a name can leave the staging directory is refused, and the
+    /// refusal comes before anything is written.
+    #[test]
+    fn a_tarball_path_cannot_leave_staging() {
+        for name in [
+            "../outside",
+            "a/../../outside",
+            "/etc/outside",
+            "a\\..\\outside",
+            "",
+        ] {
+            let (_root, staging, result) = extract(
+                &[file("koru", 0o755, b"ok"), file(name, 0o644, b"x")],
+                ArchiveLimits::default(),
+            );
+            assert!(result.is_err(), "{name:?} was accepted");
+            assert!(
+                !staging.exists(),
+                "{name:?}: nothing is written before the check"
+            );
+        }
+        let (_root, _staging, result) = extract(
+            &[Raw {
+                name: b"bad\xff",
+                ..file("", 0o644, b"x")
+            }],
+            ArchiveLimits::default(),
+        );
+        assert!(result.is_err(), "a name that is not UTF-8 is refused");
+    }
+
+    /// A link is refused whatever it points at; so is every other type that is
+    /// not a file or a directory.
+    #[test]
+    fn a_tarball_link_or_special_file_is_refused() {
+        for kind in [
+            tar::EntryType::Symlink,
+            tar::EntryType::Link,
+            tar::EntryType::Fifo,
+            tar::EntryType::Char,
+            tar::EntryType::Block,
+            tar::EntryType::Continuous,
+        ] {
+            let (_root, staging, result) = extract(
+                &[
+                    Raw {
+                        name: b"koru",
+                        kind,
+                        mode: 0o755,
+                        data: b"",
+                        link: b"koru-agent",
+                    },
+                    file("koru-agent", 0o755, b"elf"),
+                ],
+                ArchiveLimits::default(),
+            );
+            let error = result.expect_err(&format!("{kind:?} was accepted"));
+            assert!(error.contains("link or unsupported"), "{error}");
+            assert!(!staging.exists());
+        }
+    }
+
+    #[test]
+    fn a_tarball_with_duplicate_paths_is_refused() {
+        let (_root, _staging, result) = extract(
+            &[file("koru", 0o755, b"one"), file("./koru", 0o755, b"two")],
+            ArchiveLimits::default(),
+        );
+        assert!(result.unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
+    fn a_tarball_over_its_limits_is_refused() {
+        let (_root, staging, result) = extract(
+            &[file("a", 0o644, &[0; 600]), file("b", 0o644, &[0; 600])],
+            ArchiveLimits {
+                max_entries: 10,
+                max_extracted_size: 1000,
+            },
+        );
+        assert!(result.unwrap_err().contains("limit"));
+        assert!(!staging.exists());
+        let (_root, _staging, result) = extract(
+            &[
+                file("a", 0o644, b"1"),
+                file("b", 0o644, b"2"),
+                file("c", 0o644, b"3"),
+            ],
+            ArchiveLimits {
+                max_entries: 2,
+                max_extracted_size: 1000,
+            },
+        );
+        assert!(result.unwrap_err().contains("too many"));
     }
 
     #[test]

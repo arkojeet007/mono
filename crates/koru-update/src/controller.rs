@@ -413,7 +413,7 @@ impl UpdateController {
                 platform: info.platform.to_string(),
                 architecture: info.architecture.to_string(),
             };
-            let etag_key = target.manifest_path();
+            let etag_key = etag_key(&shared.base_url, &target);
             let etag = shared.state.etag(&etag_key).map(str::to_owned);
             let (tx, rx) = mpsc::channel();
             let events = Events {
@@ -673,6 +673,20 @@ impl UpdateController {
 /// Best effort throughout. A file that will not delete — locked by a virus
 /// scanner, open in another process — is skipped, because failing to tidy is
 /// not a reason to fail an update that has otherwise succeeded.
+/// What a manifest's ETag is remembered under: the URL it was fetched from.
+///
+/// It was the relative manifest path, which named one resource while every
+/// origin shared one layout. Now the path depends on the origin
+/// ([`crate::manifest::FeedLayout`]), and a tag is only meaningful to the server
+/// that issued it, so the key is the whole URL. A base that does not parse
+/// falls back to the path; the check that follows fails on the same parse.
+fn etag_key(base_url: &str, target: &UpdateTarget) -> String {
+    Url::parse(base_url)
+        .ok()
+        .and_then(|base| target.manifest_url(&base).ok())
+        .map_or_else(|| target.manifest_path(), String::from)
+}
+
 fn prune_verified(dir: &std::path::Path, keep: Option<&std::path::Path>) {
     const KEEP: usize = 2;
     let Ok(entries) = fs::read_dir(dir) else {
@@ -929,7 +943,13 @@ mod tests {
                 size: 1,
                 sha256: "a".repeat(64),
                 signature: "test signature".into(),
-                format: crate::manifest::PackageFormat::Zip,
+                // This build's platform, so this build's package format —
+                // validation refuses a zip on Linux.
+                format: if cfg!(target_os = "linux") {
+                    crate::manifest::PackageFormat::TarGz
+                } else {
+                    crate::manifest::PackageFormat::Zip
+                },
             },
         }
     }
@@ -1213,6 +1233,28 @@ mod tests {
     #[test]
     fn a_nightly_is_offered_within_the_hour() {
         assert!(automatic_interval(ReleaseChannel::Nightly) <= Duration::from_secs(60 * 60));
+    }
+
+    /// One target, two origins, two tags: an ETag issued by one server is
+    /// never sent to another.
+    #[test]
+    fn an_etag_is_remembered_against_the_url_that_issued_it() {
+        let target = UpdateTarget {
+            channel: ReleaseChannel::Nightly,
+            platform: "linux".into(),
+            architecture: "x86_64".into(),
+        };
+        assert_eq!(
+            etag_key("https://updates.koru.do/", &target),
+            "https://updates.koru.do/channels/nightly/linux-x86_64.json"
+        );
+        assert_eq!(
+            etag_key(
+                "https://github.com/koruworks/mono/releases/download/nightly/",
+                &target
+            ),
+            "https://github.com/koruworks/mono/releases/download/nightly/nightly-linux-x86_64.json"
+        );
     }
 
     /// Every test here builds its own `UpdatePaths` under a temp directory.

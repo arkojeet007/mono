@@ -8,8 +8,10 @@
 //! starting a second winit event loop just to say that replacement is under way.
 
 /// Keep a compact progress window visible while `work` replaces or restarts
-/// Koru. On platforms without an installer, there is no native window to own,
-/// so the work still runs and reports its normal error.
+/// Koru. Linux has no native surface here yet — no Task Dialog, and nothing
+/// this helper can rely on every desktop having — so the swap runs silently
+/// and the seconds with no Koru are unannounced; the work still runs and
+/// reports its normal error.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn show(_title: &str, _detail: &str, work: impl FnOnce() + Send + 'static) {
     work();

@@ -14,11 +14,13 @@ mod exe;
 mod lease;
 mod manifest;
 mod paths;
+#[cfg(target_os = "linux")]
+pub mod processes;
 mod state;
 mod verify;
 
 pub use archive::{
-    ArchiveLimits, PackageVersion, ReleaseFiles, WindowsIdentity, extract_zip,
+    ArchiveLimits, PackageVersion, ReleaseFiles, WindowsIdentity, extract_tar_gz, extract_zip,
     read_package_version, strict_relative_path,
 };
 // Channel identity moved to `koru-channel` so that crates which only need to
@@ -40,7 +42,8 @@ pub use exe::{
 pub use koru_channel::{BuildInfo, RELEASE_NOTES_FILE, ReleaseChannel, build_info};
 pub use lease::{InstanceLease, RestartGate, UpdateLock, install_key};
 pub use manifest::{
-    ManifestError, PackageFormat, ReleaseNotes, UpdateManifest, UpdatePackage, UpdateTarget,
+    FeedLayout, ManifestError, PackageFormat, ReleaseNotes, UpdateManifest, UpdatePackage,
+    UpdateTarget,
 };
 pub use paths::{UpdatePaths, signal_health};
 pub use state::{CachedPackage, FailedBuild, UpdateState};

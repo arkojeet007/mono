@@ -11,6 +11,9 @@ description = "Koru's signed release protocol, update client, and safe archive p
 # The channel enum lives here now; `serde` because the CDN manifest is JSON.
 koru-channel = { path = "../koru-channel", features = ["serde"] }
 directories.workspace = true
+# The Linux package is a `.tar.gz` (`archive::extract_tar_gz`). Both were
+# already in the lockfile, through `zip` and `koru-release`.
+flate2 = "1"
 fs2.workspace = true
 minisign-verify.workspace = true
 reqwest.workspace = true
@@ -18,6 +21,7 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tar.workspace = true
 url.workspace = true
 uuid.workspace = true
 zip.workspace = true

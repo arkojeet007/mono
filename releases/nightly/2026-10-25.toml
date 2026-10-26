@@ -1,0 +1,42 @@
+title = "Koru on Linux, first nightly"
+
+summary = [
+  "Koru now runs on Linux, packaged as a tarball you extract into a folder of its own.",
+  "A tray icon gives you the same menu as on Windows and macOS.",
+  "An installed nightly finds, verifies and installs its own updates from this page.",
+  "Voice input is not available on Linux yet.",
+]
+
+body = """
+## Linux
+
+This is the first Koru build for Linux (x86_64), and the first published
+from this repository's GitHub releases. It is a preview: expect rough edges.
+
+Extract the archive into a folder of its own, since it has no top-level folder,
+then run `./koru` from that folder. It keeps its data in the nightly channel's
+folder, apart from any other Koru you run.
+
+Koru draws through X11. On a Wayland desktop such as GNOME it runs under
+XWayland.
+
+## Tray
+
+The tray icon offers the same menu as on Windows and macOS. Closing the
+window quits Koru, as it does not yet know whether your desktop shows tray
+icons.
+
+## Updates
+
+The nightly checks this release page for newer builds. Each build is signed,
+and Koru verifies the signature before installing. A build that fails to start
+after installing is rolled back to the previous one.
+
+## Not yet on Linux
+
+- Voice input.
+- Koru Cloud sign-in.
+- Waking for reminders while the computer sleeps.
+- Storing credentials in the system keyring.
+- A desktop launcher and dock icon. Add a `.desktop` file by hand for now.
+"""

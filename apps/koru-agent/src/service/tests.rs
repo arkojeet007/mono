@@ -70,7 +70,7 @@ fn a_worker_that_is_already_running_is_adopted_rather_than_launched() {
     let launches = Arc::new(AtomicU64::new(0));
     let counted = Arc::clone(&launches);
     let found = ensure_voice_with(
-        true,
+        None,
         || Ok(Some(ready(None))),
         move |_| {
             counted.fetch_add(1, Ordering::Release);
@@ -105,7 +105,7 @@ fn two_concurrent_ensure_calls_launch_one_worker() {
             let launching = Arc::clone(&running);
             let counted = Arc::clone(&launches);
             ensure_voice_with(
-                true,
+                None,
                 move || {
                     Ok(asking
                         .lock()
@@ -145,7 +145,7 @@ fn a_worker_from_another_launch_is_refused_rather_than_adopted() {
     let launched = Arc::new(std::sync::Mutex::new(false));
     let flag = Arc::clone(&launched);
     let refused = ensure_voice_with(
-        true,
+        None,
         move || {
             if *flag.lock().unwrap_or_else(|error| error.into_inner()) {
                 // Somebody else's worker won the bind.
@@ -171,7 +171,7 @@ fn a_worker_from_another_launch_is_refused_rather_than_adopted() {
 #[test]
 fn a_worker_that_never_binds_is_reported_rather_than_waited_on_forever() {
     let began = std::time::Instant::now();
-    let failed = ensure_voice_with(true, || Ok(None), |_| Ok(()))
+    let failed = ensure_voice_with(None, || Ok(None), |_| Ok(()))
         .expect_err("a worker that never appeared should not be a success");
 
     assert_eq!(failed.code(), "voice_unreachable");
@@ -186,7 +186,7 @@ fn a_worker_that_never_binds_is_reported_rather_than_waited_on_forever() {
 #[test]
 fn a_launch_failure_keeps_its_own_code() {
     let failed = ensure_voice_with(
-        true,
+        None,
         || Ok(None),
         |_| {
             Err(VoiceServiceError::NotFound(
@@ -212,7 +212,7 @@ fn a_switched_off_installation_supervises_nothing() {
     let launches = Arc::new(AtomicU64::new(0));
     let counted = Arc::clone(&launches);
     let refused = ensure_voice_with(
-        false,
+        Some(koru_voice::Off::Switch),
         || panic!("a switched-off installation must not even dial"),
         move |_| {
             counted.fetch_add(1, Ordering::Release);
@@ -236,7 +236,7 @@ fn a_switched_off_installation_supervises_nothing() {
 #[test]
 fn the_voice_codes_are_not_the_gateways() {
     let voice = [
-        VoiceServiceError::Disabled(String::new()).code(),
+        VoiceServiceError::Disabled(koru_voice::Off::Switch, String::new()).code(),
         VoiceServiceError::NotFound(String::new()).code(),
         VoiceServiceError::Launch(String::new()).code(),
         VoiceServiceError::Unavailable(String::new()).code(),
@@ -252,4 +252,37 @@ fn the_voice_codes_are_not_the_gateways() {
         assert!(code.starts_with("voice_"), "{code} is not a voice code");
         assert!(!gateway.contains(&code), "{code} is spelled twice");
     }
+}
+
+/// **The worker fingerprints its own image with its own copy of the digest,
+/// and this process fingerprints the same bytes with the bridge's.** A
+/// bootstrap carrying a different spelling would be refused at every launch,
+/// so both sides assert this same literal -- the BLAKE3 reference vector for
+/// "abc" -- rather than each comparing a function with itself.
+#[test]
+fn the_launch_fingerprint_is_the_one_the_worker_computes() {
+    assert_eq!(
+        koru_network_bridge::fingerprint(b"abc"),
+        "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+    );
+}
+
+/// **A platform with no voice runtime refuses the same way, and blames no
+/// switch.** Nothing is dialled and nothing is launched; the code is the one a
+/// shell already branches on, and the text does not tell a person to unset a
+/// variable they never set.
+#[test]
+fn a_platform_without_voice_supervises_nothing() {
+    let refused = ensure_voice_with(
+        Some(koru_voice::Off::Platform),
+        || panic!("a platform without voice must not even dial"),
+        |_| panic!("a platform without voice must not launch a worker"),
+    )
+    .expect_err("a platform without voice should not report a worker");
+
+    assert_eq!(refused.code(), "voice_disabled");
+    assert!(
+        !refused.to_string().contains(koru_voice::DISABLE_VAR),
+        "a platform refusal must not name the switch: {refused}"
+    );
 }

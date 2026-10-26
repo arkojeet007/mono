@@ -34,6 +34,14 @@ no-webview = []
 [dependencies]
 koru-env = { path = "../koru-env" }
 raw-window-handle = "0.6"
+
+# **Windows and macOS only.** On Linux wry is WebKitGTK, four `-dev` packages
+# and ten `-sys` crates for the one surface that uses it (support chat), so a
+# Linux build has no engine: `open` answers `RuntimeUnavailable`, exactly as
+# under `no-webview`, and support shows its "open in your browser" page
+# (docs/features/linux/TECHNICAL.final.md, D1). Reversing that is widening this
+# line's target.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 wry = "=0.56.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]

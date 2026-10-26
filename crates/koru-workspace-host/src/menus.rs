@@ -13,15 +13,38 @@
 //!
 //! Tests enter through [`ingest`], the same function the handler calls,
 //! because muda's own `MenuEvent::send` is crate-private.
+//!
+//! **Linux has no native menu yet**, and `muda` is not linked there. Only the
+//! muda calls are gated: the queue, [`ingest`], [`drain`], the row lookup and
+//! their tests are one transport and one suite on every platform, and
+//! [`MenuId`] is a local type with muda's shape so no caller reads it two ways.
+//! A popup on Linux shows nothing and no row is ever chosen
+//! (docs/features/linux/TECHNICAL.final.md, D2).
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
-use muda::{ContextMenu, Menu, MenuEvent, MenuId, MenuItem};
+#[cfg(any(windows, target_os = "macos"))]
+pub use muda::MenuId;
+#[cfg(any(windows, target_os = "macos"))]
+use muda::{ContextMenu, Menu, MenuEvent, MenuItem};
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
 
 use crate::app::Wake;
+
+/// A menu row's id where muda is not linked: muda's shape, a string in `.0`,
+/// which is what [`drain`]'s caller and [`Popup::tag_of_str`] read.
+#[cfg(not(any(windows, target_os = "macos")))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MenuId(pub String);
+
+#[cfg(not(any(windows, target_os = "macos")))]
+impl MenuId {
+    pub fn new<S: AsRef<str>>(id: S) -> Self {
+        Self(id.as_ref().to_owned())
+    }
+}
 
 static QUEUE: OnceLock<Mutex<VecDeque<MenuId>>> = OnceLock::new();
 
@@ -32,9 +55,13 @@ fn queue() -> &'static Mutex<VecDeque<MenuId>> {
 /// Install the one handler. Before any menu exists — the menubar and every
 /// popup are built after this — so no event can go to the receiver first.
 pub fn install(proxy: EventLoopProxy<Wake>) {
+    #[cfg(any(windows, target_os = "macos"))]
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         ingest(event.id, Some(&proxy));
     }));
+    // Nothing to install: no native menu exists to deliver an event.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = proxy;
 }
 
 /// Queue one chosen row and wake the loop. The handler's body, and the
@@ -61,12 +88,14 @@ pub fn drain() -> Vec<MenuId> {
 /// registered on this object until it is dropped, so a selection delivered
 /// after the synchronous show call returns is still recognised.
 pub struct Popup {
+    #[cfg(any(windows, target_os = "macos"))]
     menu: Menu,
     rows: Vec<(MenuId, u32)>,
 }
 
 impl Popup {
     /// `rows` are `(label, tag)`; the tag comes back from [`Popup::tag_of`].
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn new(rows: &[(&str, u32)]) -> Self {
         let menu = Menu::new();
         let mut ids = Vec::with_capacity(rows.len());
@@ -76,6 +105,23 @@ impl Popup {
             let _ = menu.append(&item);
         }
         Self { menu, rows: ids }
+    }
+
+    /// The same rows with no menu behind them. Ids are minted the way muda
+    /// mints its own, from a process-wide counter, so two popups never share
+    /// one.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub fn new(rows: &[(&str, u32)]) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let rows = rows
+            .iter()
+            .map(|(_, tag)| {
+                let n = NEXT.fetch_add(1, Ordering::Relaxed);
+                (MenuId(format!("popup-row-{n}")), *tag)
+            })
+            .collect();
+        Self { rows }
     }
 
     /// Show at the pointer and return at once; the choice arrives through

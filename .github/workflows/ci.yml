@@ -16,7 +16,8 @@
 # What runs where, honestly: Koru's targets are Windows, Android and Apple
 # (GOVERNANCE.md). The app is built and tested on Windows only. Linux
 # runs the checks that do not depend on the platform: formatting, cargo-deny
-# and the repository checks. Nothing here claims the workspace builds on Linux.
+# and the repository checks — and, after a merge to main, `linux-check`, which
+# compiles the workspace for Linux. That proves it builds, not that it runs.
 name: ci
 
 on:
@@ -107,6 +108,37 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
         with:
           command: check advisories bans licenses sources
+
+  # **Linux compiles (docs/features/linux, D10), checked on main only.** A
+  # Linux break shows up the commit after it merges rather than on the pull
+  # request: the maintainer's call, so a full Linux compile is not added to
+  # every push of every branch. The nightly is the backstop that cannot ship
+  # a build that does not compile.
+  linux-check:
+    name: linux-check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+    steps:
+      # actions/checkout v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev
+      # `[patch.crates-io]` points into third-party/, which starts empty.
+      - name: Fetch third-party code
+        run: bash scripts/setup/fetch-third-party.sh
+      # mozilla-actions/sccache-action v0.0.11
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      # The voice worker is excluded until Linux rung 3 builds its runtime.
+      # `--all-targets` type-checks the test modules too.
+      - name: cargo check (Linux)
+        run: cargo check --workspace --exclude koru-voice-worker --all-targets --locked
 
   clippy:
     name: clippy

@@ -16,11 +16,104 @@ pub struct UpdateTarget {
 }
 
 impl UpdateTarget {
+    /// The manifest's path on `updates.koru.do`, the layout every origin had
+    /// before GitHub releases became one. See [`FeedLayout`].
     pub fn manifest_path(&self) -> String {
-        format!(
-            "channels/{}/{}-{}.json",
-            self.channel, self.platform, self.architecture
-        )
+        FeedLayout::Channels.manifest_path(self)
+    }
+
+    /// Where this target's manifest lives beneath `base`, in the layout that
+    /// origin uses.
+    pub fn manifest_url(&self, base: &Url) -> Result<Url, String> {
+        let layout = FeedLayout::of(base);
+        match layout {
+            FeedLayout::Channels => base
+                .join(&layout.manifest_path(self))
+                .map_err(|e| e.to_string()),
+            // Pushed as a segment rather than joined, so a base written
+            // without its trailing slash still names the release directory
+            // instead of silently replacing the tag with the file name.
+            FeedLayout::GitHubRelease => {
+                let mut url = base.clone();
+                url.path_segments_mut()
+                    .map_err(|()| "the update origin cannot hold a path".to_string())?
+                    .pop_if_empty()
+                    .push(&layout.manifest_path(self));
+                Ok(url)
+            }
+        }
+    }
+}
+
+/// How an update origin lays out its manifests — a fact about the origin and
+/// nothing else; the manifest is the same schema either way.
+///
+/// **The rule:** a base URL that is a GitHub release download directory —
+/// `https://github.com/<owner>/<repo>/releases/download/<tag>/`, or the
+/// `releases/latest/download/` alias GitHub resolves to the newest
+/// non-pre-release — is [`GitHubRelease`](Self::GitHubRelease). Every other
+/// origin, `updates.koru.do` and a loopback rehearsal feed among them, is
+/// [`Channels`](Self::Channels). The host must be exactly `github.com` over
+/// HTTPS on the default port; the same path on any other host stays
+/// `Channels`, so a URL's shape alone never changes where a request goes.
+///
+/// GitHub's layout is flat because a release's assets are one directory with
+/// no subfolders, so channel, platform and architecture all go into the file
+/// name. **Trust does not move with the layout**: GitHub is only the host, and
+/// the client checks the manifest's target, the package's hash and its
+/// Minisign signature exactly as it does for R2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeedLayout {
+    /// `channels/<channel>/<platform>-<arch>.json` beneath the base.
+    Channels,
+    /// `<channel>-<platform>-<arch>.json` directly in the release directory.
+    GitHubRelease,
+}
+
+impl FeedLayout {
+    pub fn of(base: &Url) -> Self {
+        let github = base.scheme() == "https"
+            && base.host_str() == Some("github.com")
+            && base.port().is_none()
+            && base.query().is_none()
+            && base.path_segments().is_some_and(|segments| {
+                let mut segments: Vec<&str> = segments.collect();
+                // The trailing slash is an empty last segment; no other
+                // segment may be empty.
+                if segments.last() == Some(&"") {
+                    segments.pop();
+                }
+                match segments.as_slice() {
+                    [owner, repo, "releases", "download", tag] => {
+                        !owner.is_empty() && !repo.is_empty() && !tag.is_empty()
+                    }
+                    [owner, repo, "releases", "latest", "download"] => {
+                        !owner.is_empty() && !repo.is_empty()
+                    }
+                    _ => false,
+                }
+            });
+        if github {
+            Self::GitHubRelease
+        } else {
+            Self::Channels
+        }
+    }
+
+    /// The manifest's path relative to the base, in this layout. Public so a
+    /// publisher names the asset with the same function the client fetches it
+    /// with.
+    pub fn manifest_path(self, target: &UpdateTarget) -> String {
+        match self {
+            Self::Channels => format!(
+                "channels/{}/{}-{}.json",
+                target.channel, target.platform, target.architecture
+            ),
+            Self::GitHubRelease => format!(
+                "{}-{}-{}.json",
+                target.channel, target.platform, target.architecture
+            ),
+        }
     }
 }
 
@@ -166,9 +259,13 @@ impl UpdateManifest {
         )?;
         // The format follows the platform: Windows installs from the zip the
         // updater already extracts; macOS ships a disk image (zip is still
-        // legal there — it is what pre-dmg releases published).
+        // legal there — it is what pre-dmg releases published); Linux ships
+        // a gzipped tarball, which carries Unix modes natively. The updater
+        // chooses its extractor by platform, so a format outside the
+        // platform's set is a package nothing on that machine can open.
         let format_fits = match self.platform.as_str() {
             "macos" => matches!(self.package.format, PackageFormat::Dmg | PackageFormat::Zip),
+            "linux" => matches!(self.package.format, PackageFormat::TarGz),
             _ => matches!(self.package.format, PackageFormat::Zip),
         };
         reject(
@@ -348,5 +445,117 @@ mod tests {
         m.package.format = PackageFormat::Dmg;
         m.platform = "windows".into();
         assert!(m.validate(&target()).is_err());
+    }
+
+    fn linux() -> UpdateTarget {
+        UpdateTarget {
+            channel: ReleaseChannel::Nightly,
+            platform: "linux".into(),
+            architecture: "x86_64".into(),
+        }
+    }
+
+    /// Linux takes the tarball and only the tarball; nowhere else takes it.
+    #[test]
+    fn a_tarball_is_a_linux_package_and_nobody_elses() {
+        let mut m = manifest();
+        m.channel = ReleaseChannel::Nightly;
+        m.platform = "linux".into();
+        m.package.format = PackageFormat::TarGz;
+        m.validate(&linux()).unwrap();
+        for other in [
+            PackageFormat::Zip,
+            PackageFormat::Dmg,
+            PackageFormat::AppImage,
+        ] {
+            m.package.format = other;
+            assert!(m.validate(&linux()).is_err(), "{other:?} on linux");
+        }
+
+        let mut windows = manifest();
+        windows.package.format = PackageFormat::TarGz;
+        assert!(windows.validate(&target()).is_err());
+        let mac = UpdateTarget {
+            channel: ReleaseChannel::Stable,
+            platform: "macos".into(),
+            architecture: "aarch64".into(),
+        };
+        let mut on_mac = manifest();
+        on_mac.platform = "macos".into();
+        on_mac.architecture = "aarch64".into();
+        on_mac.package.format = PackageFormat::TarGz;
+        assert!(on_mac.validate(&mac).is_err());
+    }
+
+    /// The wire spelling is the one `koru-release` writes: `"tar.gz"`.
+    #[test]
+    fn the_tarball_format_is_spelled_tar_gz_on_the_wire() {
+        assert_eq!(
+            serde_json::to_string(&PackageFormat::TarGz).unwrap(),
+            "\"tar.gz\""
+        );
+    }
+
+    fn url(value: &str) -> Url {
+        Url::parse(value).unwrap()
+    }
+
+    #[test]
+    fn the_r2_origin_keeps_its_channel_folders() {
+        let base = url("https://updates.koru.do/");
+        assert_eq!(FeedLayout::of(&base), FeedLayout::Channels);
+        assert_eq!(
+            linux().manifest_url(&base).unwrap().as_str(),
+            "https://updates.koru.do/channels/nightly/linux-x86_64.json"
+        );
+        assert_eq!(
+            target().manifest_path(),
+            "channels/stable/windows-x86_64.json",
+            "the existing path is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_github_release_directory_is_flat() {
+        let expected =
+            "https://github.com/koruworks/mono/releases/download/nightly/nightly-linux-x86_64.json";
+        for base in [
+            "https://github.com/koruworks/mono/releases/download/nightly/",
+            // A base baked without its trailing slash still names the tag.
+            "https://github.com/koruworks/mono/releases/download/nightly",
+        ] {
+            let base = url(base);
+            assert_eq!(FeedLayout::of(&base), FeedLayout::GitHubRelease);
+            assert_eq!(linux().manifest_url(&base).unwrap().as_str(), expected);
+        }
+        let latest = url("https://github.com/koruworks/mono/releases/latest/download/");
+        assert_eq!(FeedLayout::of(&latest), FeedLayout::GitHubRelease);
+        assert_eq!(
+            target().manifest_url(&latest).unwrap().as_str(),
+            "https://github.com/koruworks/mono/releases/latest/download/stable-windows-x86_64.json"
+        );
+    }
+
+    /// Only GitHub itself, and only a release directory, is flat. Everything
+    /// else keeps today's layout — including look-alikes, which is what keeps
+    /// the URL's shape from deciding anything on its own.
+    #[test]
+    fn nothing_but_a_github_release_directory_is_flat() {
+        for base in [
+            "http://github.com/koruworks/mono/releases/download/nightly/",
+            "https://github.com:8443/koruworks/mono/releases/download/nightly/",
+            "https://www.github.com/koruworks/mono/releases/download/nightly/",
+            "https://github.com.example/koruworks/mono/releases/download/nightly/",
+            "https://example.com/koruworks/mono/releases/download/nightly/",
+            "https://github.com/koruworks/mono/releases/tag/nightly/",
+            "https://github.com/koruworks/mono/releases/download/",
+            "https://github.com/koruworks/mono/releases/download/nightly/extra/",
+            "https://github.com//mono/releases/download/nightly/",
+            "https://github.com/koruworks/mono/releases/download/nightly/?x=1",
+            "https://github.com/koruworks/mono/",
+            "http://127.0.0.1:8080/",
+        ] {
+            assert_eq!(FeedLayout::of(&url(base)), FeedLayout::Channels, "{base}");
+        }
     }
 }

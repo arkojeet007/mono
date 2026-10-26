@@ -31,3 +31,6 @@ koru-winres = { path = "../koru-winres" }
 
 [dev-dependencies]
 tempfile.workspace = true
+# To build the Linux tarball a staging test installs from.
+flate2 = "1"
+tar.workspace = true

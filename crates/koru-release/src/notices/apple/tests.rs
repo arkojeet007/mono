@@ -21,6 +21,9 @@ fn the_macos_packages_are_what_a_mac_package_builds() {
         .map(|(package, _)| *package)
         .filter(|package| *package != "koru-com-notification")
         .chain(["koru-notification-owner", "koru-updater"])
+        // A Linux host's channel list has no voice worker until Linux rung
+        // 3; a Mac package carries one.
+        .chain(cfg!(target_os = "linux").then_some("koru-voice-worker"))
         .collect();
     expected.sort_unstable();
     let mut packages = MACOS_PACKAGES.to_vec();

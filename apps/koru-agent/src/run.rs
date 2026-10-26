@@ -1047,8 +1047,13 @@ impl koru_window::WindowApp for Host {
                 // avoiding — but somebody whose only way to quit has just
                 // vanished should be told.
                 eprintln!(
-                    "koru-agent: there is no notification-area icon, so use Task Manager to stop \
-                     this agent."
+                    "koru-agent: there is no notification-area icon, so use {} to stop this \
+                     agent.",
+                    if cfg!(windows) {
+                        "Task Manager"
+                    } else {
+                        "`koru-agent stop`"
+                    }
                 );
             }
         }

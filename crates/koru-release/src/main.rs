@@ -6,6 +6,7 @@ mod cloud;
 mod docs_crates;
 mod index;
 mod native;
+mod nightly;
 mod notes;
 mod notices;
 mod package;
@@ -17,8 +18,7 @@ mod voice;
 use chrono::{SecondsFormat, Utc};
 use cloud::{Cloud, CloudConfig, HOST};
 use koru_update::{
-    PackageFormat, ReleaseChannel, ReleaseNotes, UpdateManifest, UpdatePackage, UpdatePaths,
-    UpdateTarget,
+    ReleaseChannel, ReleaseNotes, UpdateManifest, UpdatePackage, UpdatePaths, UpdateTarget,
 };
 use minisign::{KeyPair, PublicKeyBox, SecretKeyBox};
 use notes::offer_generated_notes;
@@ -44,6 +44,8 @@ const PUBLISHED_TARGETS: &[&str] = &["windows-x86_64", "macos-aarch64"];
 const fn host_target() -> &'static str {
     if cfg!(all(windows, target_arch = "x86_64")) {
         "windows-x86_64"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "linux-x86_64"
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "macos-aarch64"
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
@@ -102,6 +104,14 @@ fn run() -> Result<(), String> {
             let options = DistLocalOptions::parse(args)?;
             dist_local(&root, channel, options)
         }
+        // The GitHub nightly's build, for CI: writes the release's files into
+        // a directory and uploads nothing (`nightly`).
+        Some("dist-github") => {
+            let channel: ReleaseChannel = args.next().ok_or(nightly::DIST_GITHUB_USAGE)?.parse()?;
+            let options = nightly::DistGithubOptions::parse(args)?;
+            nightly::dist_github(&root, channel, options)
+        }
+        Some("nightly-notes") => nightly::notes_command(&root, args),
         // **Not a `dist-*` verb, because it builds nothing.** It reads what is
         // already published and rewrites one page from it.
         Some("release-index") => {
@@ -135,6 +145,8 @@ fn run() -> Result<(), String> {
         _ => Err("usage:\n  koru-release cloud-setup\n  \
              koru-release dist-cloud <stable|beta|nightly> [version] [--yes]\n  \
              koru-release dist-local <stable|beta|nightly|internal> [version] [--build <n>] [--sign-update]\n  \
+             koru-release dist-github nightly --build <yyyymmddHHMM> --notes <file> --key <file> [--key-password-stdin] --download-base <url> --out <dir> [--version <v>]\n  \
+             koru-release nightly-notes [--select <before-sha> <after-sha>]\n  \
              koru-release release-index [--keep-latest] [--dry-run <page.html>]\n  \
              koru-release voice-models plan|pin|fetch|publish|local [--only <id>] [--work <dir>] [--upload]\n  \
              koru-release notices android --out <file> [--maven <libraries.json>] [--source <url>] [--debug]\n  \
@@ -286,6 +298,7 @@ fn dist_local(
         // one difference between this path and the published one.
         local_notes(root, &version).as_deref(),
         native::Rule::Local,
+        package::Baked::Production,
     )?;
     println!("[Koru] local bundle: {}", package.archive.display());
     println!("[Koru] sha256: {}", package.sha256);
@@ -333,11 +346,7 @@ fn dist_local(
                     size: package.size,
                     sha256: package.sha256.clone(),
                     signature: signature.clone(),
-                    format: if package::archive_extension(host_target()) == "dmg" {
-                        PackageFormat::Dmg
-                    } else {
-                        PackageFormat::Zip
-                    },
+                    format: package::package_format(host_target()),
                 },
             };
             manifest
@@ -664,6 +673,14 @@ fn publish(
     if target == "unsupported" {
         return Err("dist-cloud does not know this host's target triple".into());
     }
+    // **Linux's feed is a GitHub release asset**, not an origin object
+    // (NIGHTLY N7), so a Linux build published here would be a manifest no
+    // installed Koru reads.
+    if target.starts_with("linux") {
+        return Err(
+            "Linux is published to GitHub, not to the update origin; use dist-github".into(),
+        );
+    }
     // The version suggestion follows the channel's newest release on *any*
     // target, so the second platform of a version proposes that same version
     // rather than inventing the next one.
@@ -769,6 +786,7 @@ fn publish(
         // A published release links the canonical sherpa-onnx archive or is
         // refused before it is signed.
         native::Rule::Official,
+        package::Baked::Production,
     )?;
     require_clean_tree(root, Some(&commit))?;
     let signature = sign_archive(&release_secret, &package.archive, &public_key, version)?;
@@ -852,11 +870,7 @@ fn publish(
             size: package.size,
             sha256: package.sha256,
             signature,
-            format: if package::archive_extension(target) == "dmg" {
-                PackageFormat::Dmg
-            } else {
-                PackageFormat::Zip
-            },
+            format: package::package_format(target),
         },
     };
     publish_manifest(&cloud, &manifest)?;

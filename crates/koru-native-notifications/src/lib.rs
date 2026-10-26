@@ -288,6 +288,7 @@ impl NotificationNamespace {
         &self.0
     }
 
+    #[cfg(any(windows, target_os = "macos", test))]
     pub(crate) fn native_id(&self, registration: &RegistrationId) -> String {
         format!("koru.{}.{}", self.0, registration.as_str())
     }

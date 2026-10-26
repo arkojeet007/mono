@@ -43,7 +43,7 @@ fn a_category_never_carries_the_device_name() {
         .interface_type(cpal::InterfaceType::Bluetooth)
         .build();
 
-    let category = DeviceCategory::of(&description);
+    let category = category_of(&description);
     assert_eq!(category.device_type, DeviceKind::Headset);
     assert_eq!(category.interface_type, InterfaceKind::Bluetooth);
     assert_eq!(category.to_string(), "headset/bluetooth");
@@ -77,7 +77,7 @@ fn a_category_never_carries_the_device_name() {
 #[test]
 fn an_unmapped_category_reads_as_unknown() {
     let description = cpal::DeviceDescriptionBuilder::new("x").build();
-    let category = DeviceCategory::of(&description);
+    let category = category_of(&description);
     assert_eq!(category, DeviceCategory::UNKNOWN);
 }
 

@@ -1,0 +1,29 @@
+title = "A launcher entry for the app list"
+
+summary = [
+  "The Linux download now includes a launcher entry, so Koru can have its own place in the app list and the dock.",
+  "This build is also the first one an installed nightly updates to on its own.",
+]
+
+body = """
+## Linux
+
+The folder now holds `koru-nightly.desktop`. Copied into your applications,
+it gives Koru an entry in the app list and its own icon in the dock. The
+commands are at the top of the file:
+
+```sh
+mkdir -p ~/.local/share/applications ~/.local/share/icons
+cp ~/koru-nightly/koru-nightly.desktop ~/.local/share/applications/
+cp ~/koru-nightly/assets/logo.png ~/.local/share/icons/koru-nightly.png
+```
+
+The entry assumes Koru is in `~/koru-nightly`. If you put it elsewhere,
+change the folder name in its `Exec` line.
+
+## Updates
+
+If you installed the previous nightly, this build should arrive as an update
+without a new download. Koru checks the signature before it installs, and
+goes back to the previous build if the new one fails to start.
+"""

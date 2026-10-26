@@ -364,8 +364,8 @@ fn validate_keys(
 
 /// Key material in a file behind whatever protection this platform has: DPAPI
 /// on Windows, an owner-only header-checked file on an **internal** Mac build
-/// (a signed one keeps the secrets in the Keychain instead — [`keychain`]), and
-/// a refusal everywhere else. On a signed Mac this is also the format the
+/// (a signed one keeps the secrets in the Keychain instead — [`keychain`]) and
+/// on Linux, and a refusal everywhere else. On a signed Mac this is also the format the
 /// Keychain migration reads once.
 pub struct ProtectedSecretStore {
     directory: PathBuf,
@@ -544,7 +544,14 @@ mod protect {
 /// (`corrupt_ciphertext_is_never_replaced` keeps its meaning) and a future
 /// Keychain-backed format is distinguishable from this one instead of being
 /// misread as it.
-#[cfg(target_os = "macos")]
+///
+/// **Linux uses this arm too, for now.** There is no signed bundle there and no
+/// adapter for the desktop's Secret Service yet, and without a protected
+/// identity the Agent starts no device network and so no gateway — Koru does
+/// not open at all. An owner-only file is the macOS internal build's bargain,
+/// taken knowingly; the header is what lets a Secret Service format replace it
+/// later by reading this one once, as the Keychain did.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod protect {
     use koru_device::DeviceError;
 
@@ -566,7 +573,7 @@ mod protect {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod protect {
     use koru_device::DeviceError;
     pub fn protect(_: &[u8]) -> Result<Vec<u8>, DeviceError> {

@@ -820,7 +820,34 @@ pub fn kill_mcp_bridges(install_dir: &std::path::Path) -> Vec<u32> {
     killed
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+/// The Linux half: the updater's quiesce proof there is process absence too,
+/// read from the same table — `koru_update::processes::running_from` — so a
+/// bridge is found exactly the way it would block the install: by the image
+/// the kernel says it is running, which is this installation's `koru-mcp` and
+/// nobody else's.
+#[cfg(target_os = "linux")]
+pub fn kill_mcp_bridges(install_dir: &std::path::Path) -> Vec<u32> {
+    let Ok(target) = std::fs::canonicalize(install_dir.join(koru_update::MCP_EXE)) else {
+        return Vec::new();
+    };
+    let Ok(running) = koru_update::processes::running_from(install_dir) else {
+        return Vec::new();
+    };
+    let mut killed = Vec::new();
+    for (pid, image) in running {
+        if image != target {
+            continue;
+        }
+        // SIGKILL, as on macOS: certainty is the point, and a bridge has
+        // nothing to save.
+        if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == 0 {
+            killed.push(pid);
+        }
+    }
+    killed
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub fn kill_mcp_bridges(_install_dir: &std::path::Path) -> Vec<u32> {
     Vec::new()
 }

@@ -3,14 +3,15 @@
 use koru_update::{ReleaseFiles, sha256_file};
 use std::ffi::OsString;
 use std::fs;
-// The zip archive is every platform's but macOS, which ships a disk image.
-#[cfg(not(target_os = "macos"))]
+// The zip and tar.gz writers are every platform's but macOS, which ships a
+// disk image; the tests build both everywhere, for the layout-parity check.
+#[cfg(any(not(target_os = "macos"), test))]
 use std::fs::File;
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), test))]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), test))]
 use zip::write::SimpleFileOptions;
 
 /// Every face the app registers, named rather than globbed.
@@ -167,7 +168,7 @@ fn release_document_source(document: &str) -> Result<&'static str, String> {
 /// composition and nothing separate is built, signed or staged. The names
 /// survive in `koru_update::exe` because an installation being upgraded may
 /// still have the old files, and running.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) const CHANNEL_BINARIES: &[(&str, &str)] = &[
     ("koru", koru_update::APP_EXE),
     ("koru-agent", koru_update::AGENT_EXE),
@@ -190,6 +191,18 @@ pub(crate) const CHANNEL_BINARIES: &[(&str, &str)] = &[
     ("koru-voice-worker", koru_update::VOICE_EXE),
 ];
 
+/// **Linux ships without the voice worker** until Linux rung 3 builds it
+/// (`docs/features/linux/`). A stub binary was rejected: a binary that
+/// pretends. This arm is deleted when voice lands on Linux, together with the
+/// Linux arm of `koru_update::ALL_EXE`.
+#[cfg(target_os = "linux")]
+pub(crate) const CHANNEL_BINARIES: &[(&str, &str)] = &[
+    ("koru", koru_update::APP_EXE),
+    ("koru-agent", koru_update::AGENT_EXE),
+    ("koru-mcp", koru_update::MCP_EXE),
+    ("koru-ai-chat", koru_update::AI_CHAT_EXE),
+];
+
 #[cfg(any(target_os = "macos", test))]
 const MAC_NOTIFICATION_OWNER_PACKAGE: &str = "koru-notification-owner";
 
@@ -199,8 +212,8 @@ pub struct Package {
     pub size: u64,
 }
 
-/// Where a version's ZIP lands. One spelling, because `dist-local` has to be
-/// able to name last run's archive in order to replace it.
+/// Where a version's archive lands. One spelling, because `dist-local` has to
+/// be able to name last run's archive in order to replace it.
 pub fn archive_path(root: &Path, version: &str, target: &str) -> PathBuf {
     root.join("dist/cloud").join(format!(
         "koru-{version}-{target}.{}",
@@ -209,12 +222,25 @@ pub fn archive_path(root: &Path, version: &str, target: &str) -> PathBuf {
 }
 
 /// What a target's release artifact is: the zip the Windows updater
-/// extracts, or the disk image a mac person drags an app out of.
+/// extracts, the disk image a mac person drags an app out of, or the tarball a
+/// Linux person extracts (`tar_gz_dir` says why its layout is the zip's).
 pub fn archive_extension(target: &str) -> &'static str {
     if target.starts_with("macos") {
         "dmg"
+    } else if target.starts_with("linux") {
+        "tar.gz"
     } else {
         "zip"
+    }
+}
+
+/// The manifest's name for [`archive_extension`]'s answer, so a manifest can
+/// never describe a tarball as a zip.
+pub fn package_format(target: &str) -> koru_update::PackageFormat {
+    match archive_extension(target) {
+        "dmg" => koru_update::PackageFormat::Dmg,
+        "tar.gz" => koru_update::PackageFormat::TarGz,
+        _ => koru_update::PackageFormat::Zip,
     }
 }
 
@@ -287,6 +313,20 @@ fn unconfigured_features(unset: &[&str], no_update_key: bool) -> Vec<String> {
     lines
 }
 
+/// What a package bakes in from outside the tree, beyond its own identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Baked<'a> {
+    /// `koru_env::BAKED` from `.env.production` and the shell, as `dist-local`
+    /// and `dist-cloud` have always built: loaded when the file is there, and
+    /// required of every value under `native::Rule::Official`.
+    Production,
+    /// **None of `koru_env::BAKED`, whatever the file or the shell holds**, and
+    /// the update feed at `update_base_url` — the GitHub nightly, which is
+    /// built without Koru Cloud for now (NIGHTLY N5) and reads its feed from
+    /// the release it is published on.
+    WithoutCloud { update_base_url: &'a str },
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     root: &Path,
@@ -298,6 +338,7 @@ pub fn build(
     public_key: &str,
     notes: Option<&str>,
     native_rule: crate::native::Rule,
+    baked: Baked<'_>,
 ) -> Result<Package, String> {
     if crate::host_target() == "unsupported" {
         return Err("dist-cloud does not support this host's target triple".into());
@@ -388,7 +429,16 @@ pub fn build(
     // refusing to publish without every value.
     let production = root.join(".env.production");
     let official = native_rule == crate::native::Rule::Official;
-    if production.is_file() || official {
+    if let Baked::WithoutCloud { .. } = baked {
+        if official {
+            return Err("an official release bakes in .env.production; it cannot be built without Koru Cloud".into());
+        }
+        println!(
+            "[Koru] building without Koru Cloud: nothing from {} or the shell's {} is baked in",
+            production.display(),
+            koru_env::BAKED.join(", "),
+        );
+    } else if production.is_file() || official {
         // A file that is there but wrong is an error for either rule.
         koru_env::load_file(&production).map_err(|error| {
             format!(
@@ -403,7 +453,10 @@ pub fn build(
             production.display()
         );
     }
-    let unset = unset_baked(|name| koru_env::value(name).is_some());
+    let unset = match baked {
+        Baked::Production => unset_baked(|name| koru_env::value(name).is_some()),
+        Baked::WithoutCloud { .. } => koru_env::BAKED.to_vec(),
+    };
     if official {
         if let Some(missing) = unset.first() {
             return Err(format!(
@@ -426,6 +479,7 @@ pub fn build(
         released_at,
         public_key,
         None,
+        baked,
     )?;
     let updater = root.join("target/release").join(koru_update::UPDATER_EXE);
     native_sign(&updater)?;
@@ -463,6 +517,7 @@ pub fn build(
         released_at,
         public_key,
         Some(&updater_sha),
+        baked,
     )?;
     // **What the voice runtime linked, checked against the pin before anything
     // is signed or staged.** An archive under the right name with a different
@@ -647,6 +702,14 @@ pub fn build(
         )
         .map_err(|error| error.to_string())?;
     }
+    // **A launcher entry to copy, not one that installs itself.** A tarball has
+    // no install step, and a `.desktop` file names absolute paths, so the entry
+    // assumes the folder the release notes suggest and says how to change it.
+    // Desktop integration proper waits for an AppImage or a `.deb`.
+    if cfg!(target_os = "linux") {
+        let (file, text) = linux_desktop_entry(channel);
+        fs::write(beside.join(file), text).map_err(|error| error.to_string())?;
+    }
 
     // **The notes travel with the build that they describe.**
     //
@@ -744,7 +807,13 @@ pub fn build(
     #[cfg(target_os = "macos")]
     mac_dmg(&stage, &archive)?;
     #[cfg(not(target_os = "macos"))]
-    zip_dir(&stage, &archive)?;
+    {
+        if archive_extension(crate::host_target()) == "tar.gz" {
+            tar_gz_dir(&stage, &archive)?;
+        } else {
+            zip_dir(&stage, &archive)?;
+        }
+    }
     let size = archive.metadata().map_err(|error| error.to_string())?.len();
     if size > koru_update::MAX_PACKAGE_SIZE {
         return Err("release archive exceeds Koru's package limit".into());
@@ -803,6 +872,7 @@ fn run_cargo(
     released_at: &str,
     public_key: &str,
     updater_sha: Option<&str>,
+    baked: Baked<'_>,
 ) -> Result<(), String> {
     let mut command = Command::new("cargo");
     command
@@ -820,6 +890,14 @@ fn run_cargo(
         .env("KORU_UPDATE_PUBLIC_KEY", public_key);
     if let Some(hash) = updater_sha {
         command.env("KORU_UPDATER_SHA256", hash);
+    }
+    // Removed rather than left to the shell: `option_env!` would bake a
+    // value a developer happened to export, and this build promises none.
+    if let Baked::WithoutCloud { update_base_url } = baked {
+        for name in koru_env::BAKED {
+            command.env_remove(name);
+        }
+        command.env(koru_env::name::KORU_UPDATE_BASE_URL, update_base_url);
     }
     // **The product feature flags are baked here or nowhere.** Each is read by
     // `option_env!` inside `koru-features` alone — the same per-crate-compile
@@ -1905,24 +1983,12 @@ fn collect_files(root: &Path) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), test))]
 fn zip_dir(root: &Path, archive: &Path) -> Result<(), String> {
     let output = File::create(archive).map_err(|error| error.to_string())?;
     let mut writer = zip::ZipWriter::new(output);
     for relative in collect_files(root)? {
-        // The entry keeps the source file's own mode — a Mach-O extracted
-        // without its execute bit is a bundle that will not launch. Windows
-        // has no mode to read, and 0o644 is what its entries always carried.
-        #[cfg(unix)]
-        let mode = {
-            use std::os::unix::fs::PermissionsExt;
-            fs::metadata(root.join(&relative))
-                .map_err(|error| error.to_string())?
-                .permissions()
-                .mode()
-        };
-        #[cfg(not(unix))]
-        let mode = 0o644;
+        let mode = file_mode(&root.join(&relative))?;
         let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(mode);
@@ -1945,6 +2011,122 @@ fn zip_dir(root: &Path, archive: &Path) -> Result<(), String> {
     }
     writer.finish().map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// The mode an archive entry carries: the source file's own — a binary
+/// extracted without its execute bit is a package that will not launch.
+/// Windows has no mode to read, and 0o644 is what its entries always carried.
+#[cfg(any(not(target_os = "macos"), test))]
+fn file_mode(path: &Path) -> Result<u32, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(fs::metadata(path)
+            .map_err(|error| error.to_string())?
+            .permissions()
+            .mode())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(0o644)
+    }
+}
+
+/// The `.desktop` file a Linux package carries beside `koru`, and its name:
+/// `koru-nightly.desktop` for the nightly, `koru.desktop` for stable.
+///
+/// **`Exec` goes through `sh -c` for `$HOME`**, which a desktop entry does not
+/// expand. The doubled backslashes are the file format's own escape over the
+/// `Exec` key's, so the shell receives `exec "$HOME/koru-nightly/koru"`.
+/// `Icon` cannot use a variable at all, hence the icon is copied by name.
+/// `StartupWMClass=koru` is winit's X11 default, the binary's name, so the
+/// dock groups Koru's windows under this entry.
+fn linux_desktop_entry(channel: &str) -> (String, String) {
+    let id = if channel == "stable" {
+        "koru".to_owned()
+    } else {
+        format!("koru-{channel}")
+    };
+    let name = match channel {
+        "stable" => "Koru".to_owned(),
+        other => {
+            let mut letters = other.chars();
+            let first = letters.next().map(|c| c.to_ascii_uppercase());
+            format!(
+                "Koru {}{}",
+                first.into_iter().collect::<String>(),
+                letters.as_str()
+            )
+        }
+    };
+    let text = format!(
+        "# Koru's launcher entry, for the app list and the dock.\n\
+         # It assumes Koru is extracted to ~/{id}; if not, change {id} in Exec.\n\
+         #\n\
+         #   mkdir -p ~/.local/share/applications ~/.local/share/icons\n\
+         #   cp ~/{id}/{id}.desktop ~/.local/share/applications/\n\
+         #   cp ~/{id}/assets/logo.png ~/.local/share/icons/{id}.png\n\
+         [Desktop Entry]\n\
+         Type=Application\n\
+         Name={name}\n\
+         Exec=sh -c \"exec \\\\\"\\\\$HOME/{id}/koru\\\\\"\"\n\
+         Icon={id}\n\
+         Terminal=false\n\
+         Categories=Office;\n\
+         StartupWMClass=koru\n"
+    );
+    (format!("{id}.desktop"), text)
+}
+
+/// The Linux package: **the zip's layout, in a gzipped tar.**
+///
+/// The layout is the contract with the extractor in `koru-update`, which
+/// mirrors the zip extractor, so it is the zip's exactly: no top-level
+/// directory, one regular-file entry per staged file, at the same
+/// `/`-separated path relative to the package root and in the same order.
+/// On Linux that is `koru`, `koru-agent`, `koru-mcp`, `koru-ai-chat` and
+/// `koru-updater` at the root beside `release-files.json`, `VERSION`,
+/// `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.txt` and `RELEASE_NOTES.md`, with
+/// `assets/` and `docs/` beneath. No directory entries, links or devices: the
+/// zip has none, and `collect_files` refuses links while staging.
+///
+/// Each entry keeps its file's mode, so the binaries stay executable, and its
+/// modification time; owner and group are zero and unnamed, so nothing about
+/// the machine that built it rides along.
+#[cfg(any(not(target_os = "macos"), test))]
+fn tar_gz_dir(root: &Path, archive: &Path) -> Result<(), String> {
+    let output = File::create(archive).map_err(|error| error.to_string())?;
+    let encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
+    let mut builder = tar::Builder::new(encoder);
+    for relative in collect_files(root)? {
+        let path = root.join(&relative);
+        let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(metadata.len());
+        header.set_mode(file_mode(&path)? & 0o7777);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(
+            metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_secs()),
+        );
+        let source = File::open(&path).map_err(|error| error.to_string())?;
+        // `append_data` writes the path — as a GNU long-name entry when it is
+        // over a hundred bytes — and then the checksum.
+        builder
+            .append_data(&mut header, relative.replace('\\', "/"), source)
+            .map_err(|error| format!("{relative}: {error}"))?;
+    }
+    let encoder = builder.into_inner().map_err(|error| error.to_string())?;
+    encoder
+        .finish()
+        .and_then(|file| file.sync_all())
+        .map_err(|error| error.to_string())
 }
 
 fn ensure_under(root: &Path, target: &Path) -> Result<(), String> {
@@ -2425,10 +2607,20 @@ mod tests {
         // binary both use the `-worker` suffix. Getting either half wrong
         // builds nothing or stages nothing, and both fail long after this
         // table was edited.
-        assert!(
-            CHANNEL_BINARIES.contains(&("koru-voice-worker", koru_update::VOICE_EXE)),
-            "the voice worker package and its shipped executable must stay paired"
-        );
+        if cfg!(target_os = "linux") {
+            assert!(
+                !CHANNEL_BINARIES
+                    .iter()
+                    .any(|(package, executable)| *package == "koru-voice-worker"
+                        || *executable == koru_update::VOICE_EXE),
+                "Linux builds no voice worker until rung 3"
+            );
+        } else {
+            assert!(
+                CHANNEL_BINARIES.contains(&("koru-voice-worker", koru_update::VOICE_EXE)),
+                "the voice worker package and its shipped executable must stay paired"
+            );
+        }
         // **Every retired executable, by constant rather than by literal.**
         // Each of these is a name `koru_update::exe` still carries so the
         // updater can stop the process and move the file aside; none of them
@@ -2466,5 +2658,140 @@ mod tests {
             MAC_NOTIFICATION_OWNER_PACKAGE,
             koru_native_notifications::MAC_OWNER_EXECUTABLE
         );
+    }
+
+    #[test]
+    fn each_target_has_its_own_archive_and_manifest_format() {
+        use koru_update::PackageFormat;
+        for (target, extension, format) in [
+            ("windows-x86_64", "zip", PackageFormat::Zip),
+            ("macos-aarch64", "dmg", PackageFormat::Dmg),
+            ("macos-x86_64", "dmg", PackageFormat::Dmg),
+            ("linux-x86_64", "tar.gz", PackageFormat::TarGz),
+        ] {
+            assert_eq!(archive_extension(target), extension, "{target}");
+            assert_eq!(package_format(target), format, "{target}");
+        }
+        assert_eq!(
+            archive_path(Path::new("/r"), "0.1.4", "linux-x86_64"),
+            Path::new("/r/dist/cloud/koru-0.1.4-linux-x86_64.tar.gz")
+        );
+    }
+
+    /// The launcher entry names the channel's folder, and its `Exec` survives
+    /// both escape layers as one `sh -c` argument with `$HOME` intact.
+    #[test]
+    fn linux_desktop_entry_names_the_channel_and_escapes_exec() {
+        let (file, text) = linux_desktop_entry("nightly");
+        assert_eq!(file, "koru-nightly.desktop");
+        assert!(text.contains("\nName=Koru Nightly\n"));
+        assert!(text.contains("\nIcon=koru-nightly\n"));
+        assert!(text.contains(r#"Exec=sh -c "exec \\"\\$HOME/koru-nightly/koru\\"""#));
+        assert!(text.contains("\nStartupWMClass=koru\n"));
+        let (file, text) = linux_desktop_entry("stable");
+        assert_eq!(file, "koru.desktop");
+        assert!(text.contains("\nName=Koru\n"));
+        assert!(text.contains("$HOME/koru/koru"));
+    }
+
+    /// The Linux arm is the Windows/mac inventory minus the voice worker and
+    /// the Windows-only COM broker — no more, no less.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_packages_everything_but_the_voice_worker() {
+        assert_eq!(
+            CHANNEL_BINARIES,
+            &[
+                ("koru", koru_update::APP_EXE),
+                ("koru-agent", koru_update::AGENT_EXE),
+                ("koru-mcp", koru_update::MCP_EXE),
+                ("koru-ai-chat", koru_update::AI_CHAT_EXE),
+            ]
+        );
+        assert_eq!(crate::host_target(), "linux-x86_64");
+    }
+
+    /// **The tarball's layout is the zip's**, which is the contract with the
+    /// extractor in `koru-update`: the same entries, at the same relative
+    /// paths, in the same order, with no top-level folder — and on Unix the
+    /// same modes, so a binary is still executable after extraction.
+    #[test]
+    fn the_tarball_has_exactly_the_zips_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let stage = dir.path().join("stage");
+        let long = format!("docs/{}/deep.md", "nested".repeat(20));
+        for (path, contents) in [
+            ("koru", "binary"),
+            ("release-files.json", "{}"),
+            ("RELEASE_NOTES.md", "notes"),
+            ("assets/fonts/Inter.ttf", "font"),
+            ("docs/mcp/README.md", "doc"),
+            (long.as_str(), "a path over a hundred bytes"),
+        ] {
+            let file = stage.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, contents).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(stage.join("koru"), fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(
+                stage.join("RELEASE_NOTES.md"),
+                fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        }
+        let zip_path = dir.path().join("koru.zip");
+        let tar_path = dir.path().join("koru.tar.gz");
+        zip_dir(&stage, &zip_path).unwrap();
+        tar_gz_dir(&stage, &tar_path).unwrap();
+
+        let mut zip = zip::ZipArchive::new(File::open(&zip_path).unwrap()).unwrap();
+        let zipped: Vec<(String, Option<u32>)> = (0..zip.len())
+            .map(|index| {
+                let entry = zip.by_index(index).unwrap();
+                (entry.name().unwrap().to_string(), entry.unix_mode())
+            })
+            .collect();
+        let mut tar =
+            tar::Archive::new(flate2::read::GzDecoder::new(File::open(&tar_path).unwrap()));
+        let mut tarred = Vec::new();
+        for entry in tar.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            assert_eq!(entry.header().entry_type(), tar::EntryType::Regular);
+            assert_eq!(entry.header().uid().unwrap(), 0);
+            let mut contents = String::new();
+            entry.read_to_string(&mut contents).unwrap();
+            let path = entry.path().unwrap().to_string_lossy().into_owned();
+            assert_eq!(
+                contents,
+                fs::read_to_string(stage.join(&path)).unwrap(),
+                "{path}"
+            );
+            tarred.push((path, entry.header().mode().unwrap()));
+        }
+
+        let zip_paths: Vec<&str> = zipped.iter().map(|(path, _)| path.as_str()).collect();
+        let tar_paths: Vec<&str> = tarred.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(tar_paths, zip_paths);
+        assert_eq!(tar_paths.len(), 6);
+        assert!(tar_paths.contains(&long.as_str()));
+        assert!(
+            tar_paths
+                .iter()
+                .all(|path| !path.starts_with('/') && !path.contains('\\'))
+        );
+        #[cfg(unix)]
+        for ((path, zip_mode), (_, tar_mode)) in zipped.iter().zip(&tarred) {
+            assert_eq!(
+                zip_mode.map(|mode| mode & 0o7777),
+                Some(*tar_mode),
+                "{path}"
+            );
+            if path == "koru" {
+                assert_eq!(*tar_mode, 0o755);
+            }
+        }
     }
 }

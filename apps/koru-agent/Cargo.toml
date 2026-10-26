@@ -83,27 +83,22 @@ koru-settings = { path = "../../crates/koru-settings" }
 # The event model, for the overlay's fire-and-forget `search.opened`.
 koru-events = { path = "../../crates/koru-events" }
 koru-api-discovery = { path = "../../crates/koru-api-discovery" }
-# **Supervising the voice worker, which means naming three things it owns**:
-# the launch bootstrap it reads from stdin, the `status` question that echoes
-# the `launch_id` back (Q-V34 -- the greeting deliberately has no field for
-# one), and the report that answers it. Naming them rather than re-declaring
-# them is the `koru-store-wire` lesson: a client that sent `json!` literals
-# against types it could not see drifted from the server twice.
-#
-# It carries `cpal` in with it, which this process never calls -- audio never
-# leaves the worker. That is the price of one declaration of the handshake
-# instead of two, and it is the trade `apps/koru-voice`'s own `bootstrap.rs`
-# anticipated when it made the type `pub`.
-koru-voice-worker = { path = "../koru-voice" }
 # Dialling the worker: what the readiness poll connects with, and what an
-# `EnsureService` answer is a promise about.
+# `EnsureService` answer is a promise about. Its `ask` module is the blocking
+# `status`/`stop`/`release` question supervision uses.
 koru-voice-client = { path = "../../crates/koru-voice-client" }
+# **Supervising the voice worker means naming three things it reads or writes**:
+# the launch bootstrap on its stdin, the control verbs, and the status report
+# that echoes the `launch_id` back (Q-V34). They are declared in the contract
+# crate so this process names them without linking the worker, which carries
+# both speech runtimes and `cpal` -- none of which this process calls, and
+# which `koru-com-notification` would otherwise inherit too. The fingerprints
+# are `koru-network-bridge`'s, the same `blake3` hex the worker computes.
 koru-voice = { path = "../../crates/koru-voice" }
 koru-dictation = { path = "../../crates/koru-dictation" }
 # **Is a model installed**, which is the whole of what the tray's Voice input
-# row asks of the cache. It is already in this process -- `koru-voice-worker`
-# links it -- and naming it here is what lets the menu ask without going
-# through the worker's request path. Read offline: nothing on a menu build
+# row asks of the cache. Naming it here is what lets the menu ask without
+# going through the worker's request path. Read offline: nothing on a menu build
 # fetches anything.
 koru-voice-models = { path = "../../crates/koru-voice-models" }
 # The consent record's file name and its reader: the tray row is honest about
@@ -190,10 +185,23 @@ vello.workspace = true
 # The notification area. The gtk/libxdo weight that kept `tray-icon` off this
 # list is *Linux's* — on macOS it wraps NSStatusItem and pulls neither
 # (ADR-118, confirmed with `cargo tree`) — so Windows and macOS share one
-# implementation and Linux keeps the stub. `default-features = false` is what
-# keeps the Linux-only features from ever arriving by default.
+# implementation and Linux has its own, below. `default-features = false` is
+# what keeps the Linux-only features from ever arriving by default.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
+
+# Linux's notification area is the StatusNotifierItem D-Bus protocol (KDE
+# natively, GNOME through the AppIndicator extension Ubuntu enables). `ksni`
+# speaks it in Rust over `zbus`, with menus over D-Bus too — no gtk, which is
+# what ADR-118 kept `tray-icon` off Linux for. `async-io`, not the default
+# `tokio`, because that is the `zbus` backend already in this tree (via
+# `ashpd`); `blocking` because the Agent has no async runtime to hand it.
+# The whole menu, derived from the same helpers `tray-icon`'s is (`tray.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+# `kill(pid, SIGKILL)` for an MCP bridge still running from this installation
+# when an update hands over (`update::kill_mcp_bridges`), as on macOS.
+libc.workspace = true
 
 # The global search shortcut. Windows has `RegisterHotKey` directly; macOS
 # needs Carbon's `RegisterEventHotKey`, which this wraps — same authors as

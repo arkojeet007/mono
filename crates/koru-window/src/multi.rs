@@ -544,6 +544,12 @@ pub fn run_windows<M: MultiWindowApp>(
             builder.with_activation_policy(ActivationPolicy::Accessory);
         }
     }
+    // X11 on Linux, for the reason given at the same arm in `app.rs`.
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
     let events = builder.build()?;
     events.set_control_flow(ControlFlow::Wait);
     let mut windows = Windows::new(app, text);

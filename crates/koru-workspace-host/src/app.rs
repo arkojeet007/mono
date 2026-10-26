@@ -392,6 +392,14 @@ fn hide_application(hidden: bool) {
 #[cfg(not(target_os = "macos"))]
 fn hide_application(_hidden: bool) {}
 
+/// Whether the Agent has a notification-area icon to come back from.
+///
+/// Linux has none yet (the Agent's tray is Windows and macOS only), and a
+/// window hidden there is a process nobody can reach — the case
+/// `WindowRequest::HideToTray` already says must fall back to closing. So on
+/// Linux every "go to the tray" is a close.
+const HAS_NOTIFICATION_AREA: bool = cfg!(any(windows, target_os = "macos"));
+
 /// Has macOS brought the application back without asking us?
 ///
 /// A Dock click, ⌘-Tab or the app switcher all unhide directly — none of them
@@ -2059,6 +2067,7 @@ impl WindowDrag {
 /// same observable failure there: a click ended physically while the field
 /// kept extending its selection on later pointer moves. `GetAsyncKeyState`
 /// gives the same non-guess answer there. Other platforms retain `false`.
+#[cfg(any(windows, target_os = "macos", test))]
 fn physically_ended(believed_pressed: bool, physically_pressed: bool) -> bool {
     believed_pressed && !physically_pressed
 }
@@ -13303,7 +13312,7 @@ Nothing was written. The store starts on demand, so this usually means it could 
     /// machine can be shut down from, and "I put it in the tray last night" must
     /// not be how a day's work is lost.
     fn hide_to_tray(&mut self) -> bool {
-        if self.panes.is_empty() || !self.host.agent_available() {
+        if !HAS_NOTIFICATION_AREA || self.panes.is_empty() || !self.host.agent_available() {
             return false;
         }
         self.capture_geometry();
@@ -13554,7 +13563,8 @@ Nothing was written. The store starts on demand, so this usually means it could 
                 if background && self.hide_to_tray() {
                     return;
                 }
-                if !background {
+                // With no tray, "keep running in the background" is a quit too.
+                if !background || !HAS_NOTIFICATION_AREA {
                     self.host.last_window_closing();
                 }
             }
@@ -18101,9 +18111,17 @@ pub fn run_with_args<H: Host, I: IntoIterator<Item = String>>(host: H, name: &st
         eprintln!("[Koru] no local settings folder available; nothing was opened");
         return;
     };
-    let event_loop = EventLoop::<Wake>::with_user_event()
-        .build()
-        .expect("create event loop");
+    let mut builder = EventLoop::<Wake>::with_user_event();
+    // **Koru's own loop, not only `koru_window`'s.** The X11 decision and its
+    // reason are at `koru_window::app::run` (D5); this is the third loop it
+    // names. Without it Koru alone came up as a Wayland client, where
+    // `set_visible(false)` does nothing — so the ✕, which hides, did nothing.
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
+    let event_loop = builder.build().expect("create event loop");
     let proxy = event_loop.create_proxy();
     // Before `run_app`, which is what finishes launching: that is the moment
     // AppKit decides whether the delegate answers URLs.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Generate a missing release descriptor with a chosen assistant, then review it.
+//! Generate a missing release descriptor — or a GitHub nightly's notes — with a
+//! chosen assistant, then review it.
 
 use crate::{confirm, read_answer, shell};
 use koru_update::ReleaseChannel;
@@ -26,25 +27,61 @@ struct NotesCommand {
     input: Option<PromptInput>,
 }
 
+/// What the generator is asked to write.
+#[derive(Clone, Copy)]
+pub(crate) enum Request<'a> {
+    /// The descriptor `dist-cloud` is about to publish for a channel.
+    Release(ReleaseChannel),
+    /// A GitHub nightly's notes file, describing the commits `log` lists
+    /// (`nightly-notes`; WRITING.md's *Nightly notes on GitHub*).
+    Nightly { log: &'a str },
+}
+
+impl Request<'_> {
+    fn channel(&self) -> ReleaseChannel {
+        match self {
+            Request::Release(channel) => *channel,
+            Request::Nightly { .. } => ReleaseChannel::Nightly,
+        }
+    }
+
+    /// What the assistant is asked, ahead of the shared instructions.
+    fn preface(&self, path: &Path) -> String {
+        match self {
+            Request::Release(channel) => format!(
+                "Generate release notes for the {channel} channel.\n\
+                 The publisher has already selected the version. Write exactly this \
+                 descriptor, even if the UTC date or published versions have changed:\n\
+                 {path}\n",
+                channel = channel.as_str(),
+                path = path.display(),
+            ),
+            Request::Nightly { log } => format!(
+                "Generate the notes for Koru's GitHub nightly.\n\
+                 Write exactly this notes file, even if the UTC date has changed:\n\
+                 {path}\n\
+                 It describes the commits `{log}` lists. Follow the section \
+                 \"Nightly notes on GitHub\" of the instructions below.\n",
+                path = path.display(),
+            ),
+        }
+    }
+}
+
 enum PromptInput {
     Stdin(String),
     Argument(String),
 }
 
 impl NotesCommand {
-    fn new(template: &str, channel: ReleaseChannel, descriptor_path: &Path) -> Self {
+    fn new(template: &str, request: Request<'_>, descriptor_path: &Path) -> Self {
         let assistant = template.trim().to_ascii_lowercase();
         if matches!(assistant.as_str(), "codex" | "kimi") {
             // Kimi Code 0.42.0 takes --prompt as an argument, not stdin.
             // Both transports keep checkout paths and prose out of shell syntax.
             let prompt = format!(
-                "Generate release notes for the {channel} channel.\n\
-                 The publisher has already selected the version. Write exactly this \
-                 descriptor, even if the UTC date or published versions have changed:\n\
-                 {path}\n\
-                 Follow the release-writing instructions below.\n\n{WRITING_INSTRUCTIONS}",
-                channel = channel.as_str(),
-                path = descriptor_path.display(),
+                "{preface}Follow the release-writing instructions below.\n\n{WRITING_INSTRUCTIONS}",
+                preface = request.preface(descriptor_path),
             );
             let (command, input) = if assistant == "kimi" {
                 ("kimi", PromptInput::Argument(prompt))
@@ -56,8 +93,14 @@ impl NotesCommand {
                 input: Some(input),
             }
         } else {
+            // `{path}` is the exact file to write, which a custom generator
+            // cannot infer for a nightly's `-2`/`-3`. It is substituted as it
+            // is, unquoted — the template's author quotes it if a checkout
+            // path may hold spaces.
             Self {
-                command: template.replace("{channel}", channel.as_str()),
+                command: template
+                    .replace("{channel}", request.channel().as_str())
+                    .replace("{path}", &descriptor_path.display().to_string()),
                 input: None,
             }
         }
@@ -134,35 +177,8 @@ pub(crate) fn offer_generated_notes(
             descriptor_path.display()
         ));
     }
-    let configured = std::env::var("KORU_NOTES_COMMAND")
-        .ok()
-        .filter(|template| !template.trim().is_empty());
     println!("[Koru] no descriptor at {}", descriptor_path.display());
-    let question = match &configured {
-        Some(template) => format!(
-            "Generate one with `{}`? [y/N, or codex/kimi] ",
-            NotesCommand::new(template, channel, descriptor_path).command
-        ),
-        None => "Generate one with an assistant? [codex/kimi, or N to write it yourself] ".into(),
-    };
-    let answer = read_answer(&question)?;
-    let template = chosen_template(&answer, configured.as_deref())
-        .ok_or_else(|| format!("create {} before publishing", descriptor_path.display()))?;
-    let selected = NotesCommand::new(template, channel, descriptor_path);
-    println!(
-        "[Koru] generating release notes with `{}`",
-        selected.command
-    );
-    selected.run(root)?;
-
-    // Custom generators can still land a neighboring filename. Read only the
-    // exact descriptor selected by this publication, never whichever appeared.
-    let notes = fs::read_to_string(descriptor_path).map_err(|_| {
-        format!(
-            "the release-notes command did not write {}; check releases/ for a near-miss filename",
-            descriptor_path.display()
-        )
-    })?;
+    let notes = generate(root, Request::Release(channel), descriptor_path)?;
     println!("\n--- {} ---", descriptor_path.display());
     println!("{notes}");
     println!("--- end ---\n");
@@ -174,6 +190,44 @@ pub(crate) fn offer_generated_notes(
             descriptor_path.display()
         ))
     }
+}
+
+/// Ask which generator to use, run it, and return what it wrote at `path`.
+///
+/// No default: with `KORU_NOTES_COMMAND` unset only a named assistant runs,
+/// and any other answer stops so the file can be written by hand.
+pub(crate) fn generate(root: &Path, request: Request<'_>, path: &Path) -> Result<String, String> {
+    let configured = std::env::var("KORU_NOTES_COMMAND")
+        .ok()
+        .filter(|template| !template.trim().is_empty());
+    let question = match &configured {
+        Some(template) => format!(
+            "Generate one with `{}`? [y/N, or codex/kimi] ",
+            NotesCommand::new(template, request, path).command
+        ),
+        None => "Generate one with an assistant? [codex/kimi, or N to write it yourself] ".into(),
+    };
+    let answer = read_answer(&question)?;
+    let template =
+        chosen_template(&answer, configured.as_deref()).ok_or_else(|| match request {
+            Request::Release(_) => format!("create {} before publishing", path.display()),
+            Request::Nightly { .. } => format!("write {} yourself", path.display()),
+        })?;
+    let selected = NotesCommand::new(template, request, path);
+    println!(
+        "[Koru] generating release notes with `{}`",
+        selected.command
+    );
+    selected.run(root)?;
+
+    // Custom generators can still land a neighboring filename. Read only the
+    // exact file selected by this run, never whichever appeared.
+    fs::read_to_string(path).map_err(|_| {
+        format!(
+            "the release-notes command did not write {}; check releases/ for a near-miss filename",
+            path.display()
+        )
+    })
 }
 
 #[cfg(test)]

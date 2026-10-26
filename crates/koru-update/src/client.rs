@@ -29,6 +29,11 @@ impl UpdateClient {
         if base_url.scheme() != "https" && !debug_override_allowed(&base_url) {
             return Err("the update origin must use HTTPS".into());
         }
+        // A GitHub release asset is always one redirect away: `github.com`
+        // answers 302 to a signed, short-lived URL on its asset host, over
+        // HTTPS, and that host answers the ETag and a conditional 304 —
+        // `If-None-Match` survives the hop, since only credentials are
+        // stripped when a redirect changes host. Observed 2026-10-24.
         let policy = redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 5 || attempt.url().scheme() != "https" {
                 attempt.stop()
@@ -51,10 +56,7 @@ impl UpdateClient {
         target: &UpdateTarget,
         etag: Option<&str>,
     ) -> Result<FetchResult, String> {
-        let url = self
-            .base_url
-            .join(&target.manifest_path())
-            .map_err(|e| e.to_string())?;
+        let url = target.manifest_url(&self.base_url)?;
         let mut request = self.client.get(url);
         if let Some(value) = etag {
             request = request.header(IF_NONE_MATCH, value);

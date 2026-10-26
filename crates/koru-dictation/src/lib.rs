@@ -79,8 +79,8 @@ use std::time::{Duration, Instant};
 /// will serve (Q-V44).
 pub use koru_voice_client::{
     DISABLE_VAR, EndReason, ErrorCode, Event, InputChoice, InputDevice, InputResolution,
-    LevelBucket, Live, ModelId, ModelTier, Requested, SessionId, State, Transcript, VoiceClient,
-    VoiceError, VoiceLanguage, available, disabled,
+    LevelBucket, Live, ModelId, ModelTier, Off, Requested, SessionId, State, Transcript,
+    VoiceClient, VoiceError, VoiceLanguage, available, disabled, off,
 };
 
 /// **Whether this build's controller is allowed to reach a worker at all.**

@@ -33,45 +33,22 @@
 //! `docs/features/voice/archive/QUESTIONS.md`, because Plan 1.4 owns `ensure_voice` and may
 //! prefer to add the field to the greeting instead.
 //!
-//! ## Where this type will live
+//! ## Where the type lives
 //!
-//! Here for now, and `pub` so Plan 1.4's `apps/koru-agent` can name it rather
-//! than writing a second declaration of the same JSON — which is the
-//! `koru-store-wire` lesson. If the agent ends up needing it without linking
-//! the worker, it moves to `koru-agent-wire` beside the other launch
-//! vocabulary; that is a rename, not a redesign.
+//! [`WorkerBootstrap`] itself is declared in `koru_voice::bootstrap`, so the
+//! Agent can write one without linking this crate. What stays here is the
+//! mechanism the contract crate's charter excludes: reading it from stdin,
+//! checking it against this executable's bytes, and the digest that does it.
 
-use serde::{Deserialize, Serialize};
-
-/// The version of this document. A mismatch is refused rather than
-/// interpreted: an agent and a worker are two of the six binaries in one zip,
-/// installed together and never mixed, so a disagreement here means something
-/// is wrong about *which* binaries are running.
-pub const BOOTSTRAP_VERSION: u32 = 1;
-
-/// What the agent writes to the worker's stdin.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkerBootstrap {
-    pub bootstrap_version: u32,
-    /// Which launch this is. Echoed in `koru-voice-worker status` so a supervisor can
-    /// tell *its* worker from one that was already running.
-    pub launch_id: String,
-    /// `stable`, `beta`, `nightly`, … A nightly agent must not supervise a
-    /// stable worker: every endpoint name carries the channel, and the two
-    /// would simply never meet.
-    pub channel: String,
-    /// A digest of the root path both sides were given.
-    pub root_fingerprint: String,
-    /// A digest of the worker executable's own bytes.
-    pub installation_fingerprint: String,
-}
+use koru_voice::bootstrap::{BOOTSTRAP_VERSION, WorkerBootstrap};
 
 /// The digest both fingerprints use.
 ///
 /// `blake3`, and the same spelling `koru_network_bridge::fingerprint` already
 /// uses for the gateway's bootstrap — one hash function for one purpose across
 /// the product, so a fingerprint computed by either side is comparable by the
-/// other.
+/// other. The Agent fingerprints with that function, and both sides' tests
+/// assert the same literal digest for `"abc"`.
 pub fn fingerprint(value: impl AsRef<[u8]>) -> String {
     blake3::hash(value.as_ref()).to_hex().to_string()
 }

@@ -267,9 +267,16 @@ pub const INVENTORY_VERSION: u32 = 10;
 /// [`LEGACY_STORE`], [`LEGACY_STORE_SERVER`], [`LEGACY_VOICE`] — are
 /// deliberately absent. A file an installation still has is owned through its
 /// own installed manifest, not through this list.
+///
+/// **Linux carries no [`VOICE`] yet**: the worker is not built there until
+/// Linux rung 3 (`docs/features/linux/`), and requiring it would refuse every
+/// Linux package. That arm is deleted when voice lands on Linux, together with
+/// the Linux arm of `koru-release`'s `CHANNEL_BINARIES`.
 #[cfg(windows)]
 pub const ALL: &[&str] = &[APP, AI_CHAT, AGENT, COM_NOTIFICATION, MCP, VOICE, UPDATER];
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub const ALL: &[&str] = &[APP, AI_CHAT, AGENT, MCP, UPDATER];
+#[cfg(not(any(windows, target_os = "linux")))]
 pub const ALL: &[&str] = &[APP, AI_CHAT, AGENT, MCP, VOICE, UPDATER];
 
 pub const NOTIFICATION_OWNER_INFO_PLIST: &str =
@@ -384,11 +391,22 @@ mod tests {
     fn every_executable_is_in_the_list_exactly_once() {
         let expected: &[&str] = if cfg!(windows) {
             &[APP, AI_CHAT, AGENT, COM_NOTIFICATION, MCP, VOICE, UPDATER]
+        } else if cfg!(target_os = "linux") {
+            &[APP, AI_CHAT, AGENT, MCP, UPDATER]
         } else {
             &[APP, AI_CHAT, AGENT, MCP, VOICE, UPDATER]
         };
         assert_eq!(ALL, expected);
-        assert_eq!(ALL.len(), if cfg!(windows) { 7 } else { 6 });
+        assert_eq!(
+            ALL.len(),
+            if cfg!(windows) {
+                7
+            } else if cfg!(target_os = "linux") {
+                5
+            } else {
+                6
+            }
+        );
         assert_eq!(
             ALL.iter().collect::<std::collections::HashSet<_>>().len(),
             ALL.len()

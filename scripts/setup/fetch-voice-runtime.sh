@@ -15,6 +15,9 @@
 #   ./scripts/setup/fetch-voice-runtime.sh --all      all three shipped targets
 #   ./scripts/setup/fetch-voice-runtime.sh --verify   check what is already here
 #
+# Exit status 3 means this host has nothing provisioned (Linux, for now): the
+# script placed nothing, and that is not a failure.
+#
 # Then, for a benchmark or a release build:
 #
 #   export SHERPA_ONNX_ARCHIVE_DIR="$PWD/third-party/sherpa-onnx/1.13.6"
@@ -49,6 +52,11 @@ host_artifact() {
     MINGW*|MSYS*|CYGWIN*) echo "win-x64-static-MT-Release-no-tts-lib" ;;
     Darwin-arm64)         echo "osx-arm64-static-no-tts-lib" ;;
     Darwin-x86_64)        echo "osx-x64-static-no-tts-lib" ;;
+    # Not provisioned yet rather than unsupported: Linux voice is its own rung,
+    # gated by verifying the linux-x64 no-tts archive's licensing
+    # (docs/features/linux/TECHNICAL.final.md, D4 and D6). Status 3 lets a
+    # caller tell "nothing to place here" from a failure.
+    Linux-x86_64)         return 3 ;;
     *)
       echo "This product ships windows-x86_64, macos-aarch64 and macos-x86_64." >&2
       echo "There is no sherpa-onnx artifact provisioned for $(uname -s)-$(uname -m)." >&2
@@ -166,7 +174,15 @@ for arg in "$@"; do
   esac
 done
 
-WANTED="$(host_artifact)"
+provisioned=0
+WANTED="$(host_artifact)" || provisioned=$?
+if [ "${provisioned}" = "3" ] && [ "${WANT_ALL}" = "0" ]; then
+  echo "voice runtime: not provisioned on this platform"
+  exit 3
+fi
+if [ "${provisioned}" != "0" ] && [ "${provisioned}" != "3" ]; then
+  exit "${provisioned}"
+fi
 status=0
 for row in "${ARTIFACTS[@]}"; do
   name="$(printf '%s' "${row}" | cut -f1)"

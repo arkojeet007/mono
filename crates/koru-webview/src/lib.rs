@@ -32,9 +32,11 @@ use std::sync::mpsc::Receiver;
 use raw_window_handle::HasWindowHandle;
 
 mod debug;
-#[cfg(not(feature = "no-webview"))]
+// The stub under `no-webview`, and on every platform wry is not linked for
+// (Linux, see Cargo.toml).
+#[cfg(all(any(windows, target_os = "macos"), not(feature = "no-webview")))]
 mod engine;
-#[cfg(feature = "no-webview")]
+#[cfg(any(feature = "no-webview", not(any(windows, target_os = "macos"))))]
 #[path = "stub.rs"]
 mod engine;
 mod js;
@@ -270,7 +272,10 @@ pub fn host_of(url: &str) -> &str {
 
 /// Apply a policy to a top-level navigation and say what to do and what to
 /// tell the owner. Pure: the engine's handler and the tests share it.
-#[cfg_attr(feature = "no-webview", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "no-webview", not(any(windows, target_os = "macos"))),
+    allow(dead_code)
+)]
 pub(crate) fn decide(policy: &dyn Fn(&str) -> Navigation, url: &str) -> (bool, Option<WebEvent>) {
     match policy(url) {
         Navigation::Allow => (true, None),

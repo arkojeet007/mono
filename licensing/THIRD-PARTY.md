@@ -62,14 +62,21 @@ revision we build.
 
 | Component | License | In |
 | --- | --- | --- |
-| whisper.cpp / ggml (vendored by `whisper-rs-sys` 0.15.0) | MIT, © The ggml authors | `koru-agent`, `koru-com-notification`, `koru-voice-worker` |
-| sherpa-onnx 1.13.6 | Apache-2.0 | same three |
-| ONNX Runtime 1.27.1 (static), with its own ThirdPartyNotices | MIT, © Microsoft | same three |
-| kaldi-native-fbank 1.22.3, kaldi-decoder 0.3.0, OpenFst 1.8.5, simple-sentencepiece 0.7 | Apache-2.0 | same three |
-| KISS FFT | BSD-3-Clause | same three |
+| whisper.cpp / ggml (vendored by `whisper-rs-sys` 0.15.0) | MIT, © The ggml authors | `koru-voice-worker` |
+| sherpa-onnx 1.13.6 | Apache-2.0 | `koru-voice-worker` |
+| ONNX Runtime 1.27.1 (static), with its own ThirdPartyNotices | MIT, © Microsoft | `koru-voice-worker` |
+| kaldi-native-fbank 1.22.3, kaldi-decoder 0.3.0, OpenFst 1.8.5, simple-sentencepiece 0.7 | Apache-2.0 | `koru-voice-worker` |
+| KISS FFT | BSD-3-Clause | `koru-voice-worker` |
 | piper-phonemize | MIT | **Not linked on any platform** (2026-10-14) |
 | eSpeak NG + ucd-tools | GPL-3.0-or-later | **Not linked on any platform**: gone from Windows 2026-10-11, from macOS 2026-10-14 (a Mac link test is owed, ⚑1) |
 | SQLite (`rusqlite` `bundled`) | Public domain | nothing owed |
+
+The speech runtimes are linked into the voice worker only. `koru-agent` and
+`koru-com-notification` used to link them too, because `koru-agent` named the
+worker as a library for its handshake types. Those types now live in
+`koru-voice`, so neither links an inference runtime or `cpal`
+(docs/features/linux/TECHNICAL.final.md, D3). The eSpeak NG section below
+records the earlier state.
 
 ### eSpeak NG: GPL-3.0 in three shipped binaries
 

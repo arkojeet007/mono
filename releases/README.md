@@ -10,7 +10,8 @@ The publisher infers and prints the version first. If the descriptor does not
 exist, it offers to generate one: enter `codex` for Codex CLI, `kimi` for Kimi
 Code, or anything else to stop and write it yourself. There is no default
 generator. Set `KORU_NOTES_COMMAND` to a command of your own (`{channel}` in it
-is replaced by the channel) and the publisher also offers it, as `y`.
+is replaced by the channel, and `{path}` by the exact file to write) and the
+publisher also offers it, as `y`.
 Generated notes are printed in full for approval before publishing; `--yes`
 still requires an existing descriptor. Publishing itself needs Koru Works'
 release credentials, which are not in this repository
@@ -41,6 +42,10 @@ the update origin.
 somebody already on the notes page: they are the row for this release on
 https://updates.koru.do/releases/. Write them so they still make sense beside
 twenty other releases.
+
+**The GitHub nightly is the exception.** Its notes are dated files in
+[nightly/](nightly/README.md), drafted by `./koru.sh nightly-notes` with the
+same generators, and that folder *is* the record of what each nightly said.
 
 **This directory is not the record of what shipped.** The origin is. A
 descriptor can exist for a release that was never published, and a published

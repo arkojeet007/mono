@@ -73,12 +73,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub mod ask;
 pub mod link;
 
 pub use koru_voice::{
     DISABLE_VAR, EndReason, ErrorCode, Event, InputChoice, InputDevice, InputResolution,
-    LevelBucket, ModelId, ModelTier, Requested, SessionId, State, Transcript, VoiceError,
-    VoiceLanguage, available, disabled,
+    LevelBucket, ModelId, ModelTier, Off, Requested, SessionId, State, Transcript, VoiceError,
+    VoiceLanguage, available, disabled, off,
 };
 
 /// How long to wait for a worker that is being started.

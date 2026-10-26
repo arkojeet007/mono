@@ -2,8 +2,14 @@
 
 use super::*;
 
-use crate::capture::{DeviceKind, InterfaceKind};
-use crate::fixtures;
+/// The three values the worker's `fixtures` module supplies, spelled here so
+/// the contract crate's tests take nothing from the worker: `fixtures` links
+/// model-store types this crate must not.
+mod fixtures {
+    pub const MODEL: &str = "fixture-model";
+    pub const VERSION: &str = "1.0.0";
+    pub const DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+}
 
 fn microphone() -> DeviceCategory {
     DeviceCategory {
@@ -27,7 +33,7 @@ fn field(rendered: &str, key: &str) -> String {
 fn report() -> StatusReport {
     StatusReport {
         worker_version: "0.0.3".into(),
-        protocol_version: koru_voice::PROTOCOL_VERSION,
+        protocol_version: crate::PROTOCOL_VERSION,
         channel: "internal-debug".into(),
         process_id: 4242,
         supervisor_launch_id: Some("a-launch".into()),
@@ -57,19 +63,19 @@ fn report() -> StatusReport {
             category: microphone(),
             device_sample_rate: 48_000,
             device_channels: 2,
-            engine_sample_rate: koru_voice::SAMPLE_RATE,
+            engine_sample_rate: crate::SAMPLE_RATE,
         }),
-        sample_rate: koru_voice::SAMPLE_RATE,
+        sample_rate: crate::SAMPLE_RATE,
         ring_overruns: 320,
         ring_capacity: 32_768,
-        session: koru_voice::SessionStats {
+        session: crate::SessionStats {
             sessions: 3,
             partials: 41,
             finals: 2,
             refusals: 1,
             ..Default::default()
         },
-        state: koru_voice::State::Listening,
+        state: crate::State::Listening,
         last_error: Some("capture_failed".into()),
         stages: vec![
             StageTiming {

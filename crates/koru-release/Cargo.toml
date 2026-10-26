@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 bzip2.workspace = true
 chrono.workspace = true
+flate2.workspace = true
 # The release channel's directory segment, which the macOS share extension is
 # stamped with so it stages into its own build's inbox rather than a sibling
 # channel's.

@@ -2,7 +2,7 @@
 
 use koru_update::{
     ArchiveLimits, FailedBuild, PackageFormat, ReleaseFiles, UpdatePackage, UpdatePaths,
-    UpdaterRequest, build_info, extract_zip, read_package_version, verify_package,
+    UpdaterRequest, build_info, read_package_version, verify_package,
 };
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -104,6 +104,39 @@ const STOP_SEQUENCE: &[(&str, bool)] = &[
 
 const DISK_MARGIN: u64 = 256 * 1024 * 1024;
 
+/// The package the flat-directory transaction in [`run`] installs from. One
+/// per platform: the manifest's `validate` admits only this format there, so
+/// a request reaching the updater carries it.
+#[cfg(target_os = "linux")]
+const PACKAGE_FORMAT: PackageFormat = PackageFormat::TarGz;
+#[cfg(not(target_os = "linux"))]
+const PACKAGE_FORMAT: PackageFormat = PackageFormat::Zip;
+
+/// A Linux install is wherever somebody unpacked the tarball — their home
+/// directory, or `/opt` as root — so whether this user may write there is a
+/// real question, and the answer has to be a sentence they can act on.
+#[cfg(target_os = "linux")]
+fn ensure_writable(install: &Path) -> Result<(), String> {
+    if koru_update::is_writable_install(install) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is not writable by this user, so Koru cannot update itself there; \
+             unpack the new release by hand, or move Koru to a folder you own",
+            install.display()
+        ))
+    }
+}
+
+/// Unpack the package into an empty staging directory, under the same limits
+/// and the same path, type and size refusals whichever the format.
+fn extract_package(package: &Path, staging: &Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    return koru_update::extract_tar_gz(package, staging, ArchiveLimits::default());
+    #[cfg(not(target_os = "linux"))]
+    return koru_update::extract_zip(package, staging, ArchiveLimits::default());
+}
+
 fn stop_arguments(service: &str, rehearsal_root: Option<&Path>) -> Vec<std::ffi::OsString> {
     let mut arguments = vec!["stop".into()];
     if let Some(root) = rehearsal_root {
@@ -172,10 +205,13 @@ pub enum Outcome {
     RolledBack(String),
 }
 
-// The rest of the body still type-checks off Windows — that is the point of
-// not `cfg`-ing it away — so the lints the unconditional `return` trips are
-// allowed rather than the code hidden.
-#[cfg_attr(not(windows), allow(unreachable_code, unused_variables))]
+// The rest of the body still type-checks where it is not run — that is the
+// point of not `cfg`-ing it away — so the lints the unconditional `return`
+// trips are allowed rather than the code hidden.
+#[cfg_attr(
+    not(any(windows, target_os = "linux")),
+    allow(unreachable_code, unused_variables)
+)]
 pub fn run(request_path: &Path, wait_pid: u32) -> Result<Outcome, String> {
     // macOS has its own transaction: the package is a disk image, the swap is
     // one whole-bundle rename each way, and the quiesce proof is process
@@ -183,11 +219,18 @@ pub fn run(request_path: &Path, wait_pid: u32) -> Result<Outcome, String> {
     // nothing here (see [`macos`]).
     #[cfg(target_os = "macos")]
     return macos::run(request_path, wait_pid);
-    // **Refuse rather than half-work** everywhere else. [`quiesce`]'s proof is
-    // a write-open probe, and a running image on Linux write-opens fine — the
-    // swap would proceed against live services. An honest error beats a quiet
-    // maybe.
-    #[cfg(not(any(windows, target_os = "macos")))]
+    // **Linux runs this transaction**, not one of its own. Its package is the
+    // Windows zip's layout in a tarball — a flat directory of binaries and
+    // data — so the file-by-file swap, the journal, the rollback and the
+    // health commit all apply unchanged. Three things follow the platform:
+    // the extractor ([`extract_package`]), the quiesce proof, which is process
+    // absence as on macOS ([`still_running`]), and a writability check up
+    // front, because a Linux install is wherever somebody unpacked it.
+    //
+    // **Refuse rather than half-work** everywhere else: without a proof that
+    // nothing is running, the swap would proceed against live services. An
+    // honest error beats a quiet maybe.
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     return Err(
         "koru-updater does not support installing on this platform yet; see docs/features/macos/RELEASING.md"
             .to_string(),
@@ -267,15 +310,21 @@ pub fn run(request_path: &Path, wait_pid: u32) -> Result<Outcome, String> {
             size: request.package_size,
             sha256: request.expected_sha256.clone(),
             signature: request.signature.clone(),
-            format: PackageFormat::Zip,
+            format: PACKAGE_FORMAT,
         };
         verify_package(&request.package, &package, build_info().update_public_key)?;
         log.line("package verification succeeded");
+        // The agent asked the same question before handing over; asked again
+        // here because this is the process about to write, and a refusal now
+        // costs nothing — it restarts what was already there. Linux only, so
+        // the Windows transaction is exactly what it was.
+        #[cfg(target_os = "linux")]
+        ensure_writable(&request.install_dir)?;
         check_space(&request)?;
         ensure_managed_path(&request.install_dir, &staging, ".update")?;
         ensure_managed_path(&request.install_dir, &backup, ".previous")?;
         fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-        extract_zip(&request.package, &staging, ArchiveLimits::default())?;
+        extract_package(&request.package, &staging)?;
         log.line(&format!("staged at {}", staging.display()));
 
         // **`load_incoming`, not `load`.** This updater came out of the build
@@ -843,8 +892,9 @@ fn directory_size(root: &Path) -> Result<u64, String> {
 ///
 /// **This states a Windows fact.** macOS and Linux happily write-open a running
 /// image, so here "free" would mean nothing — which is why [`run`] routes
-/// macOS to [`macos`], whose proof is process absence, and refuses Linux
-/// outright rather than letting this probe vouch for it.
+/// macOS to [`macos`], whose proof is process absence, and why
+/// [`still_running`] asks Linux's process table instead of this.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn is_free(path: &Path) -> bool {
     !path.exists() || OpenOptions::new().write(true).open(path).is_ok()
 }
@@ -855,10 +905,10 @@ fn is_free(path: &Path) -> bool {
 /// it is added and nobody has to remember this function exists.
 ///
 /// **The `.exe` filter is a Windows fact too**: off Windows the binaries carry
-/// no extension, this answers an empty set, and [`quiesce`] would conclude
-/// nothing of ours is running while everything is. Safe because only the
-/// Windows arm of [`run`] reaches it — macOS proves quiet by process absence
-/// in [`macos::bundle_is_quiet`] instead.
+/// no extension and this answers an empty set. Safe because only the Windows
+/// proof reads it — macOS proves quiet by process absence in
+/// [`macos::bundle_is_quiet`], and Linux in [`still_running`], which asks
+/// about the whole installation rather than a list of names.
 fn owned_executables(install: &Path, owned: &BTreeSet<String>) -> Vec<(String, PathBuf)> {
     owned
         .iter()
@@ -912,9 +962,10 @@ fn owned_executables(install: &Path, owned: &BTreeSet<String>) -> Vec<(String, P
 /// gateway, a standalone session host, a pre-rename voice worker, and both
 /// pre-gateway Store generations.
 ///
-/// Verifying is [`is_free`] over every executable in `owned`, because asking is
-/// not proof: a hung process ignores its shutdown request, and something the
-/// agent never started may be holding an image.
+/// Verifying is [`still_running`] — [`is_free`] over every executable in
+/// `owned` on Windows, the process table on Linux — because asking is not
+/// proof: a hung process ignores its shutdown request, and something the agent
+/// never started may be holding an image.
 fn quiesce(
     install: &Path,
     owned: &BTreeSet<String>,
@@ -922,7 +973,7 @@ fn quiesce(
     log: &mut Log,
 ) -> Result<(), String> {
     let images = owned_executables(install, owned);
-    if images.iter().all(|(_, path)| is_free(path)) {
+    if still_running(install, &images).is_empty() {
         // Nothing of ours is running — the ordinary case when the requester
         // brought the stack down itself before spawning this helper.
         return Ok(());
@@ -954,11 +1005,7 @@ fn quiesce(
 
     let started = Instant::now();
     loop {
-        let held: Vec<&str> = images
-            .iter()
-            .filter(|(_, path)| !is_free(path))
-            .map(|(relative, _)| relative.as_str())
-            .collect();
+        let held = still_running(install, &images);
         if held.is_empty() {
             log.line("every executable this update owns is free");
             return Ok(());
@@ -972,6 +1019,44 @@ fn quiesce(
             ));
         }
         thread::sleep(PROBE_EVERY);
+    }
+}
+
+/// What still holds this installation, named for the log; empty is quiet.
+///
+/// Windows: every owned executable that will not open for writing.
+#[cfg(not(target_os = "linux"))]
+fn still_running(_install: &Path, images: &[(String, PathBuf)]) -> Vec<String> {
+    images
+        .iter()
+        .filter(|(_, path)| !is_free(path))
+        .map(|(relative, _)| relative.clone())
+        .collect()
+}
+
+/// Linux: every process whose image is anywhere under the installation, by
+/// [`koru_update::processes::running_from`] — process absence, as on macOS,
+/// because a running image on Linux write-opens, renames and unlinks without
+/// complaint, and [`is_free`] would vouch for a live service.
+///
+/// **The whole directory, not the owned names**: a process running from
+/// `.previous/` (an image a crashed transaction moved aside) or a binary no
+/// package lists still holds what is about to move. An unreadable process
+/// table is reported as holding, never as quiet.
+#[cfg(target_os = "linux")]
+fn still_running(install: &Path, _images: &[(String, PathBuf)]) -> Vec<String> {
+    match koru_update::processes::running_from(install) {
+        Ok(found) => found
+            .into_iter()
+            .map(|(pid, image)| {
+                let shown = fs::canonicalize(install)
+                    .ok()
+                    .and_then(|root| image.strip_prefix(root).ok().map(Path::to_path_buf))
+                    .unwrap_or(image);
+                format!("{} (pid {pid})", shown.display())
+            })
+            .collect(),
+        Err(error) => vec![format!("the process table could not be read: {error}")],
     }
 }
 
@@ -2676,6 +2761,238 @@ mod tests {
         );
         assert!(!RESTARTABLE.contains(&koru_update::GATEWAY_EXE));
         assert!(!RESTARTABLE.contains(&"cmd.exe"));
+    }
+
+    /// The Linux arm's own facts — the tarball, the modes, the process-table
+    /// proof and the writability refusal — on the one platform that has them.
+    /// The swap, journal and rollback they feed are the cases above, which run
+    /// here unchanged.
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn mode(path: &Path) -> u32 {
+            fs::metadata(path).unwrap().permissions().mode() & 0o777
+        }
+
+        fn tarball(path: &Path, files: &[(&str, u32, &[u8])]) {
+            let gz = flate2::write::GzEncoder::new(
+                File::create(path).unwrap(),
+                flate2::Compression::fast(),
+            );
+            let mut builder = tar::Builder::new(gz);
+            for (name, mode, data) in files {
+                let mut header = tar::Header::new_gnu();
+                header.set_path(name).unwrap();
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_mode(*mode);
+                header.set_size(data.len() as u64);
+                header.set_cksum();
+                builder.append(&header, *data).unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        fn release_files(build_number: u64, files: &[&str]) -> Vec<u8> {
+            serde_json::to_vec(&ReleaseFiles {
+                schema_version: 1,
+                inventory_version: Some(koru_update::INVENTORY_VERSION),
+                build_number,
+                files: files.iter().map(|file| (*file).to_owned()).collect(),
+            })
+            .unwrap()
+        }
+
+        fn run_agent(install: &Path) -> String {
+            let output = Command::new(install.join(koru_update::AGENT_EXE))
+                .output()
+                .expect("the installed agent is executable");
+            String::from_utf8(output.stdout).unwrap()
+        }
+
+        /// **The staging half of the transaction, from a tarball to a binary
+        /// that runs**, then back. Everything `run` does between verifying the
+        /// signature and launching — extract, read the incoming list and
+        /// `VERSION`, prove quiet, swap — with the execute bit checked at the
+        /// one place it matters: the installed file starts.
+        #[test]
+        fn a_tarball_stages_swaps_and_rolls_back_into_a_runnable_installation() {
+            let root = tempfile::tempdir().unwrap();
+            let install = root.path().join("koru");
+            fs::create_dir(&install).unwrap();
+            let agent = koru_update::AGENT_EXE;
+            let listed = [agent, "VERSION", "release-files.json"];
+            fs::write(install.join(agent), b"#!/bin/sh\necho old\n").unwrap();
+            fs::set_permissions(install.join(agent), fs::Permissions::from_mode(0o755)).unwrap();
+            fs::write(
+                install.join("VERSION"),
+                b"version=1\nbuild_number=1\ncommit=a\nchannel=nightly\n",
+            )
+            .unwrap();
+            fs::write(
+                install.join("release-files.json"),
+                release_files(1, &listed),
+            )
+            .unwrap();
+            fs::write(install.join("notes.txt"), b"a file the person left here").unwrap();
+
+            let package = root.path().join("koru-2-linux-x86_64.tar.gz");
+            let incoming_list = release_files(2, &listed);
+            tarball(
+                &package,
+                &[
+                    (agent, 0o755, b"#!/bin/sh\necho new\n"),
+                    (
+                        "VERSION",
+                        0o644,
+                        b"version=2\nbuild_number=2\ncommit=b\nchannel=nightly\n",
+                    ),
+                    ("release-files.json", 0o644, &incoming_list),
+                ],
+            );
+            let staging = install.join(".update/staging-2-test");
+            let backup = install.join(".previous/build-1-test");
+            fs::create_dir_all(&staging).unwrap();
+            extract_package(&package, &staging).unwrap();
+            assert_eq!(mode(&staging.join(agent)), 0o755);
+
+            let incoming =
+                ReleaseFiles::load_incoming(&staging.join("release-files.json")).unwrap();
+            assert_eq!(
+                read_package_version(&staging.join("VERSION"))
+                    .unwrap()
+                    .build_number,
+                2
+            );
+            for file in &incoming.files {
+                assert!(staging.join(file).is_file(), "{file} is staged");
+            }
+            let installed = ReleaseFiles::load_installed(&install.join("release-files.json")).ok();
+            let owned = owned_files(&incoming, installed.as_ref());
+            quiesce(&install, &owned, None, &mut Log(None)).expect("nothing runs from here");
+            replace_owned(
+                &install,
+                &staging,
+                &backup,
+                &incoming,
+                &owned,
+                &mut Log(None),
+            )
+            .unwrap();
+            assert_eq!(run_agent(&install), "new\n");
+            assert_eq!(mode(&install.join(agent)), 0o755);
+
+            rollback(&install, &backup, &incoming.files, &mut Log(None)).unwrap();
+            assert_eq!(
+                run_agent(&install),
+                "old\n",
+                "the restored binary still starts"
+            );
+            assert_eq!(mode(&install.join(agent)), 0o755);
+            assert!(
+                install.join("notes.txt").is_file(),
+                "an unlisted file is never touched"
+            );
+        }
+
+        /// A process running from the installation — or from its backup, where
+        /// a crashed transaction may have moved an image — is named, and its
+        /// exit is seen.
+        #[test]
+        fn a_process_under_the_installation_is_not_quiet() {
+            let root = tempfile::tempdir().unwrap();
+            let install = root.path().join("koru");
+            let aside = install.join(".previous/build-1-test");
+            fs::create_dir_all(&aside).unwrap();
+            assert!(
+                still_running(&install, &[]).is_empty(),
+                "an idle installation is quiet"
+            );
+
+            let mut children = Vec::new();
+            for binary in [
+                install.join(koru_update::AGENT_EXE),
+                aside.join(koru_update::MCP_EXE),
+            ] {
+                // This test harness, copied, running the probe child: a real
+                // image under the installation. Not `/bin/sleep`, which on a
+                // multicall coreutils exits at once under any other name.
+                fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+                let mut command = Command::new(&binary);
+                command
+                    .args([
+                        "--exact",
+                        "install::tests::startup_probe_child",
+                        "--nocapture",
+                    ])
+                    .env("UPDATER_STARTUP_PROBE_CHILD_MS", "30000")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // A parallel test can fork while this copy's write handle is
+                // open here; that child holds it until it execs, so
+                // `ETXTBSY` passes.
+                let spawned = Instant::now();
+                children.push(loop {
+                    match command.spawn() {
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                                && spawned.elapsed() < Duration::from_secs(5) =>
+                        {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        result => break result.unwrap(),
+                    }
+                });
+            }
+            let started = Instant::now();
+            let held = loop {
+                let held = still_running(&install, &[]);
+                if held.len() == 2 || started.elapsed() > Duration::from_secs(10) {
+                    break held;
+                }
+                thread::sleep(Duration::from_millis(20));
+            };
+            for child in &mut children {
+                child.kill().unwrap();
+                child.wait().unwrap();
+            }
+            assert_eq!(held.len(), 2, "{held:?}");
+            assert!(
+                held.iter()
+                    .any(|line| line.starts_with(&format!("{} (pid ", koru_update::AGENT_EXE))),
+                "named relative to the installation: {held:?}"
+            );
+            assert!(
+                held.iter().any(|line| line.starts_with(".previous/")),
+                "{held:?}"
+            );
+            assert!(
+                still_running(&install, &[]).is_empty(),
+                "exited processes are gone"
+            );
+        }
+
+        /// A directory this user cannot write is refused with a sentence that
+        /// says what to do, before anything is staged.
+        #[test]
+        fn a_read_only_installation_is_refused_plainly() {
+            // Root writes through any mode, so the case cannot be staged.
+            if unsafe { libc::geteuid() } == 0 {
+                return;
+            }
+            let root = tempfile::tempdir().unwrap();
+            let install = root.path().join("koru");
+            fs::create_dir(&install).unwrap();
+            ensure_writable(&install).unwrap();
+            fs::set_permissions(&install, fs::Permissions::from_mode(0o555)).unwrap();
+            let refused = ensure_writable(&install);
+            fs::set_permissions(&install, fs::Permissions::from_mode(0o755)).unwrap();
+            let error = refused.expect_err("a read-only installation is refused");
+            assert!(error.contains("not writable"), "{error}");
+            assert!(error.contains("folder you own"), "{error}");
+        }
     }
 }
 

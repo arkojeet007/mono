@@ -305,6 +305,7 @@ fn report_spawn<T, E>(result: Result<T, E>, waker: &Waker) -> Option<T> {
 /// A preference that names no candidate (an old or hand-edited value) falls
 /// through to the whole list in its shipped order, which starts with the
 /// default — the same answer the Windows arm always gave.
+#[cfg(any(windows, target_os = "macos", test))]
 fn candidate_order(action: Action, preferred: &str) -> Vec<&'static str> {
     let candidates = candidates(action);
     let mut order: Vec<&'static str> = candidates

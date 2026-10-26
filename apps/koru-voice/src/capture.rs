@@ -14,8 +14,9 @@
 //! A capture device's *name* is a person's hardware — `Steven's AirPods`,
 //! `Yeti Nano`, the make and model of a laptop — and `docs/contributing/operations/LOGGING.md`
 //! is explicit that a log carries bounded categorical states rather than that.
-//! So [`DeviceCategory`] is built from `cpal`'s own `DeviceType` and
-//! `InterfaceType` enums and **never holds the name at all**: it cannot leak a
+//! So [`DeviceCategory`] (declared in `koru_voice::status`) is built here from
+//! `cpal`'s own `DeviceType` and `InterfaceType` enums and **never holds the
+//! name at all**: it cannot leak a
 //! name it does not have, which is the same reasoning as
 //! `koru_voice::Transcript`'s redacted `Debug`. `a_category_never_carries_the_device_name`
 //! is what says so, against a description built with a name in every field.
@@ -61,227 +62,62 @@ use koru_voice::{ErrorCode, InputChoice, InputDevice, VoiceError};
 #[cfg(not(feature = "no-capture"))]
 use koru_voice::InputResolution;
 
+use koru_voice::status::{CaptureInfo, DeviceCategory, DeviceKind, InterfaceKind};
+
 use crate::ring::Ring;
 
-/// What kind of device this is, without saying which one.
-///
-/// Two bounded categorical states and nothing else — our own closed enums
-/// rather than `cpal`'s, for three reasons. `cpal`'s are `#[non_exhaustive]`,
-/// so an upgrade that adds a device kind must not stop this compiling. They are
-/// not `Serialize`, and a status report crosses a socket. And a token that
-/// reaches a log line should be spelled where somebody can read the list, not
-/// derived from a dependency's variant names.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub struct DeviceCategory {
-    /// What the device *is*.
-    pub device_type: DeviceKind,
-    /// How it is attached.
-    pub interface_type: InterfaceKind,
-}
+// The device categories are declared in `koru_voice::status`, beside the
+// status report that carries them, so the Agent can read a report without
+// linking this crate. What stays here is reading them out of `cpal`, which is
+// the half that touches a device.
 
-/// What a capture device is.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DeviceKind {
-    Speaker,
-    Microphone,
-    Headphones,
-    Headset,
-    Earpiece,
-    Handset,
-    HearingAid,
-    Dock,
-    Tuner,
-    Virtual,
-    #[default]
-    Unknown,
-}
-
-impl DeviceKind {
-    /// The stable token, and the same string serde writes — pinned by a test,
-    /// because a `rename_all` change would otherwise move the wire spelling and
-    /// leave every log line behind.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DeviceKind::Speaker => "speaker",
-            DeviceKind::Microphone => "microphone",
-            DeviceKind::Headphones => "headphones",
-            DeviceKind::Headset => "headset",
-            DeviceKind::Earpiece => "earpiece",
-            DeviceKind::Handset => "handset",
-            DeviceKind::HearingAid => "hearing-aid",
-            DeviceKind::Dock => "dock",
-            DeviceKind::Tuner => "tuner",
-            DeviceKind::Virtual => "virtual",
-            DeviceKind::Unknown => "unknown",
-        }
-    }
-
-    /// Every kind, so a test can walk them.
-    pub const ALL: [DeviceKind; 11] = [
-        DeviceKind::Speaker,
-        DeviceKind::Microphone,
-        DeviceKind::Headphones,
-        DeviceKind::Headset,
-        DeviceKind::Earpiece,
-        DeviceKind::Handset,
-        DeviceKind::HearingAid,
-        DeviceKind::Dock,
-        DeviceKind::Tuner,
-        DeviceKind::Virtual,
-        DeviceKind::Unknown,
-    ];
-
-    /// `cpal`'s answer as ours. The wildcard is load-bearing: the enum is
-    /// `#[non_exhaustive]`, and `unknown` is a true answer rather than a lossy
-    /// one.
-    fn of(kind: cpal::DeviceType) -> DeviceKind {
-        match kind {
-            cpal::DeviceType::Speaker => DeviceKind::Speaker,
-            cpal::DeviceType::Microphone => DeviceKind::Microphone,
-            cpal::DeviceType::Headphones => DeviceKind::Headphones,
-            cpal::DeviceType::Headset => DeviceKind::Headset,
-            cpal::DeviceType::Earpiece => DeviceKind::Earpiece,
-            cpal::DeviceType::Handset => DeviceKind::Handset,
-            cpal::DeviceType::HearingAid => DeviceKind::HearingAid,
-            cpal::DeviceType::Dock => DeviceKind::Dock,
-            cpal::DeviceType::Tuner => DeviceKind::Tuner,
-            cpal::DeviceType::Virtual => DeviceKind::Virtual,
-            _ => DeviceKind::Unknown,
-        }
+/// Read the two categories out of a `cpal` description and **drop
+/// everything else** — the name, the manufacturer, the driver, the
+/// address, the extended lines. Each of those is either a person's hardware
+/// or a string a driver wrote, and neither belongs in a support log.
+pub fn category_of(description: &cpal::DeviceDescription) -> DeviceCategory {
+    DeviceCategory {
+        device_type: kind_of(description.device_type()),
+        interface_type: interface_of(description.interface_type()),
     }
 }
 
-impl std::fmt::Display for DeviceKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+/// `cpal`'s answer as ours. The wildcard is load-bearing: the enum is
+/// `#[non_exhaustive]`, and `unknown` is a true answer rather than a lossy
+/// one.
+fn kind_of(kind: cpal::DeviceType) -> DeviceKind {
+    match kind {
+        cpal::DeviceType::Speaker => DeviceKind::Speaker,
+        cpal::DeviceType::Microphone => DeviceKind::Microphone,
+        cpal::DeviceType::Headphones => DeviceKind::Headphones,
+        cpal::DeviceType::Headset => DeviceKind::Headset,
+        cpal::DeviceType::Earpiece => DeviceKind::Earpiece,
+        cpal::DeviceType::Handset => DeviceKind::Handset,
+        cpal::DeviceType::HearingAid => DeviceKind::HearingAid,
+        cpal::DeviceType::Dock => DeviceKind::Dock,
+        cpal::DeviceType::Tuner => DeviceKind::Tuner,
+        cpal::DeviceType::Virtual => DeviceKind::Virtual,
+        _ => DeviceKind::Unknown,
     }
 }
 
-/// How a capture device is attached.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum InterfaceKind {
-    BuiltIn,
-    Usb,
-    Bluetooth,
-    Pci,
-    FireWire,
-    Thunderbolt,
-    Hdmi,
-    Line,
-    Spdif,
-    Network,
-    Virtual,
-    DisplayPort,
-    Aggregate,
-    #[default]
-    Unknown,
-}
-
-impl InterfaceKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            InterfaceKind::BuiltIn => "built-in",
-            InterfaceKind::Usb => "usb",
-            InterfaceKind::Bluetooth => "bluetooth",
-            InterfaceKind::Pci => "pci",
-            InterfaceKind::FireWire => "fire-wire",
-            InterfaceKind::Thunderbolt => "thunderbolt",
-            InterfaceKind::Hdmi => "hdmi",
-            InterfaceKind::Line => "line",
-            InterfaceKind::Spdif => "spdif",
-            InterfaceKind::Network => "network",
-            InterfaceKind::Virtual => "virtual",
-            InterfaceKind::DisplayPort => "display-port",
-            InterfaceKind::Aggregate => "aggregate",
-            InterfaceKind::Unknown => "unknown",
-        }
+fn interface_of(kind: cpal::InterfaceType) -> InterfaceKind {
+    match kind {
+        cpal::InterfaceType::BuiltIn => InterfaceKind::BuiltIn,
+        cpal::InterfaceType::Usb => InterfaceKind::Usb,
+        cpal::InterfaceType::Bluetooth => InterfaceKind::Bluetooth,
+        cpal::InterfaceType::Pci => InterfaceKind::Pci,
+        cpal::InterfaceType::FireWire => InterfaceKind::FireWire,
+        cpal::InterfaceType::Thunderbolt => InterfaceKind::Thunderbolt,
+        cpal::InterfaceType::Hdmi => InterfaceKind::Hdmi,
+        cpal::InterfaceType::Line => InterfaceKind::Line,
+        cpal::InterfaceType::Spdif => InterfaceKind::Spdif,
+        cpal::InterfaceType::Network => InterfaceKind::Network,
+        cpal::InterfaceType::Virtual => InterfaceKind::Virtual,
+        cpal::InterfaceType::DisplayPort => InterfaceKind::DisplayPort,
+        cpal::InterfaceType::Aggregate => InterfaceKind::Aggregate,
+        _ => InterfaceKind::Unknown,
     }
-
-    pub const ALL: [InterfaceKind; 14] = [
-        InterfaceKind::BuiltIn,
-        InterfaceKind::Usb,
-        InterfaceKind::Bluetooth,
-        InterfaceKind::Pci,
-        InterfaceKind::FireWire,
-        InterfaceKind::Thunderbolt,
-        InterfaceKind::Hdmi,
-        InterfaceKind::Line,
-        InterfaceKind::Spdif,
-        InterfaceKind::Network,
-        InterfaceKind::Virtual,
-        InterfaceKind::DisplayPort,
-        InterfaceKind::Aggregate,
-        InterfaceKind::Unknown,
-    ];
-
-    fn of(kind: cpal::InterfaceType) -> InterfaceKind {
-        match kind {
-            cpal::InterfaceType::BuiltIn => InterfaceKind::BuiltIn,
-            cpal::InterfaceType::Usb => InterfaceKind::Usb,
-            cpal::InterfaceType::Bluetooth => InterfaceKind::Bluetooth,
-            cpal::InterfaceType::Pci => InterfaceKind::Pci,
-            cpal::InterfaceType::FireWire => InterfaceKind::FireWire,
-            cpal::InterfaceType::Thunderbolt => InterfaceKind::Thunderbolt,
-            cpal::InterfaceType::Hdmi => InterfaceKind::Hdmi,
-            cpal::InterfaceType::Line => InterfaceKind::Line,
-            cpal::InterfaceType::Spdif => InterfaceKind::Spdif,
-            cpal::InterfaceType::Network => InterfaceKind::Network,
-            cpal::InterfaceType::Virtual => InterfaceKind::Virtual,
-            cpal::InterfaceType::DisplayPort => InterfaceKind::DisplayPort,
-            cpal::InterfaceType::Aggregate => InterfaceKind::Aggregate,
-            _ => InterfaceKind::Unknown,
-        }
-    }
-}
-
-impl std::fmt::Display for InterfaceKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl DeviceCategory {
-    /// What is known before any device has been looked at.
-    pub const UNKNOWN: DeviceCategory = DeviceCategory {
-        device_type: DeviceKind::Unknown,
-        interface_type: InterfaceKind::Unknown,
-    };
-
-    /// Read the two categories out of a `cpal` description and **drop
-    /// everything else** — the name, the manufacturer, the driver, the
-    /// address, the extended lines. Each of those is either a person's hardware
-    /// or a string a driver wrote, and neither belongs in a support log.
-    pub fn of(description: &cpal::DeviceDescription) -> DeviceCategory {
-        DeviceCategory {
-            device_type: DeviceKind::of(description.device_type()),
-            interface_type: InterfaceKind::of(description.interface_type()),
-        }
-    }
-}
-
-impl std::fmt::Display for DeviceCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.device_type, self.interface_type)
-    }
-}
-
-/// What a live capture is doing, for `koru-voice-worker status`.
-///
-/// The device's own rate and channel count are here beside the category because
-/// they are what makes a resampling bug diagnosable: 48 kHz stereo into 16 kHz
-/// mono is the ordinary case, and a transcript that reads like slow nonsense is
-/// the symptom of getting it wrong.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub struct CaptureInfo {
-    pub category: DeviceCategory,
-    /// What the device delivers, before [`crate::resample`].
-    pub device_sample_rate: u32,
-    pub device_channels: u16,
-    /// What the engine is fed. Always [`koru_voice::SAMPLE_RATE`]; carried so a
-    /// status line answers the question rather than implying it.
-    pub engine_sample_rate: u32,
 }
 
 /// A running capture. Dropping it stops the device.
@@ -322,7 +158,7 @@ impl std::fmt::Debug for Capture {
 pub fn describe_default() -> Option<DeviceCategory> {
     use cpal::traits::{DeviceTrait as _, HostTrait as _};
     let device = cpal::default_host().default_input_device()?;
-    Some(DeviceCategory::of(&device.description().ok()?))
+    Some(category_of(&device.description().ok()?))
 }
 
 /// `None`, under `no-capture` — a build that opens no device enumerates none
@@ -479,7 +315,7 @@ fn open_resolved(resolved: &InputResolution, ring: Arc<Ring>) -> Result<Capture,
     };
     let category = device
         .description()
-        .map(|d| DeviceCategory::of(&d))
+        .map(|d| category_of(&d))
         .unwrap_or(DeviceCategory::UNKNOWN);
     let supported = device.default_input_config().map_err(|error| {
         refusal(&error).with(format!("the default input config was refused: {error}"))

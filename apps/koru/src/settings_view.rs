@@ -53,6 +53,10 @@ mod tests;
 enum VoiceOff {
     /// `KORU_VOICE_DISABLED`. A kill switch rather than a diagnostic.
     Disabled,
+    /// This build has no voice runtime for its platform yet (Linux). Nothing
+    /// a person sets turns it on, so the line names the platform and not the
+    /// switch.
+    Platform,
     /// A dictation was refused because the worker would not start. Reported by
     /// the container out of `View::dictation_refused`, because nothing may
     /// *ask* a worker to start in order to draw a settings page.
@@ -67,6 +71,9 @@ impl VoiceOff {
             }
             Self::WorkerUnavailable => {
                 "Voice input is unavailable: the voice worker would not start."
+            }
+            Self::Platform => {
+                koru_i18n::t(crate::format::lang(), koru_i18n::Key::VoiceNotOnLinuxYet)
             }
         }
     }
@@ -289,15 +296,19 @@ impl SettingsView {
     /// deliberately: asking one predicate rather than caching half the answer is
     /// what keeps the four voice surfaces agreeing (Q-V44).
     pub fn refresh_voice(&mut self) {
-        if !koru_dictation::available() {
-            self.off = Some(VoiceOff::Disabled);
+        if let Some(off) = koru_dictation::off() {
+            let off = match off {
+                koru_dictation::Off::Switch => VoiceOff::Disabled,
+                koru_dictation::Off::Platform => VoiceOff::Platform,
+            };
+            self.off = Some(off);
             self.surface.set_voice_facts(VoiceFacts {
-                blocked: Some(VoiceOff::Disabled.line().to_owned()),
+                blocked: Some(off.line().to_owned()),
                 ..VoiceFacts::default()
             });
             return;
         }
-        if self.off == Some(VoiceOff::Disabled) {
+        if matches!(self.off, Some(VoiceOff::Disabled | VoiceOff::Platform)) {
             self.off = None;
         }
         let models = koru_workspace_host::voice_install::installed_models();
@@ -348,6 +359,8 @@ impl SettingsView {
             // The kill switch outranks everything: with it set there is no
             // worker to have failed.
             (Some(VoiceOff::Disabled), _) => Some(VoiceOff::Disabled),
+            // Nor with no runtime for this platform.
+            (Some(VoiceOff::Platform), _) => Some(VoiceOff::Platform),
             (_, true) => Some(VoiceOff::WorkerUnavailable),
             (_, false) => None,
         };

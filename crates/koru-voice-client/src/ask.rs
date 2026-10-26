@@ -2,12 +2,16 @@
 
 //! **How `koru-voice-worker status`, `stop` and `release` reach a running worker.**
 //!
-//! A small blocking client, and deliberately not the one Plan 1.4 builds:
-//! `koru-voice-client` is a reconnecting, long-lived link that wakes a window
-//! through an `EventLoopProxy` and owns a reader thread. What a CLI verb needs
-//! is one connection, one question and an answer, and building it on top of the
-//! product client would give a diagnostic a dependency on the machinery it may
-//! have to diagnose.
+//! A small blocking client, and deliberately not [`crate::link`]: that is a
+//! reconnecting, long-lived link that wakes a window and owns a reader thread.
+//! What a CLI verb needs is one connection, one question and an answer, and
+//! building it on top of the product link would give a diagnostic a dependency
+//! on the machinery it may have to diagnose. It shares this crate with the link
+//! and nothing else.
+//!
+//! **Here rather than in the worker** so the Agent can ask without linking the
+//! worker, which carries both speech runtimes and `cpal`. The worker's own
+//! `status`, `stop` and `release` verbs call it too.
 //!
 //! That is the standing rule rather than a shortcut: **a diagnostic must not
 //! depend on the health of what it diagnoses**
@@ -27,8 +31,8 @@ use std::time::Duration;
 use koru_ipc::{Endpoint, IpcError};
 use koru_voice::{ClientHello, FRAME_VERSION, PROTOCOL_VERSION, WorkerGreeting};
 
-use crate::control::{Control, Outgoing};
-use crate::status::StatusReport;
+use koru_voice::control::{Control, Outgoing};
+use koru_voice::status::StatusReport;
 
 /// Long enough for a worker whose inference thread is mid-utterance, short
 /// enough that a person does not think the command has hung.
@@ -69,11 +73,11 @@ pub fn release(root: &std::path::Path) -> Asked {
 }
 
 fn ask(root: &std::path::Path, control: Control) -> Asked {
-    let endpoint =
-        match Endpoint::for_service_root(crate::control::SERVICE, koru_channel::segment(), root) {
-            Ok(endpoint) => endpoint,
-            Err(error) => return Asked::Failed(error.to_string()),
-        };
+    let endpoint = match Endpoint::for_service_root(koru_ipc::VOICE, koru_channel::segment(), root)
+    {
+        Ok(endpoint) => endpoint,
+        Err(error) => return Asked::Failed(error.to_string()),
+    };
     let mut stream = match koru_ipc::connect_timed(&endpoint, TIMEOUT) {
         Ok(stream) => stream,
         // Every failure to connect means the same thing here: nothing is

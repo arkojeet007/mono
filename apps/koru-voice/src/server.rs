@@ -56,8 +56,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use koru_ipc::{Endpoint, Listener, Stream};
 use koru_voice::{ClientHello, FRAME_VERSION, PROTOCOL_VERSION, WorkerGreeting};
 
-use crate::control::{Control, Incoming, Outgoing};
 use crate::worker::{Command, Shutdown, WorkerHandle};
+use koru_voice::control::{Control, Incoming, Outgoing};
 
 /// How long a `status` may wait for the inference thread.
 ///

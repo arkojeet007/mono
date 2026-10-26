@@ -96,7 +96,7 @@ the runtime switches one by one.
 | `KORU_WEBVIEW_FAULT` | create | Dev builds only: make the embedded web surface fail to create, so the support window's error state can be demonstrated without breaking the machine. | koru.exe |
 | `KORU_NOTES_PREVIEW` | a file path | Test-only: writes a rendered release-notes HTML page there for eyeballing. | cargo test -p koru-release |
 | `KORU_RELEASES_PREVIEW` | a file path | Test-only: writes the rendered release index page there for eyeballing. | cargo test -p koru-release |
-| `KORU_NOTES_COMMAND` | `codex`, `kimi`, or a command template with `{channel}` | The generator dist-cloud offers for a missing release descriptor. Unset, there is no default: the prompt offers codex or kimi, or stops so the descriptor can be written by hand. | koru-release |
+| `KORU_NOTES_COMMAND` | `codex`, `kimi`, or a command template with `{channel}` and `{path}` | The generator dist-cloud offers for a missing release descriptor, and nightly-notes for a nightly's notes; `{path}` is the exact file to write. Unset, there is no default: the prompt offers codex or kimi, or stops so the file can be written by hand. | koru-release |
 | `KORU_SIGNTOOL_COMMAND` | a command template with `{file}` | Authenticode signing hook for each packaged binary and archive; unset means unsigned. | koru-release |
 | `KORU_WINDOWS_PACKAGE_PUBLISHER` | an X.509 subject name | Publisher identity for the signed sparse Windows notification package; must match the certificate used by KORU_SIGNTOOL_COMMAND. | koru-release and koru-agent release builds |
 | `KORU_MAC_SIGN_COMMAND` | a command template with `{file}` | macOS codesign hook, run per helper and once for the bundle and the dmg; unset means ad hoc. | koru-release |
@@ -131,7 +131,7 @@ the runtime switches one by one.
 | `KORU_UPDATER_SHA256` | set by the packager or build script | The expected updater digest; empty disables updates. | release builds |
 | `KORU_BRANCH` | set by the packager or build script | The git branch, stamped by the build script itself — emitted, never set by a person. | release builds |
 | `KORU_WINDOWS_PACKAGE_VERSION` | set by the packager or build script | The four-part sparse-package version derived by the Agent build script from KORU_VERSION and KORU_BUILD_NUMBER; emitted, never set by a person. | release builds |
-| `KORU_UPDATE_BASE_URL` | set by the packager or build script | Where update manifests are fetched from; defaults to https://updates.koru.do/. | release builds |
+| `KORU_UPDATE_BASE_URL` | set by the packager or build script | Where update manifests are fetched from; defaults to https://updates.koru.do/, or the GitHub nightly release directory on Linux. | release builds |
 
 ## Scripts only
 

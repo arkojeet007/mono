@@ -23,7 +23,7 @@
 //!   which has deliberately no `Display`;
 //! - audio never leaves [`crate::ring`] and [`crate::capture`], and neither
 //!   emits an event about a sample;
-//! - a device is a [`crate::capture::DeviceCategory`], which does not hold the
+//! - a device is a [`koru_voice::status::DeviceCategory`], which does not hold the
 //!   name it would otherwise print;
 //! - a model is named by id, version and digest — never by the directory it is
 //!   in.

@@ -105,7 +105,7 @@ experimental features.
 | **macOS** | Builds and runs from source for development. Public macOS builds are held until a Mac verifies that they link the voice runtime's text-to-speech-free archive, which the tree now uses ([licensing/THIRD-PARTY.md](licensing/THIRD-PARTY.md#espeak-ng-gpl-30-in-three-shipped-binaries)) |
 | **Android** | The native app builds with Gradle and is in active development; see [Android setup and verification](apps/android/README.md) |
 | **iOS** | Held. The project in `apps/ios` is not released yet; the first release waits for it to be built and verified on a Mac |
-| **Linux** | Not a target. CI runs only the platform-independent checks there; nothing claims the app builds or runs on Linux, and there are no packages |
+| **Linux** (x86-64) | Preview. A [nightly build](https://github.com/koruworks/mono/releases/tag/nightly) is published as a tarball that updates itself; voice input and Koru Cloud are not available on Linux yet |
 
 ## Build and run from a fresh clone
 
@@ -121,6 +121,8 @@ You need:
 - **A GPU with DX12, Vulkan or Metal.** vello renders with compute shaders and
   has no software fallback.
 - **Python 3**, for the repository's checks under `scripts/checks/`.
+- **curl**, which every fetch script under `scripts/setup/` downloads with.
+  macOS and Windows 10+ ship it.
 
 Then, on Windows:
 

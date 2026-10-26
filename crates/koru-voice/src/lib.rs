@@ -37,6 +37,7 @@
 //! | [`input`] | which microphone, chosen by name and resolved against what is plugged in |
 //! | [`ErrorCode`] | one closed list of stable lowercase tokens |
 //! | [`wire`] | [`Request`], [`Event`], and the two version numbers |
+//! | [`bootstrap`], [`control`], [`status`] | what the voice worker and its supervising Agent say to each other beyond a dictation: the stdin handshake, the control verbs and the status report |
 //! | [`availability`] | whether this installation offers dictation at all — `KORU_VOICE_DISABLED`, read in one place |
 //!
 //! ## Three things it is easy to get wrong here
@@ -64,16 +65,19 @@
 //! a surface looks up its own words in `koru-i18n`.
 
 pub mod availability;
+pub mod bootstrap;
+pub mod control;
 pub mod engine;
 pub mod error;
 pub mod input;
 pub mod language;
 pub mod session;
+pub mod status;
 pub mod tier;
 pub mod transcript;
 pub mod wire;
 
-pub use availability::{DISABLE_VAR, available, disabled};
+pub use availability::{DISABLE_VAR, Off, available, disabled, off};
 pub use engine::{
     EngineEvent, EngineId, EngineInfo, ModelId, SAMPLE_RATE, SessionId, SessionRequest,
     SpeechEngine,

@@ -1,0 +1,166 @@
+# The rolling nightly: one pre-release on the `nightly` tag of this repository,
+# rebuilt and replaced every time the maintainer moves that tag.
+#
+#   ./koru.sh nightly-notes            # draft releases/nightly/<date>.toml
+#   git add releases/nightly && git commit
+#   git tag -f nightly && git push -f origin nightly
+#
+# The design is docs/features/linux/NIGHTLY.rev1.md (and the 2026-10-24
+# amendment at the top of docs/features/github-release/TECHNICAL.final.md).
+# Linux first; Windows and macOS join as more build jobs feeding the same
+# publish job.
+#
+# The rules differ from ci.yml's on purpose, and only here: this workflow
+# signs and publishes, so it has one secret (the Minisign release key, in the
+# `nightly` environment, which only the `nightly` tag can deploy to) and one
+# job with a write token. A tag push is its only trigger — no schedule, no
+# Run workflow button — and the repository ruleset lets only the maintainer
+# move that tag. Every third-party action is pinned to a full commit SHA, the
+# tag in the comment above it.
+name: nightly
+
+on:
+  push:
+    tags: [nightly]
+
+permissions:
+  contents: read
+
+# One nightly at a time, and never cancelled halfway: a publish interrupted
+# between its upload and its delete would leave the page half-replaced. A
+# second tag push while one runs waits; a third replaces the second.
+concurrency:
+  group: koru-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build-linux:
+    name: build (linux-x86_64)
+    if: github.repository == 'koruworks/mono'
+    # The oldest LTS hosted image, for the glibc baseline (release design D20).
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    environment: nightly
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+    steps:
+      # actions/checkout v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+          # The notes step diffs the tag's previous commit against this one.
+          fetch-depth: 0
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev libssl-dev
+      - name: Fetch third-party code
+        run: bash scripts/setup/fetch-third-party.sh
+      # mozilla-actions/sccache-action v0.0.11
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      # actions/cache v6.1.0
+      - id: fonts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: assets/fonts/
+          key: fonts-${{ hashFiles('scripts/setup/fonts.manifest', 'scripts/setup/fetch-fonts.sh') }}
+      - name: Fetch fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        run: bash scripts/setup/fetch-fonts.sh
+      # **No notes, no nightly.** Exactly one releases/nightly/*.toml must have
+      # been added since the tag's previous position; it fails before anything
+      # is built otherwise. An all-zero `before` is the tag's first push.
+      - name: Select this nightly's notes
+        id: notes
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          path="$(./koru.sh release-tool nightly-notes --select "$BEFORE" "$AFTER" | tail -n 1)"
+          test -f "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      - name: Build, sign and write the release files
+        env:
+          NIGHTLY_MINISIGN_KEY: ${{ secrets.NIGHTLY_MINISIGN_KEY }}
+          NIGHTLY_MINISIGN_PASSWORD: ${{ secrets.NIGHTLY_MINISIGN_PASSWORD }}
+          NOTES: ${{ steps.notes.outputs.path }}
+        run: |
+          key="$RUNNER_TEMP/minisign.key"
+          (umask 077 && printf '%s\n' "$NIGHTLY_MINISIGN_KEY" > "$key")
+          printf '%s' "$NIGHTLY_MINISIGN_PASSWORD" | ./koru.sh release-tool dist-github nightly \
+            --build "$(date -u +%Y%m%d%H%M)" \
+            --notes "$NOTES" \
+            --key "$key" --key-password-stdin \
+            --download-base "https://github.com/${{ github.repository }}/releases/download/nightly" \
+            --out dist/nightly
+          rm -f "$key"
+      # CI cannot open a window; this catches a missing library or a crash at
+      # load, as ci.yml's Windows packaging smoke does.
+      - name: Smoke-test the packaged binaries
+        run: |
+          archives=(dist/nightly/*.tar.gz)
+          test "${#archives[@]}" -eq 1
+          smoke="$RUNNER_TEMP/koru-package"
+          mkdir -p "$smoke"
+          tar -xzf "${archives[0]}" -C "$smoke"
+          timeout 30 "$smoke/koru" --help >/dev/null
+          timeout 30 "$smoke/koru-agent" --help >/dev/null
+      # actions/attest-build-provenance v4.2.2
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: dist/nightly/*.tar.gz
+      # actions/upload-artifact v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: nightly-linux-x86_64
+          path: dist/nightly/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # actions/download-artifact v8.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: nightly-linux-x86_64
+          path: nightly
+      # **The order is the point.** Upload the new package first, then point
+      # the feed at it, then delete the old package — so the manifest an
+      # installed app reads never names a file that is not there.
+      - name: Replace the nightly release's files
+        working-directory: nightly
+        run: |
+          set -euo pipefail
+          if ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --verify-tag --prerelease \
+              --title "Koru nightly" --notes-file release-body.md
+          fi
+          old="$(gh release view nightly --json assets --jq '.assets[].name')"
+          packages=(*.tar.gz *.tar.gz.minisig)
+          gh release upload nightly "${packages[@]}" --clobber
+          gh release upload nightly nightly-*.json --clobber
+          keep=" ${packages[*]} $(ls nightly-*.json | tr '\n' ' ') "
+          for name in $old; do
+            case "$keep" in
+              *" $name "*) ;;
+              *) gh release delete-asset nightly "$name" --yes ;;
+            esac
+          done
+          gh release edit nightly --prerelease --title "Koru nightly" --notes-file release-body.md

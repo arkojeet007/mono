@@ -58,12 +58,13 @@ use koru_voice::{
 };
 use koru_voice_models::{InstalledModel, LoadedModel, ModelError, ModelErrorCode, ModelStore};
 
-use crate::capture::{Capture, DeviceCategory};
-use crate::control::Outgoing;
+use crate::capture::Capture;
 use crate::engine::EngineHost;
 use crate::idle::{IdleAction, IdlePolicy};
 use crate::ring::Ring;
-use crate::status::{EngineSummary, ModelSummary, STAGES_KEPT, StageTiming, StatusReport};
+use koru_voice::control::Outgoing;
+use koru_voice::status::DeviceCategory;
+use koru_voice::status::{EngineSummary, ModelSummary, STAGES_KEPT, StageTiming, StatusReport};
 
 /// How often the inference thread wakes **while a session is live**.
 ///
@@ -476,7 +477,7 @@ impl Worker {
     /// lease, and a released lease is also what lets another channel prune.
     ///
     /// `why` is the log line, because there are now two ways here — the idle
-    /// deadline and [`Control::Release`](crate::control::Control::Release) —
+    /// deadline and [`Control::Release`](koru_voice::control::Control::Release) —
     /// and a single sentence naming the deadline would have made an asked-for
     /// release read in the log as a timer that fired early.
     fn unload(&mut self, why: &'static str) {

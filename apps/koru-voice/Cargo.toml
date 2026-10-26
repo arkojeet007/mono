@@ -43,6 +43,10 @@ no-capture = []
 # The vocabulary and the state machine. This binary performs the `Effect`s
 # `Session` emits and reimplements none of it (ADR-249).
 koru-voice = { path = "../../crates/koru-voice" }
+# `status`, `stop` and `release` ask a running worker through the same blocking
+# client the Agent uses, which lives beside the product link so the Agent need
+# not link this crate.
+koru-voice-client = { path = "../../crates/koru-voice-client" }
 # Which models are on this machine, and the lease that stops another channel
 # pruning one mid-dictation. Consumed through the `ModelStore` trait, so the
 # worker's own suite runs against a store that never touches a disk.

@@ -273,6 +273,19 @@ fn only_a_refusal_that_means_there_is_no_worker_switches_the_section_off() {
     assert_eq!(view.off, None, "a busy worker is still a worker");
 }
 
+/// **A platform with no voice runtime says so in the person's language**, and
+/// blames no switch: nothing a person sets turns dictation on there, so the
+/// line must not point at `KORU_VOICE_DISABLED`.
+#[test]
+fn the_platform_line_is_localized_and_names_no_switch() {
+    let line = VoiceOff::Platform.line();
+    assert_eq!(
+        line,
+        koru_i18n::t(crate::format::lang(), koru_i18n::Key::VoiceNotOnLinuxYet)
+    );
+    assert!(!line.contains("KORU_VOICE_DISABLED"), "{line}");
+}
+
 /// The read-only state reaches the hosted surface, and a press changes nothing.
 #[test]
 fn a_gateway_that_is_not_answering_makes_the_hosted_rows_read_only() {

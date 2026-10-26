@@ -90,7 +90,14 @@ fn the_fingerprint_is_blake3_hex() {
     let hex = fingerprint(b"abc");
     assert_eq!(hex.len(), 64);
     assert!(hex.bytes().all(|b| b.is_ascii_hexdigit()));
-    assert_eq!(hex, blake3::hash(b"abc").to_hex().to_string());
+    // A literal, not `blake3::hash` again: comparing the function with itself
+    // proves nothing about the spelling. The BLAKE3 reference vector for
+    // "abc", and the same string `koru-agent` asserts for
+    // `koru_network_bridge::fingerprint`.
+    assert_eq!(
+        hex,
+        "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+    );
 }
 
 /// A parent could be anything, and `read_to_string` on an unbounded pipe is a

@@ -438,7 +438,7 @@ fn only_an_installed_voice_setup_warms_the_worker_for_its_input_picker() {
     for row in [
         crate::tray::VoiceRow::NotInstalled { megabytes: None },
         crate::tray::VoiceRow::Downloading { percent: 42 },
-        crate::tray::VoiceRow::Unavailable,
+        crate::tray::VoiceRow::Unavailable(koru_voice::Off::Switch),
     ] {
         voice.row = row;
         assert!(!warms_voice_input_picker(&voice));
@@ -2557,6 +2557,32 @@ fn a_post_health_gate_retry_never_reopens_after_store_readiness_falls_away() {
         running: true,
     });
     assert!(agent.startup_transition_complete);
+}
+
+/// Each platform's default origin is one that holds its feed: Windows and
+/// macOS keep `updates.koru.do`; Linux reads the nightly release on GitHub,
+/// in the flat layout that origin uses.
+#[test]
+fn the_default_update_origin_is_where_this_platforms_feed_lives() {
+    let base = url::Url::parse(DEFAULT_UPDATE_BASE_URL).unwrap();
+    let target = koru_update::UpdateTarget {
+        channel: koru_update::ReleaseChannel::Nightly,
+        platform: koru_update::build_info().platform.into(),
+        architecture: "x86_64".into(),
+    };
+    let manifest = target.manifest_url(&base).unwrap();
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            manifest.as_str(),
+            "https://github.com/koruworks/mono/releases/download/nightly/nightly-linux-x86_64.json"
+        );
+    } else {
+        assert_eq!(base.host_str(), Some("updates.koru.do"));
+        assert_eq!(
+            koru_update::FeedLayout::of(&base),
+            koru_update::FeedLayout::Channels
+        );
+    }
 }
 
 #[test]

@@ -22,11 +22,13 @@ use crate::Paths;
 /// not.
 #[derive(Debug)]
 pub enum VoiceServiceError {
-    /// `KORU_VOICE_DISABLED` is set: this installation offers no dictation, and
-    /// the honest answer is not that a worker failed to start. Its own variant
-    /// so a shell can say *voice is switched off here* rather than *not
-    /// answering*, which is a different sentence and a different remedy.
-    Disabled(String),
+    /// This installation offers no dictation, and the honest answer is not
+    /// that a worker failed to start. Its own variant so a shell can say
+    /// *voice is off here* rather than *not answering*, which is a different
+    /// sentence and a different remedy. The reason says which: a switch
+    /// somebody set, or a platform this build has no voice runtime for yet.
+    /// One code for both, so nothing that branches on it changes.
+    Disabled(koru_voice::Off, String),
     NotFound(String),
     Launch(String),
     Unavailable(String),
@@ -36,7 +38,7 @@ pub enum VoiceServiceError {
 impl VoiceServiceError {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Disabled(_) => "voice_disabled",
+            Self::Disabled(..) => "voice_disabled",
             Self::NotFound(_) => "voice_not_found",
             Self::Launch(_) => "voice_launch_failed",
             Self::Unavailable(_) => "voice_unreachable",
@@ -46,7 +48,14 @@ impl VoiceServiceError {
 
     pub fn user_message(&self) -> String {
         match self {
-            Self::Disabled(_) => "Dictation is switched off on this installation.".into(),
+            Self::Disabled(koru_voice::Off::Switch, _) => {
+                "Dictation is switched off on this installation.".into()
+            }
+            Self::Disabled(koru_voice::Off::Platform, _) => koru_i18n::t(
+                koru_i18n::Lang::for_system(koru_window::system_locale::system_locale().as_deref()),
+                koru_i18n::Key::VoiceNotOnLinuxYet,
+            )
+            .into(),
             Self::NotFound(_) => "The Koru voice worker was not found.".into(),
             Self::Launch(_) => "The Koru voice worker could not be started.".into(),
             Self::Unavailable(_) => "The Koru voice worker is not answering.".into(),
@@ -60,7 +69,7 @@ impl VoiceServiceError {
 impl std::fmt::Display for VoiceServiceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Disabled(message)
+            Self::Disabled(_, message)
             | Self::NotFound(message)
             | Self::Launch(message)
             | Self::Unavailable(message)
@@ -856,7 +865,7 @@ pub fn ensure_voice(paths: &Paths) -> Result<VoiceReady, VoiceServiceError> {
         .root()
         .to_path_buf();
     ensure_voice_with(
-        koru_voice::available(),
+        koru_voice::off(),
         || ask_voice(&root),
         |launch_id| launch_voice(&root, &model_root, launch_id),
     )
@@ -880,7 +889,7 @@ pub(crate) fn voice_service_root(paths: &Paths) -> std::path::PathBuf {
 /// here, and the connect-first check happens **inside** it, which is the whole
 /// of why a second caller adopts rather than launching.
 fn ensure_voice_with<Ask, Launch>(
-    available: bool,
+    off: Option<koru_voice::Off>,
     ask: Ask,
     launch: Launch,
 ) -> Result<VoiceReady, VoiceServiceError>
@@ -891,11 +900,25 @@ where
     // **Before the lock and before the dial.** A switched-off installation must
     // not connect to anything, must not wait for anything, and must not queue
     // behind a decision it will refuse.
-    if !available {
-        return Err(VoiceServiceError::Disabled(format!(
-            "{} is set, so this installation offers no dictation",
-            koru_voice::DISABLE_VAR
-        )));
+    match off {
+        None => {}
+        Some(koru_voice::Off::Switch) => {
+            return Err(VoiceServiceError::Disabled(
+                koru_voice::Off::Switch,
+                format!(
+                    "{} is set, so this installation offers no dictation",
+                    koru_voice::DISABLE_VAR
+                ),
+            ));
+        }
+        // Not the switch's sentence: nobody set anything, and unsetting the
+        // variable would not help.
+        Some(koru_voice::Off::Platform) => {
+            return Err(VoiceServiceError::Disabled(
+                koru_voice::Off::Platform,
+                "dictation is not built for this platform yet, so this installation offers no dictation".into(),
+            ));
+        }
     }
     let _decision = VOICE_ENSURE_LOCK
         .lock()
@@ -954,15 +977,15 @@ where
 /// listening, which is an answer rather than a failure -- connecting *is* the
 /// liveness check, and there is no file that could have gone stale.
 fn ask_voice(root: &std::path::Path) -> Result<Option<VoiceReady>, VoiceServiceError> {
-    match koru_voice_worker::ask::status(root) {
-        koru_voice_worker::ask::Asked::Answered(report) => Ok(Some(VoiceReady {
+    match koru_voice_client::ask::status(root) {
+        koru_voice_client::ask::Asked::Answered(report) => Ok(Some(VoiceReady {
             worker_version: report.worker_version.clone(),
             process_id: report.process_id,
             supervisor_launch_id: report.supervisor_launch_id.clone(),
             launched: false,
         })),
-        koru_voice_worker::ask::Asked::NotRunning => Ok(None),
-        koru_voice_worker::ask::Asked::Failed(why) => Err(VoiceServiceError::Unavailable(why)),
+        koru_voice_client::ask::Asked::NotRunning => Ok(None),
+        koru_voice_client::ask::Asked::Failed(why) => Err(VoiceServiceError::Unavailable(why)),
     }
 }
 
@@ -985,17 +1008,15 @@ fn launch_voice(
             binary.display()
         ))
     })?;
-    let bootstrap = koru_voice_worker::bootstrap::WorkerBootstrap {
-        bootstrap_version: koru_voice_worker::bootstrap::BOOTSTRAP_VERSION,
+    let bootstrap = koru_voice::bootstrap::WorkerBootstrap {
+        bootstrap_version: koru_voice::bootstrap::BOOTSTRAP_VERSION,
         launch_id: launch_id.to_string(),
         channel: crate::segment().into(),
         // The *fingerprints* travel and neither path does: a root is a
         // filesystem path, and docs/contributing/operations/LOGGING.md names those beside
         // credentials.
-        root_fingerprint: koru_voice_worker::bootstrap::fingerprint(
-            root.to_string_lossy().as_bytes(),
-        ),
-        installation_fingerprint: koru_voice_worker::bootstrap::fingerprint(image),
+        root_fingerprint: koru_network_bridge::fingerprint(root.to_string_lossy().as_bytes()),
+        installation_fingerprint: koru_network_bridge::fingerprint(image),
     };
     let mut command = voice_command(&binary, root, model_root);
     #[cfg(windows)]
@@ -1078,7 +1099,7 @@ pub fn request_voice_stop(paths: &Paths) {
     let _ = std::thread::Builder::new()
         .name("koru-agent voice stop".into())
         .spawn(move || {
-            if let koru_voice_worker::ask::Asked::Failed(why) = koru_voice_worker::ask::stop(&root)
+            if let koru_voice_client::ask::Asked::Failed(why) = koru_voice_client::ask::stop(&root)
             {
                 koru_ipc::ipc_debug!("voice: the worker would not stop: {why}");
             }

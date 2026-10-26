@@ -395,11 +395,14 @@ fn translated_controls_stay_inside_the_column_without_overlapping() {
         for (i, target) in surface.targets.iter().enumerate() {
             assert!(target.rect.x >= COLUMN.x);
             assert!(target.rect.x + target.rect.w <= COLUMN.x + COLUMN.w + 0.01);
+            // Segments of one control touch by design, and their summed
+            // positions differ from the next segment's by rounding, so an
+            // overlap has to be more than the tolerance the column uses.
             for other in &surface.targets[i + 1..] {
-                let overlaps = target.rect.x < other.rect.x + other.rect.w
-                    && target.rect.x + target.rect.w > other.rect.x
-                    && target.rect.y < other.rect.y + other.rect.h
-                    && target.rect.y + target.rect.h > other.rect.y;
+                let overlaps = target.rect.x + 0.01 < other.rect.x + other.rect.w
+                    && target.rect.x + target.rect.w > other.rect.x + 0.01
+                    && target.rect.y + 0.01 < other.rect.y + other.rect.h
+                    && target.rect.y + target.rect.h > other.rect.y + 0.01;
                 assert!(
                     !overlaps,
                     "{lang:?}: {:?} overlaps {:?}",

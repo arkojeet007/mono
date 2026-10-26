@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! Test-harness-only Win32 ABI. No production Job implementation is changed.
+#[cfg(any(windows, test))]
 pub const CAP: usize = 512 * 1024 * 1024;
+#[cfg(any(windows, test))]
 pub const FLAGS: u32 = 0x8 | 0x100 | 0x200 | 0x2000;
 
+#[cfg(any(windows, test))]
 #[repr(C)]
 #[derive(Default)]
 struct Basic {
@@ -17,6 +20,7 @@ struct Basic {
     priority: u32,
     scheduling: u32,
 }
+#[cfg(any(windows, test))]
 #[repr(C)]
 #[derive(Default)]
 struct Extended {
@@ -28,6 +32,7 @@ struct Extended {
     peak_job_memory: usize,
 }
 
+#[cfg(any(windows, test))]
 fn valid(info: &Extended) -> bool {
     info.basic.flags == FLAGS
         && info.basic.active_processes == 1

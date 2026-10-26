@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use koru_voice::{EngineEvent, Event, Requested, SessionId, State, Transcript, VoiceLanguage};
 
-use crate::capture::{CaptureInfo, DeviceCategory, DeviceKind, InterfaceKind};
-use crate::control::Outgoing;
 use crate::engine::Script;
 use crate::fixtures;
-use crate::status::{ModelSummary, StageTiming, StatusReport};
 use crate::worker::{Command, Shutdown, spawn};
+use koru_voice::control::Outgoing;
+use koru_voice::status::{CaptureInfo, DeviceCategory, DeviceKind, InterfaceKind};
+use koru_voice::status::{ModelSummary, StageTiming, StatusReport};
 
 /// The transcript the redaction test hunts for. Nonsense on purpose: a grep for
 /// it finds only the tests that are meant to mention it.
@@ -193,7 +193,7 @@ fn nothing_this_worker_can_print_reveals_content() {
         supervisor_launch_id: None,
         engine: "scripted".into(),
         engine_version: "scripted".into(),
-        available_engines: vec![crate::status::EngineSummary {
+        available_engines: vec![koru_voice::status::EngineSummary {
             engine: "scripted".into(),
             version: "scripted".into(),
         }],

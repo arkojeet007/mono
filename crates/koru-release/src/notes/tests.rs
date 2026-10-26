@@ -30,7 +30,7 @@ fn without_a_configured_command_only_a_named_assistant_is_chosen() {
 fn custom_templates_keep_shell_syntax_and_channel_substitution() {
     let invocation = NotesCommand::new(
         r#""my tool" --channel {channel} > "notes log.txt""#,
-        ReleaseChannel::Beta,
+        Request::Release(ReleaseChannel::Beta),
         Path::new("releases/0.1.0-beta.0.toml"),
     );
     assert_eq!(
@@ -40,10 +40,53 @@ fn custom_templates_keep_shell_syntax_and_channel_substitution() {
     assert!(invocation.input.is_none());
 }
 
+/// A nightly's file is `-2` or `-3` on a busy day, which a custom generator
+/// cannot work out, so it is handed the exact path.
+#[test]
+fn custom_templates_are_given_the_exact_path_and_the_nightly_channel() {
+    let invocation = NotesCommand::new(
+        "my-tool --channel {channel} --out {path}",
+        Request::Nightly {
+            log: "git log --no-merges abc..HEAD",
+        },
+        Path::new("releases/nightly/2026-10-24-2.toml"),
+    );
+    assert_eq!(
+        invocation.command,
+        "my-tool --channel nightly --out releases/nightly/2026-10-24-2.toml"
+    );
+}
+
+#[test]
+fn a_nightly_prompt_names_the_file_the_commits_and_its_own_section() {
+    let path = Path::new("releases/nightly/2026-10-24.toml");
+    let invocation = NotesCommand::new(
+        "codex",
+        Request::Nightly {
+            log: "git log --no-merges 1234567..HEAD",
+        },
+        path,
+    );
+    let Some(PromptInput::Stdin(prompt)) = invocation.input else {
+        panic!("Codex must receive its instructions on stdin");
+    };
+    assert!(prompt.contains("GitHub nightly"));
+    assert!(prompt.contains(&path.display().to_string()));
+    assert!(prompt.contains("`git log --no-merges 1234567..HEAD`"));
+    assert!(prompt.contains("\"Nightly notes on GitHub\""));
+    // The section the prompt points at exists, and it says text only.
+    let section = WRITING_INSTRUCTIONS
+        .split("## Nightly notes on GitHub")
+        .nth(1)
+        .expect("WRITING.md has the nightly section");
+    assert!(section.contains("Text only"));
+    assert!(prompt.contains("Do not commit, tag, build, or publish"));
+}
+
 #[test]
 fn codex_receives_the_exact_descriptor_as_input_not_shell_syntax() {
     let path = Path::new("a checkout & more/releases/0.1.0-nightly.20260913+abc1234.toml");
-    let invocation = NotesCommand::new("codex", ReleaseChannel::Nightly, path);
+    let invocation = NotesCommand::new("codex", Request::Release(ReleaseChannel::Nightly), path);
     assert!(!invocation.command.contains("a checkout"));
     let Some(PromptInput::Stdin(prompt)) = invocation.input else {
         panic!("Codex must receive its instructions on stdin");
@@ -60,8 +103,8 @@ fn codex_receives_the_exact_descriptor_as_input_not_shell_syntax() {
 #[test]
 fn kimi_receives_the_shared_instructions_as_one_literal_prompt_argument() {
     let path = Path::new("checkout & $(command) `quoted`/releases/0.1.0-beta.0.toml");
-    let kimi = NotesCommand::new(" KiMi ", ReleaseChannel::Beta, path);
-    let codex = NotesCommand::new("codex", ReleaseChannel::Beta, path);
+    let kimi = NotesCommand::new(" KiMi ", Request::Release(ReleaseChannel::Beta), path);
+    let codex = NotesCommand::new("codex", Request::Release(ReleaseChannel::Beta), path);
     let Some(PromptInput::Stdin(expected)) = codex.input else {
         panic!("Codex prompt missing");
     };

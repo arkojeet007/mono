@@ -26,6 +26,14 @@
 //! process's own environment is neither of the two things that would make this
 //! crate unusable on a phone or inside a test that must never open a device.
 //!
+//! ## Two reasons, one answer
+//!
+//! The switch is one reason; a platform this build has no voice runtime for
+//! is the other ([`Off`]). [`available`] is false for either, so every surface
+//! hides dictation the same way, and [`off`] says which, so the one surface
+//! that explains (Settings) and the one that refuses (the Agent's
+//! supervision) never blame a switch nobody set.
+//!
 //! ## Ask once
 //!
 //! [`disabled`] reads the environment on every call, deliberately — a cached
@@ -48,9 +56,47 @@ pub fn disabled() -> bool {
     koru_env::switch(DISABLE_VAR)
 }
 
+/// Why this installation offers no dictation, when it does not.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Off {
+    /// [`DISABLE_VAR`] is set. A person or a launcher switched it off, and
+    /// unsetting it turns dictation back on.
+    Switch,
+    /// This build has no voice runtime for its platform yet: Linux, until its
+    /// voice rung (docs/features/linux/TECHNICAL.final.md, D4b). Nothing a
+    /// person sets turns it on.
+    Platform,
+}
+
+/// Desktop Linux, and only desktop Linux: the phone's `target_os` is
+/// `"android"`, so Milestone 4's host, which links this crate directly, is
+/// untouched.
+const PLATFORM_OFF: bool = cfg!(target_os = "linux");
+
+/// **Which reason wins, as arithmetic.** `Platform` outranks `Switch` when
+/// both apply, because it names the remedy that is true: unsetting the switch
+/// on Linux would not turn dictation on. Pure, so a test can walk all four
+/// cases without touching the environment.
+fn reason(switch: bool, platform: bool) -> Option<Off> {
+    match (switch, platform) {
+        (_, true) => Some(Off::Platform),
+        (true, false) => Some(Off::Switch),
+        (false, false) => None,
+    }
+}
+
+/// Why dictation is off here, or `None` when it is offered.
+pub fn off() -> Option<Off> {
+    reason(disabled(), PLATFORM_OFF)
+}
+
 /// The same question the way most call sites want to read it.
+///
+/// Every reason counts, not only the switch: a surface that asks this is
+/// asking whether to offer dictation at all. [`disabled`] still means exactly
+/// that the switch is set.
 pub fn available() -> bool {
-    !disabled()
+    off().is_none()
 }
 
 #[cfg(test)]

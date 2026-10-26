@@ -16,23 +16,28 @@ fn the_kill_switch_is_read_by_the_one_rule() {
     };
 
     set(None);
-    assert!(!disabled(), "unset means voice is available");
-    assert!(available());
+    assert!(!disabled(), "unset means the switch is off");
+    // Offered, except on a platform this build has no voice runtime for.
+    assert_eq!(available(), !PLATFORM_OFF);
+    assert_eq!(off(), reason(false, PLATFORM_OFF));
 
     set(Some("1"));
     assert!(disabled());
     assert!(!available());
+    assert_eq!(off(), reason(true, PLATFORM_OFF));
 
     // The rule that used to be four rules: `=0` means off, so it means voice
     // is *on*. A presence-only reading here would disable dictation for
     // anybody who wrote `set KORU_VOICE_DISABLED=0` to turn it back on.
-    for off in ["", "0", "false", "No", " OFF "] {
-        set(Some(off));
-        assert!(!disabled(), "value {off:?} should leave voice available");
+    for value in ["", "0", "false", "No", " OFF "] {
+        set(Some(value));
+        assert!(!disabled(), "value {value:?} should leave voice available");
+        assert_eq!(off(), reason(false, PLATFORM_OFF));
     }
     for on in ["1", "true", "yes", "anything"] {
         set(Some(on));
         assert!(disabled(), "value {on:?} should disable voice");
+        assert_eq!(off(), reason(true, PLATFORM_OFF));
     }
 
     set(restore.as_deref());
@@ -48,4 +53,17 @@ fn the_name_comes_from_the_registry() {
         koru_env::get(DISABLE_VAR).is_some(),
         "the switch is not declared in koru-env's VARS"
     );
+}
+
+/// **Which reason wins, without the environment.** Pure arithmetic over both
+/// inputs, so it runs on every platform beside the one test that owns the
+/// variable, and races nothing.
+#[test]
+fn the_reason_is_chosen_by_one_rule() {
+    assert_eq!(reason(false, false), None);
+    assert_eq!(reason(true, false), Some(Off::Switch));
+    // The platform names the remedy that is true: unsetting the switch would
+    // not turn dictation on.
+    assert_eq!(reason(false, true), Some(Off::Platform));
+    assert_eq!(reason(true, true), Some(Off::Platform));
 }

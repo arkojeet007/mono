@@ -520,6 +520,19 @@ pub fn run<A: WindowApp>(
             builder.with_activation_policy(ActivationPolicy::Accessory);
         }
     }
+    // **X11 on Linux, through XWayland on a Wayland desktop.** The clipboard
+    // backend (`arboard`, pinned without `wayland-data-control`) speaks X11
+    // only, and mutter bridges the two clipboards, so copy and paste work with
+    // no dependency change. Chosen here rather than by unsetting
+    // `WAYLAND_DISPLAY` in a launcher, which every child process would
+    // inherit. Native Wayland deletes this arm, its twin in `multi.rs` and the
+    // one in `koru_workspace_host::app`
+    // (docs/features/linux/TECHNICAL.final.md, D5).
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
     let events = builder.build()?;
     // `Wait`, not `Poll`. Nothing here animates and nothing polls, so the
     // process should use no CPU at all while it is being read — or while it is

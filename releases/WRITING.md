@@ -61,5 +61,25 @@ If nothing user-visible changed, say so instead of inventing features or padding
 the notes. An honest one-line nightly is enough. Follow `releases/README.md`
 for the descriptor's publishing context.
 
+## Nightly notes on GitHub
+
+The GitHub nightly (the `nightly` tag of koruworks/mono) takes its notes from
+`releases/nightly/<yyyy-mm-dd>.toml` instead of a descriptor named after the
+version. When you are asked for one:
+
+- Skip "Gather the release context" and "Choose the exact descriptor". The
+  request names the exact file and the `git log` command that lists the
+  commits it covers; read those commits and the diffs behind the
+  user-visible ones.
+- Write the same three fields as a descriptor: `title`, `summary` and `body`.
+  The body becomes the GitHub release text and the installed build's What's
+  new tab; the title and summary are its update banner.
+- **Text only.** No images, GIF, WebP or video, and no HTML: Markdown text,
+  headings, lists and links. The publisher refuses a file with an image in it.
+- A nightly is a preview. Describe what changed for somebody trying it, and
+  never describe a feature the build does not have.
+
+## Finish
+
 Only write the selected descriptor and preserve other working-tree changes.
 Do not commit, tag, build, or publish. Print the filename when finished.
