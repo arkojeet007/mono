@@ -117,8 +117,14 @@ pub fn ink(palette: &Palette, role: Role) -> Color {
         Role::Fill | Role::Panel => palette.panel_bg,
         Role::Accent => palette.accent,
         Role::Frame => palette.panel_border,
+        Role::Series(index) => palette.chart[index as usize % palette.chart.len()],
     }
 }
+
+/// A pie slice's outline, in the page colour, so neighbouring slices are
+/// parted the way Mermaid parts them; and a legend swatch's.
+pub const SLICE_OUTLINE_W: f64 = 2.0;
+pub const SWATCH_OUTLINE_W: f64 = 1.0;
 
 /// A scene with every line of text shaped, ready to paint on any thread
 /// without shaping again.
@@ -270,5 +276,6 @@ fn counts_text(counts: &Counts) -> String {
             messages,
             notes,
         } => format!("{participants} participants, {messages} messages, {notes} notes"),
+        Counts::Pie { slices } => format!("{slices} slices"),
     }
 }

@@ -14,6 +14,7 @@ mod layout;
 mod line;
 mod measure;
 mod narrate;
+mod pie;
 mod robustness;
 mod sequence;
 mod size;
@@ -42,8 +43,11 @@ pub(crate) const SEQUENCE_SHOWCASE: &str =
 pub(crate) const SEQUENCE_CHECKOUT: &str =
     include_str!("../../tests/fixtures/sequence-checkout.mmd");
 
-/// A small valid pie chart: a kind Koru does not draw.
+/// A small valid pie chart with a title: two sections. Two slices.
 pub(crate) const PIE: &str = include_str!("../../tests/fixtures/pie.mmd");
+
+/// A small valid Gantt chart: a kind Koru does not draw.
+pub(crate) const GANTT: &str = include_str!("../../tests/fixtures/gantt.mmd");
 
 /// An empty file.
 pub(crate) const EMPTY: &str = include_str!("../../tests/fixtures/empty.mmd");

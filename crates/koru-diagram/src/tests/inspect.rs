@@ -6,8 +6,8 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    BAD_ARROW_LINE7, EMPTY, FLOWCHART_SHOWCASE, FRONT_MATTER, MISSING_END, PIE, SEQUENCE_SHOWCASE,
-    chain, sequence_with_messages,
+    BAD_ARROW_LINE7, EMPTY, FLOWCHART_SHOWCASE, FRONT_MATTER, GANTT, MISSING_END, PIE,
+    SEQUENCE_SHOWCASE, chain, sequence_with_messages,
 };
 use crate::line::last_non_empty_line;
 use crate::{Counts, Kind, Limits, Status, detect, inspect};
@@ -22,7 +22,8 @@ fn detect_names_the_kind_from_the_header() {
     assert_eq!(detect("flowchart TD\nA-->B"), Some(Kind::Flowchart));
     assert_eq!(detect("flowchart-elk LR\nA-->B"), Some(Kind::Flowchart));
     assert_eq!(detect("sequenceDiagram\nA->>B: x"), Some(Kind::Sequence));
-    assert_eq!(detect("pie\n\"a\": 1"), Some(Kind::Other("pie".to_owned())));
+    assert_eq!(detect("pie\n\"a\": 1"), Some(Kind::Pie));
+    assert_eq!(detect(GANTT), Some(Kind::Other("gantt".to_owned())));
     assert_eq!(
         detect("classDiagram\n    Animal <|-- Duck"),
         Some(Kind::Other("classDiagram".to_owned()))
@@ -94,11 +95,19 @@ fn a_missing_end_names_the_last_non_empty_line() {
 }
 
 #[test]
-fn a_pie_chart_is_a_kind_not_drawn() {
+fn a_pie_chart_draws_with_its_slices() {
     assert_eq!(
         inspect(PIE, &limits()),
+        Status::Draws(Counts::Pie { slices: 2 })
+    );
+}
+
+#[test]
+fn a_gantt_chart_is_a_kind_not_drawn() {
+    assert_eq!(
+        inspect(GANTT, &limits()),
         Status::KindNotDrawn {
-            kind: Some("pie".to_owned()),
+            kind: Some("gantt".to_owned()),
         }
     );
 }

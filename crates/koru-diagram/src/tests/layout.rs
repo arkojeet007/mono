@@ -23,7 +23,7 @@ use merman::{OperationControl, RenderOutput, RenderRequest, Renderer, SvgEnviron
 use serde_json::Value;
 
 use super::{
-    BAD_ARROW_LINE7, EMPTY, FLOWCHART_SHOWCASE, PIE, SEQUENCE_SHOWCASE, Stub, chain, stub,
+    BAD_ARROW_LINE7, EMPTY, FLOWCHART_SHOWCASE, GANTT, SEQUENCE_SHOWCASE, Stub, chain, stub,
 };
 use crate::engine::engine;
 use crate::layout::layout_uncounted;
@@ -61,7 +61,7 @@ fn showcase() -> DiagramScene {
 fn flowchart(scene: &DiagramScene) -> &FlowchartScene {
     match &scene.body {
         SceneBody::Flowchart(flowchart) => flowchart,
-        SceneBody::Sequence(_) => panic!("a flowchart scene"),
+        SceneBody::Sequence(_) | SceneBody::Pie(_) => panic!("a flowchart scene"),
     }
 }
 
@@ -73,7 +73,7 @@ pub(super) fn sequence_showcase() -> DiagramScene {
 pub(super) fn sequence_of(scene: &DiagramScene) -> &SequenceScene {
     match &scene.body {
         SceneBody::Sequence(sequence) => sequence,
-        SceneBody::Flowchart(_) => panic!("a sequence scene"),
+        SceneBody::Flowchart(_) | SceneBody::Pie(_) => panic!("a sequence scene"),
     }
 }
 
@@ -393,9 +393,9 @@ fn the_statuses_that_do_not_draw_never_reach_a_layout() {
     let cases = [
         (EMPTY, Status::Empty),
         (
-            PIE,
+            GANTT,
             Status::KindNotDrawn {
-                kind: Some("pie".to_owned()),
+                kind: Some("gantt".to_owned()),
             },
         ),
         ("hello world", Status::KindNotDrawn { kind: None }),

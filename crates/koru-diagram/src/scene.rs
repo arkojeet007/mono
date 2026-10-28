@@ -46,6 +46,46 @@ pub struct DiagramScene {
 pub enum SceneBody {
     Flowchart(FlowchartScene),
     Sequence(SequenceScene),
+    Pie(PieScene),
+}
+
+/// A pie chart: slices about a centre, the percent of each on it, a legend
+/// beside and a title above.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PieScene {
+    /// `title …`, centred above the pie.
+    pub title: Option<Label>,
+    pub centre: Point,
+    pub radius: f64,
+    /// In source order, which is also clockwise order.
+    pub slices: Vec<PieSlice>,
+    /// One row per slice, down the right of the pie.
+    pub legend: Vec<PieLegendItem>,
+}
+
+/// One slice: the arc from `start` to `end`, in radians clockwise from
+/// twelve o'clock as Mermaid lays it, with the percent label on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PieSlice {
+    pub label: String,
+    pub value: f64,
+    /// Mermaid's rounded share of the whole.
+    pub percent: u32,
+    pub start: f64,
+    pub end: f64,
+    /// Which of the chart palette's fills this slice and its legend swatch
+    /// wear, by index.
+    pub series: u8,
+    /// The percent, placed on the slice.
+    pub text: Label,
+}
+
+/// One legend row: a square swatch in the slice's fill, the label after it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PieLegendItem {
+    pub swatch: Rect,
+    pub label: Label,
+    pub series: u8,
 }
 
 /// What an item is painted as. The painter maps a role to the palette; a
@@ -66,6 +106,10 @@ pub enum Role {
     Frame,
     /// A group's or note's background.
     Panel,
+    /// One of a chart's categorical fills, by index: a pie's slices and
+    /// their legend swatches. The painter cycles its chart palette, so a
+    /// scene never names a colour here either.
+    Series(u8),
 }
 
 /// A piece of text with its lines already placed.
@@ -314,6 +358,15 @@ impl Label {
     /// by `measure`, centred horizontally, stacked at the measurer's line
     /// height, the baseline at the measurer's ascent. No lines give an empty
     /// label whose `rect` is the point `center`.
+    /// Move the label and every line in it by `by`.
+    pub(crate) fn translate(&mut self, by: kurbo::Vec2) {
+        self.rect = self.rect + by;
+        for line in &mut self.lines {
+            line.x += by.x;
+            line.baseline += by.y;
+        }
+    }
+
     pub(crate) fn placed(
         lines: Vec<String>,
         center: Point,

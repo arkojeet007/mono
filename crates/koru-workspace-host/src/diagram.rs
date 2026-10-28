@@ -379,6 +379,19 @@ fn scene_weight(scene: &DiagramScene) -> usize {
                     .map(|cluster| SHAPE_BYTES + optional(&cluster.title))
                     .sum::<usize>()
         }
+        SceneBody::Pie(pie) => {
+            optional(&pie.title)
+                + pie
+                    .slices
+                    .iter()
+                    .map(|slice| SHAPE_BYTES + label(&slice.text))
+                    .sum::<usize>()
+                + pie
+                    .legend
+                    .iter()
+                    .map(|item| SHAPE_BYTES + label(&item.label))
+                    .sum::<usize>()
+        }
         SceneBody::Sequence(sequence) => {
             sequence
                 .participants

@@ -2010,6 +2010,12 @@ pub enum Key {
     A11yDiagramNotDrawn,
     /// The placeholder, while the first layout of a text is in flight.
     A11yDiagramPending,
+    /// *Diagram, pie, {slices}* — the summary of a pie chart.
+    A11yDiagramPie,
+    A11yDiagramSlicesOne,
+    A11yDiagramSlicesMany,
+    /// One slice as prose: *{label}, {value} ({percent}%)*.
+    A11yDiagramSlice,
     TrashDeleteFailedTitle,
     TrashDeleteFailedBody,
     TrashDeletePartial,
@@ -2429,6 +2435,8 @@ pub enum Key {
     DiagramTooLargeBoxesMany,
     DiagramTooLargeMessagesOne,
     DiagramTooLargeMessagesMany,
+    DiagramTooLargeSlicesOne,
+    DiagramTooLargeSlicesMany,
     /// *Too large to draw* with no count: shown when the engine refused the
     /// text before anything could be counted — a source over its size budget —
     /// so there is no number of boxes or messages to name.
@@ -2448,7 +2456,7 @@ impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1649] = [
+    pub const ALL: [Key; 1655] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -3768,6 +3776,10 @@ impl Key {
         Key::A11yDiagramMessage,
         Key::A11yDiagramNotDrawn,
         Key::A11yDiagramPending,
+        Key::A11yDiagramPie,
+        Key::A11yDiagramSlicesOne,
+        Key::A11yDiagramSlicesMany,
+        Key::A11yDiagramSlice,
         Key::TrashDeleteFailedTitle,
         Key::TrashDeleteFailedBody,
         Key::TrashDeletePartial,
@@ -4092,6 +4104,8 @@ impl Key {
         Key::DiagramTooLargeBoxesMany,
         Key::DiagramTooLargeMessagesOne,
         Key::DiagramTooLargeMessagesMany,
+        Key::DiagramTooLargeSlicesOne,
+        Key::DiagramTooLargeSlicesMany,
         Key::DiagramTooLargeUncounted,
         Key::DiagramEmptyHint,
         Key::DiagramCommand,
@@ -12158,6 +12172,10 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     Row { key: Key::A11yDiagramMessage, en: "{}, message \"{}\", to {}", es: "{}, mensaje «{}», a {}", pt_br: "{}, mensagem “{}”, para {}", de: "{}, Nachricht „{}“, an {}", fr: "{}, message « {} », à {}", ar: "{}، رسالة \"{}\"، إلى {}", zh_hans: "{}，消息“{}”，发给 {}", ja: "{}、メッセージ「{}」、{} へ" },
     Row { key: Key::A11yDiagramNotDrawn, en: "Diagram, not drawn: {}", es: "Diagrama, no dibujado: {}", pt_br: "Diagrama, não desenhado: {}", de: "Diagramm, nicht gezeichnet: {}", fr: "Diagramme, non dessiné : {}", ar: "مخطط، غير مرسوم: {}", zh_hans: "图表，未绘制：{}", ja: "図、未描画: {}" },
     Row { key: Key::A11yDiagramPending, en: "Diagram, drawing", es: "Diagrama, dibujando", pt_br: "Diagrama, desenhando", de: "Diagramm, wird gezeichnet", fr: "Diagramme, en cours de dessin", ar: "مخطط، قيد الرسم", zh_hans: "图表，正在绘制", ja: "図、描画中" },
+    Row { key: Key::A11yDiagramPie, en: "Diagram, pie, {}", es: "Diagrama, circular, {}", pt_br: "Diagrama, pizza, {}", de: "Diagramm, Kreis, {}", fr: "Diagramme, circulaire, {}", ar: "مخطط، دائري، {}", zh_hans: "图表，饼图，{}", ja: "図、円グラフ、{}" },
+    Row { key: Key::A11yDiagramSlicesOne, en: "{} slice", es: "{} porción", pt_br: "{} fatia", de: "{} Segment", fr: "{} part", ar: "{} شريحة", zh_hans: "{} 个扇区", ja: "{} 個の扇形" },
+    Row { key: Key::A11yDiagramSlicesMany, en: "{} slices", es: "{} porciones", pt_br: "{} fatias", de: "{} Segmente", fr: "{} parts", ar: "{} شرائح", zh_hans: "{} 个扇区", ja: "{} 個の扇形" },
+    Row { key: Key::A11yDiagramSlice, en: "{}, {} ({}%)", es: "{}, {} ({}%)", pt_br: "{}, {} ({}%)", de: "{}, {} ({}%)", fr: "{}, {} ({}%)", ar: "{}، {} ({}%)", zh_hans: "{}，{}（{}%）", ja: "{}、{}（{}%）" },
     Row {
         key: Key::TrashDeleteFailedTitle,
         en: "Could not delete all selected items",
@@ -12525,6 +12543,8 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     Row { key: Key::DiagramTooLargeBoxesMany, en: "Too large to draw: {} boxes", es: "Demasiado grande para dibujar: {} cajas", pt_br: "Grande demais para desenhar: {} caixas", de: "Zu groß zum Zeichnen: {} Kästen", fr: "Trop grand pour être dessiné : {} boîtes", ar: "أكبر من أن يُرسم: {} مربعًا", zh_hans: "太大，无法绘制：{} 个框", ja: "大きすぎて描けません: {} 個のボックス" },
     Row { key: Key::DiagramTooLargeMessagesOne, en: "Too large to draw: {} message", es: "Demasiado grande para dibujar: {} mensaje", pt_br: "Grande demais para desenhar: {} mensagem", de: "Zu groß zum Zeichnen: {} Nachricht", fr: "Trop grand pour être dessiné : {} message", ar: "أكبر من أن يُرسم: {} رسالة", zh_hans: "太大，无法绘制：{} 条消息", ja: "大きすぎて描けません: {} 件のメッセージ" },
     Row { key: Key::DiagramTooLargeMessagesMany, en: "Too large to draw: {} messages", es: "Demasiado grande para dibujar: {} mensajes", pt_br: "Grande demais para desenhar: {} mensagens", de: "Zu groß zum Zeichnen: {} Nachrichten", fr: "Trop grand pour être dessiné : {} messages", ar: "أكبر من أن يُرسم: {} رسالة", zh_hans: "太大，无法绘制：{} 条消息", ja: "大きすぎて描けません: {} 件のメッセージ" },
+    Row { key: Key::DiagramTooLargeSlicesOne, en: "Too large to draw: {} slice", es: "Demasiado grande para dibujar: {} porción", pt_br: "Grande demais para desenhar: {} fatia", de: "Zu groß zum Zeichnen: {} Segment", fr: "Trop grand pour être dessiné : {} part", ar: "أكبر من أن يُرسم: {} شريحة", zh_hans: "太大，无法绘制：{} 个扇区", ja: "大きすぎて描けません: {} 個の扇形" },
+    Row { key: Key::DiagramTooLargeSlicesMany, en: "Too large to draw: {} slices", es: "Demasiado grande para dibujar: {} porciones", pt_br: "Grande demais para desenhar: {} fatias", de: "Zu groß zum Zeichnen: {} Segmente", fr: "Trop grand pour être dessiné : {} parts", ar: "أكبر من أن يُرسم: {} شريحة", zh_hans: "太大，无法绘制：{} 个扇区", ja: "大きすぎて描けません: {} 個の扇形" },
     // Shown when the engine refused the text before it could count anything
     // (a source over its size budget), so there is no number to name.
     Row { key: Key::DiagramTooLargeUncounted, en: "Too large to draw", es: "Demasiado grande para dibujar", pt_br: "Grande demais para desenhar", de: "Zu groß zum Zeichnen", fr: "Trop grand pour être dessiné", ar: "أكبر من أن يُرسم", zh_hans: "太大，无法绘制", ja: "大きすぎて描けません" },

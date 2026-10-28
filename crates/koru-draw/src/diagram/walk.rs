@@ -17,11 +17,11 @@ use std::sync::OnceLock;
 
 use koru_diagram::{
     DiagramScene, FlowchartScene, Frame, Label, LabelLine, Marker, Participant, ParticipantKind,
-    Role, SceneBody, SequenceScene, StrokeKind,
+    PieScene, Role, SceneBody, SequenceScene, StrokeKind,
 };
 use kurbo::{
-    Affine, BezPath, Cap, Circle, Join, Line, ParamCurve, ParamCurveDeriv, PathSeg, Point, Rect,
-    RoundedRect, Shape, Stroke, Vec2,
+    Affine, BezPath, Cap, Circle, CircleSegment, Join, Line, ParamCurve, ParamCurveDeriv, PathSeg,
+    Point, Rect, RoundedRect, Shape, Stroke, Vec2,
 };
 use parley::Layout;
 use peniko::{Color, Fill};
@@ -32,7 +32,8 @@ use super::{
     ACTOR_MIN_H, ACTOR_W, ARROW_LEN, ARROW_W, BOX_OUTLINE_W, CIRCLE_R, CLUSTER_OUTLINE_W,
     CLUSTER_RADIUS, CROSS_SIZE, EDGE_DASH, EDGE_LABEL_PAD, EDGE_THICK_W, EDGE_W, FRAME_DASH,
     FRAME_OUTLINE_W, FRAME_TAG_PAD_X, FRAME_TAG_PAD_Y, LIFELINE_DASH, LIFELINE_W, NODE_OUTLINE_W,
-    NOTE_OUTLINE_W, NUMBER_PAD_X, NUMBER_R, PARTICIPANT_RADIUS, PreparedDiagram, ink,
+    NOTE_OUTLINE_W, NUMBER_PAD_X, NUMBER_R, PARTICIPANT_RADIUS, PreparedDiagram, SLICE_OUTLINE_W,
+    SWATCH_OUTLINE_W, ink,
 };
 use crate::inspect;
 use crate::theme::{Brush, Palette};
@@ -172,6 +173,17 @@ pub(super) fn each_line(scene: &DiagramScene, mut f: impl FnMut(Placed<'_>)) {
                 }
             }
         }
+        SceneBody::Pie(pie) => {
+            if let Some(title) = &pie.title {
+                label(title, by_role(title), None);
+            }
+            for slice in &pie.slices {
+                label(&slice.text, by_role(&slice.text), None);
+            }
+            for item in &pie.legend {
+                label(&item.label, by_role(&item.label), None);
+            }
+        }
     }
 }
 
@@ -191,6 +203,7 @@ pub(super) fn walk<S: Sink>(
         SceneBody::Sequence(sequence) => {
             draw_sequence(sequence, prepared, palette, transform, scale, sink);
         }
+        SceneBody::Pie(pie) => draw_pie(pie, palette, transform, scale, sink),
     }
     // Text last, over everything. Lines are read back in the order they were
     // shaped; a count that disagreed could only come from a scene mutated
@@ -223,6 +236,51 @@ pub(super) fn walk<S: Sink>(
                 tag_ink,
             );
         }
+    }
+}
+
+// ----------------------------------------------------------------------- pie
+
+/// The slices as filled arcs parted by a page-coloured outline, then the
+/// legend's swatches; the text comes with every other label.
+fn draw_pie<S: Sink>(
+    pie: &PieScene,
+    palette: &Palette,
+    transform: Affine,
+    scale: f64,
+    sink: &mut S,
+) {
+    for slice in &pie.slices {
+        // Mermaid's angles run clockwise from twelve o'clock; kurbo's from
+        // three o'clock, the same way round on a page whose y grows down.
+        let sweep = (slice.end - slice.start).max(0.0);
+        let segment = CircleSegment::new(
+            pie.centre,
+            pie.radius,
+            0.0,
+            slice.start - std::f64::consts::FRAC_PI_2,
+            sweep,
+        );
+        sink.shape(
+            transform,
+            &segment,
+            &Paint::both(
+                ink(palette, Role::Series(slice.series)),
+                palette.bg,
+                hairline(SLICE_OUTLINE_W, scale),
+            ),
+        );
+    }
+    for item in &pie.legend {
+        sink.shape(
+            transform,
+            &item.swatch,
+            &Paint::both(
+                ink(palette, Role::Series(item.series)),
+                palette.panel_border,
+                hairline(SWATCH_OUTLINE_W, scale),
+            ),
+        );
     }
 }
 

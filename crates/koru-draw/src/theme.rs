@@ -135,6 +135,11 @@ pub struct Palette {
     pub row_selected: Color,
     pub row_hint: Color,
     pub focus_ring: Color,
+    /// A chart's categorical fills, in order: a pie's slices wear them round
+    /// the circle and in its legend. Eight, cycled past that. Light enough
+    /// under `text` in the light theme and deep enough under it in the dark,
+    /// so a label placed on a slice reads in either.
+    pub chart: [Color; 8],
 
     /// Status bar band along the bottom edge.
     pub status_bg: Color,
@@ -387,6 +392,16 @@ pub static LIGHT: Palette = Palette {
 
     accent: rgb(0x3B, 0x6B, 0xB5),
     on_accent: rgb(0xFF, 0xFF, 0xFF),
+    chart: [
+        rgb(0x9E, 0xC1, 0xF2),
+        rgb(0xF7, 0xC5, 0x9F),
+        rgb(0xA8, 0xDB, 0xA8),
+        rgb(0xF4, 0xA3, 0xA3),
+        rgb(0xC9, 0xB6, 0xE4),
+        rgb(0xF7, 0xE2, 0x9A),
+        rgb(0x9E, 0xDA, 0xD8),
+        rgb(0xD9, 0xC2, 0xA7),
+    ],
     scrim: Color::from_rgba8(0x12, 0x12, 0x12, 0x66),
 
     document: PillPalette {
@@ -547,6 +562,16 @@ pub static DARK: Palette = Palette {
 
     accent: rgb(0x6F, 0xA3, 0xD8),
     on_accent: rgb(0x12, 0x12, 0x12),
+    chart: [
+        rgb(0x2F, 0x5D, 0x9E),
+        rgb(0x9A, 0x5A, 0x1E),
+        rgb(0x2E, 0x6B, 0x3A),
+        rgb(0x8C, 0x2F, 0x2F),
+        rgb(0x5B, 0x3F, 0x8C),
+        rgb(0x8A, 0x7A, 0x1F),
+        rgb(0x1F, 0x6B, 0x69),
+        rgb(0x6B, 0x4E, 0x2E),
+    ],
     scrim: Color::from_rgba8(0x00, 0x00, 0x00, 0x99),
 
     document: PillPalette {

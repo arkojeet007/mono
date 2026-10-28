@@ -47,6 +47,7 @@ mod layout;
 mod line;
 mod measure;
 mod narrate;
+mod pie;
 mod scene;
 mod sequence;
 mod shapes;
@@ -69,22 +70,25 @@ pub use scene::{
     NodeShape, Note, Participant, ParticipantBox, ParticipantKind, Role, SceneBody, SceneCluster,
     SceneEdge, SceneNode, SequenceScene, StrokeKind,
 };
+pub use scene::{PieLegendItem, PieScene, PieSlice};
 
 /// The family of a diagram, in Koru's vocabulary.
 ///
-/// Koru draws two: [`Kind::Flowchart`] — merman's `flowchart`, `graph`,
+/// Koru draws three: [`Kind::Flowchart`] — merman's `flowchart`, `graph`,
 /// `flowchart-v2` and `flowchart-elk` headers alike, because ELK is not
-/// compiled and every flowchart is laid out by dagre — and [`Kind::Sequence`].
-/// Every other header merman recognises (`pie`, `gantt`, `classDiagram`, …)
-/// is [`Kind::Other`] carrying merman's type id, so a caller can say which
-/// kind it is not drawing.
+/// compiled and every flowchart is laid out by dagre — [`Kind::Sequence`],
+/// and [`Kind::Pie`]. Every other header merman recognises (`gantt`,
+/// `classDiagram`, …) is [`Kind::Other`] carrying merman's type id, so a
+/// caller can say which kind it is not drawing.
 ///
-/// Serialises as a plain string: `"flowchart"`, `"sequence"`, or the type id.
+/// Serialises as a plain string: `"flowchart"`, `"sequence"`, `"pie"`, or
+/// the type id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Flowchart,
     Sequence,
+    Pie,
     #[serde(untagged)]
     Other(String),
 }
@@ -143,6 +147,9 @@ pub enum Counts {
         messages: usize,
         notes: usize,
     },
+    /// A pie chart's sections. They count against `max_nodes`: a slice is a
+    /// box of a kind, and no pie has ever come near the limit.
+    Pie { slices: usize },
 }
 
 impl Counts {
@@ -151,6 +158,7 @@ impl Counts {
         match self {
             Self::Flowchart { .. } => Kind::Flowchart,
             Self::Sequence { .. } => Kind::Sequence,
+            Self::Pie { .. } => Kind::Pie,
         }
     }
 }

@@ -44,7 +44,8 @@ so the choice stays reversible. The same pattern seals `syntect` in
   and floats within 0.9 under the pin of `Cargo.lock` (0.9.1 at the time of
   writing).
 - **Features: `default-features = false`, `diagram-flowchart`,
-  `diagram-sequence`, `svg`** (and the two families on `merman-render`). The
+  `diagram-sequence`, `diagram-pie`, `svg`** (and the three families on
+  `merman-render`). The
   defaults are every diagram family plus `complete-svg-elk`, and two of those
   features carry licenses `deny.toml` does not allow: `layout-elk` is the ELK
   port under **EPL-2.0**, `math` bundles **OFL-1.1** fonts. `native-fonts`,

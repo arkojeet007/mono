@@ -461,6 +461,8 @@ pub fn reason_text(lang: Lang, status: &Status) -> Option<String> {
                 (DiagramKind::Sequence, _) => Key::DiagramTooLargeMessagesMany,
                 (DiagramKind::Flowchart, 1) => Key::DiagramTooLargeBoxesOne,
                 (DiagramKind::Flowchart, _) => Key::DiagramTooLargeBoxesMany,
+                (DiagramKind::Pie, 1) => Key::DiagramTooLargeSlicesOne,
+                (DiagramKind::Pie, _) => Key::DiagramTooLargeSlicesMany,
                 // Counted, but of a kind Koru does not draw: the number has
                 // no unit a person would recognise.
                 (DiagramKind::Other(_), _) => Key::DiagramTooLargeUncounted,
@@ -575,7 +577,7 @@ fn summary(lang: Lang, scene: &DiagramScene, counts: &Counts) -> String {
                     .map(|participant| spoken(&participant.label.text))
                     .collect::<Vec<_>>()
                     .join(", "),
-                SceneBody::Flowchart(_) => String::new(),
+                SceneBody::Flowchart(_) | SceneBody::Pie(_) => String::new(),
             };
             fill(
                 t(lang, Key::A11yDiagramSequence),
@@ -596,6 +598,15 @@ fn summary(lang: Lang, scene: &DiagramScene, counts: &Counts) -> String {
                 ],
             )
         }
+        Counts::Pie { slices } => fill(
+            t(lang, Key::A11yDiagramPie),
+            &[&fragment(
+                lang,
+                Key::A11yDiagramSlicesOne,
+                Key::A11yDiagramSlicesMany,
+                *slices,
+            )],
+        ),
     }
 }
 
@@ -622,6 +633,14 @@ fn item_text(lang: Lang, item: &NarrationItem) -> String {
         NarrationItem::Message { from, text, to } => {
             fill(t(lang, Key::A11yDiagramMessage), &[from, text, to])
         }
+        NarrationItem::Slice {
+            label,
+            value,
+            percent,
+        } => fill(
+            t(lang, Key::A11yDiagramSlice),
+            &[label, value, &number::decimal(lang, u64::from(*percent))],
+        ),
     }
 }
 

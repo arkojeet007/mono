@@ -40,6 +40,13 @@ pub enum NarrationItem {
         text: String,
         to: String,
     },
+    /// A pie slice: *Dogs, 386 (82%)*. `value` is the number as written,
+    /// without a trailing `.0`.
+    Slice {
+        label: String,
+        value: String,
+        percent: u32,
+    },
 }
 
 /// The narration of `scene`.
@@ -91,6 +98,15 @@ pub fn narrate(scene: &DiagramScene) -> Narration {
                 })
                 .collect()
         }
+        SceneBody::Pie(pie) => pie
+            .slices
+            .iter()
+            .map(|slice| NarrationItem::Slice {
+                label: spoken(&slice.label),
+                value: slice.value.to_string(),
+                percent: slice.percent,
+            })
+            .collect(),
     };
     Narration {
         title: scene.acc_title.clone(),

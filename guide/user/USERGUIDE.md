@@ -4051,8 +4051,10 @@ drawing is derived from it: it is never stored or synced, so every device
 draws its own, and a page with a diagram opens as fast as one with a picture.
 
 Koru draws **flowcharts** (`flowchart` or `graph`, every direction, groups
-included) and **sequence diagrams** (participants, actors, every arrow style,
-notes, activations, and the `loop`, `alt`/`else` and `opt` frames). Every
+included), **sequence diagrams** (participants, actors, every arrow style,
+notes, activations, and the `loop`, `alt`/`else` and `opt` frames) and
+**pie charts** (`pie`, with its `title`, the percent on each slice and a
+legend beside; `showData` puts the values in the legend). Every
 other Mermaid kind keeps its text and says so beneath it: *Koru does not draw
 this kind of diagram yet*. Styling and interaction lines in the text —
 `%%{init}`, `classDef`, `style`, `click` — are kept exactly as written and

@@ -55,6 +55,7 @@ fn kind_of(type_id: &'static str) -> Kind {
     match diagram_type_family_id(type_id).map(|family| family.as_str()) {
         Some("flowchart") => Kind::Flowchart,
         Some("sequence") => Kind::Sequence,
+        Some("pie") => Kind::Pie,
         _ => Kind::Other(type_id.to_owned()),
     }
 }
@@ -199,6 +200,9 @@ fn parse_checked(
                 .count(),
             notes: model.notes.len(),
         },
+        RenderSemanticModel::Pie(model) => Counts::Pie {
+            slices: model.sections.len(),
+        },
         // A header detected as a kind Koru draws, parsed into something else.
         _ => {
             return Err(Refused::Status(Status::KindNotDrawn {
@@ -209,6 +213,7 @@ fn parse_checked(
     let (count, max) = match counts {
         Counts::Flowchart { nodes, .. } => (nodes, limits.max_nodes),
         Counts::Sequence { messages, .. } => (messages, limits.max_messages),
+        Counts::Pie { slices } => (slices, limits.max_nodes),
     };
     if count > max || policy.check_parsed_render(&parsed).is_err() {
         return Err(Refused::Status(Status::TooLarge {

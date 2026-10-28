@@ -236,14 +236,26 @@ fn a_cache_hit_submits_no_job_and_still_answers() {
 fn a_text_that_does_not_draw_is_answered_and_cached() {
     let worker = worker(Stub::default());
     let client = worker.client();
-    client.request(node(), 3, Arc::from("pie\n  \"a\": 1"));
+    client.request(
+        node(),
+        3,
+        Arc::from(
+            "gantt\n  title A\n  dateFormat YYYY-MM-DD\n  section S\n  T :a1, 2026-01-01, 1d",
+        ),
+    );
     let got = replies(&client, 1);
     assert!(
         matches!(got[0].result, Err(Status::KindNotDrawn { .. })),
         "{:?}",
         got[0].result.as_ref().err()
     );
-    client.request(node(), 3, Arc::from("pie\n  \"a\": 1"));
+    client.request(
+        node(),
+        3,
+        Arc::from(
+            "gantt\n  title A\n  dateFormat YYYY-MM-DD\n  section S\n  T :a1, 2026-01-01, 1d",
+        ),
+    );
     assert_eq!(client.drain().len(), 1, "answered from the cache");
     assert_eq!(worker.counters().snapshot().jobs, 1);
 }

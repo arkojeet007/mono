@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use super::{BAD_ARROW_LINE7, FLOWCHART_SHOWCASE, PIE, chain, stub};
+use super::{BAD_ARROW_LINE7, FLOWCHART_SHOWCASE, GANTT, chain, stub};
 use crate::counters::Counters;
 use crate::inspect::inspect_uncounted;
 use crate::layout::layout_uncounted;
@@ -20,7 +20,7 @@ fn every_answer_lands_once_in_its_column() {
     for text in [
         FLOWCHART_SHOWCASE,
         BAD_ARROW_LINE7,
-        PIE,
+        GANTT,
         "hello world",
         "",
         "  \n",
@@ -52,7 +52,7 @@ fn every_layout_lands_once_with_its_time() {
     assert!(drawn.is_ok());
     counters.record_layout(&drawn, Duration::from_millis(7));
     // A status is a layout that never started; it lands in no failure column.
-    let status = layout_uncounted(PIE, &measure, &limits, &cancel, None);
+    let status = layout_uncounted(GANTT, &measure, &limits, &cancel, None);
     assert!(matches!(status, Err(Fail::Status(_))));
     counters.record_layout(&status, Duration::from_millis(1));
     counters.record_layout(&Err(Fail::Cancelled), Duration::from_millis(3));

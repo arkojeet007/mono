@@ -512,3 +512,40 @@ fn roles_map_to_the_palette() {
     assert_eq!(ink(p, Role::Accent), p.accent);
     assert_eq!(ink(p, Role::Frame), p.panel_border);
 }
+
+const PIE: &str = include_str!("../../../koru-diagram/tests/fixtures/pie.mmd");
+
+/// A pie lays out with the real measurer and paints: the title, the two
+/// percents and the two legend labels shaped once each, and every slice in
+/// a chart colour of its own, cycling past the palette's eight.
+#[test]
+fn a_pie_paints_a_slice_per_section_in_the_chart_colours() {
+    let measure: Arc<dyn TextMeasure> = Arc::new(InterMeasure);
+    let scene = Arc::new(
+        koru_diagram::layout(PIE, &measure, &Limits::default(), &Cancel::new())
+            .expect("the pie lays out"),
+    );
+    let prepared = PreparedDiagram::new(scene);
+    assert_eq!(
+        prepared.shaped_lines(),
+        5,
+        "title, two percents, two legend labels"
+    );
+    let mut out = Scene::new();
+    paint(&prepared, &LIGHT, Affine::IDENTITY, 1.0, &mut out);
+    paint(&prepared, &DARK, Affine::IDENTITY, 0.5, &mut out);
+    let (svg, _) = svg_counted(&prepared, &LIGHT);
+    assert!(svg.contains("<path"), "slices are paths");
+    for index in 0..8u8 {
+        assert_eq!(
+            ink(&LIGHT, Role::Series(index)),
+            LIGHT.chart[index as usize]
+        );
+        assert_eq!(ink(&DARK, Role::Series(index)), DARK.chart[index as usize]);
+    }
+    assert_eq!(
+        ink(&LIGHT, Role::Series(8)),
+        LIGHT.chart[0],
+        "the ninth wears the first"
+    );
+}

@@ -1131,6 +1131,22 @@ fn a_drawn_flowchart_is_read_title_first_then_counts_then_every_arrow() {
     assert_eq!(text, FLOWCHART_NARRATION);
 }
 
+/// A drawn pie is read as its kind and slice count, then each slice with
+/// its value and its share.
+#[test]
+fn a_drawn_pie_is_read_with_its_slices_values_and_shares() {
+    let prepared = laid_out("pie title Pets\n    \"Dogs\" : 386\n    \"Cats\" : 85\n");
+    let read = scene_narration(Lang::En, prepared.scene());
+    assert!(read.starts_with("Diagram, pie, 2 slices."), "{read}");
+    assert!(read.contains("Dogs, 386 (82%)"), "{read}");
+    assert!(read.contains("Cats, 85 (18%)"), "{read}");
+    let german = scene_narration(Lang::De, prepared.scene());
+    assert!(
+        german.starts_with("Diagramm, Kreis, 2 Segmente."),
+        "{german}"
+    );
+}
+
 /// The participants by name, in the order they stand, then the twelve
 /// messages in order — `P` is *Person* and `DB` is *Session store*.
 #[test]

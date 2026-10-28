@@ -12,7 +12,7 @@ use merman::{
 };
 use merman_render::LayoutOptions;
 use merman_render::environment::RenderEnvironment;
-use merman_render::model::{FlowchartLayout, SequenceDiagramLayout};
+use merman_render::model::{FlowchartLayout, PieDiagramLayout, SequenceDiagramLayout};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -20,7 +20,7 @@ use crate::counters::Counters;
 use crate::inspect::{self, Checked, PANIC_CODE, Refused, panic_message};
 use crate::measure::{HostMeasure, RequestLog, TextMeasure};
 use crate::scene::DiagramScene;
-use crate::{Limits, Status, flowchart, sequence};
+use crate::{Limits, Status, flowchart, pie, sequence};
 
 /// The code of a [`Fail::Internal`] for an error merman's layout returned.
 pub(crate) const LAYOUT_CODE: &str = "koru.diagram.layout";
@@ -135,6 +135,7 @@ enum Model {
         Box<merman::diagrams::flowchart::FlowchartRenderContext>,
     ),
     Sequence(Box<merman::diagrams::sequence::SequenceDiagramRenderModel>),
+    Pie(Box<merman::diagrams::pie::PieDiagramRenderModel>),
 }
 
 fn layout_unguarded(
@@ -170,6 +171,7 @@ fn layout_unguarded(
             ),
         ),
         RenderSemanticModel::Sequence(model) => Model::Sequence(Box::new(model.clone())),
+        RenderSemanticModel::Pie(model) => Model::Pie(Box::new(model.clone())),
         // `check` answers a kind Koru does not draw before this.
         _ => {
             return Err(internal(
@@ -207,6 +209,10 @@ fn layout_unguarded(
         Model::Sequence(model) => {
             let typed: SequenceDiagramLayout = typed_layout(&layout, "SequenceDiagram")?;
             sequence::build(&model, typed, counts, measure.as_ref())
+        }
+        Model::Pie(model) => {
+            let typed: PieDiagramLayout = typed_layout(&layout, "PieDiagram")?;
+            pie::build(&model, typed, counts, measure.as_ref())
         }
     }
 }
