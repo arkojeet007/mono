@@ -152,6 +152,8 @@ if /i "%SUB%"=="run-root-signed" goto do_run_root_signed
 if /i "%SUB%"=="stop"    goto do_stop
 if /i "%SUB%"=="release" goto do_release
 if /i "%SUB%"=="mcp"      goto do_mcp
+if /i "%SUB%"=="mcp-add"    goto do_mcp_add
+if /i "%SUB%"=="mcp-remove" goto do_mcp_remove
 if /i "%SUB%"=="voice"    goto do_voice
 if /i "%SUB%"=="agent"    goto do_agent
 if /i "%SUB%"=="document" goto do_document
@@ -526,6 +528,47 @@ if /i "!MCPPASS:~0,7!"==" --root" (
 cargo run -p koru-mcp --!PASS!%ROOTONLY%
 exit /b %ERRORLEVEL%
 
+REM Register this checkout's bridge with Claude Code under a name - "koru"
+REM unless one is given - so testing an agent against a dev build is one verb
+REM rather than a path to type. The debug bridge beside the other binaries,
+REM with the channel root every other verb here uses, so the agent reaches
+REM the store the window shows. Built first: `claude mcp add` records a path
+REM and says nothing when nothing is there yet. `mcp-remove` undoes it.
+REM
+REM The build is the point: the registered path is this checkout's bridge, so
+REM running the verb again after a change ships the change. A bridge an MCP
+REM host still has running holds the exe lock, so it is stopped first, as the
+REM `mcp` verb does; a Claude session already open keeps its old child until
+REM it is restarted or told to reconnect.
+REM
+REM **User scope, not the default local one.** A local entry is keyed to the
+REM directory `claude mcp add` ran in, so a Claude started anywhere else - a
+REM terminal inside Koru, another worktree - does not see it. The bridge is
+REM for this person's every session, whatever directory it starts in.
+:do_mcp_add
+call :mcp_name || exit /b 1
+call :stop_exact_exe "%CD%\target\debug\koru-mcp.exe" || exit /b 1
+cargo build -p koru-mcp || exit /b 1
+claude mcp add --scope user %MCP_NAME% -- "%CD%\target\debug\koru-mcp.exe" serve --stdio%ROOTONLY%
+exit /b %ERRORLEVEL%
+
+:do_mcp_remove
+call :mcp_name || exit /b 1
+claude mcp remove --scope user %MCP_NAME%
+exit /b %ERRORLEVEL%
+
+REM The server name for the two verbs above: the first argument, or "koru".
+REM Needs the `claude` CLI, and says so rather than failing in its voice.
+:mcp_name
+where claude >nul 2>&1
+if errorlevel 1 (
+  echo koru: claude is not on PATH; this verb registers the bridge with Claude Code.
+  exit /b 1
+)
+set "MCP_NAME=koru"
+for /f "tokens=1" %%A in ("%ARGS%") do set "MCP_NAME=%%A"
+exit /b 0
+
 :do_document
 call :ensure_fonts || exit /b 1
 call :announce_environment
@@ -803,6 +846,8 @@ echo   run-root-signed    launch the latest signed rooted Windows notification t
 echo   stop       stop every Koru process on this machine
 echo   release    launch an optimised build
 echo   mcp        check MCP discovery; --console serves stdio in this console
+echo   mcp-add    register this checkout's bridge with Claude Code: mcp-add [name]
+echo   mcp-remove unregister it: mcp-remove [name]; the name defaults to koru
 echo   voice      run or inspect the voice worker (status ^| stop)
 echo   agent      run the Koru Agent in this console; IPC tracing is opt-in
 echo   document   launch the built-in document on its own

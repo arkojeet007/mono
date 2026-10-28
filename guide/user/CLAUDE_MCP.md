@@ -14,6 +14,30 @@ koru.bat run-all --mcp
 Leave Koru Store running. `run-all --mcp` builds and checks the bridge; it does
 not keep an MCP stdio process running. Claude must own that child process.
 
+## Claude Code
+
+The command-line Claude registers the bridge in one step, from the repository
+root:
+
+```bat
+koru.bat mcp-add
+```
+
+(`./koru.sh mcp-add` on macOS and Linux.) It builds `koru-mcp`, then runs
+`claude mcp add --scope user koru -- <repo>\target\debug\koru-mcp.exe serve --stdio`,
+with `--root` added when `KORU_ROOT` is set, so the bridge serves the same
+store the window shows. User scope is deliberate: Claude's default, local
+scope, ties a server to the directory the command ran in, and a Claude
+started anywhere else — a terminal inside Koru, say — does not list it. Give a name to register it as something else —
+`koru.bat mcp-add mcp_test` — and take it away again with
+`koru.bat mcp-remove [name]`. Koru Store has to be running for the tools to
+answer; `claude mcp list` shows what is registered.
+
+Run `mcp-add` again after changing Koru: the build is part of the verb, so the
+registered bridge is always this checkout's latest. A Claude Code session that
+is already open keeps the bridge it started; open a new session, or ask it to
+reconnect with `/mcp`, to get the rebuilt one.
+
 ## Configure Claude
 
 Open `%APPDATA%\Claude\claude_desktop_config.json` and merge this entry into

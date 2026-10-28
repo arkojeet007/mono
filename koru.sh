@@ -327,6 +327,8 @@ usage: ./koru.sh <command> [cargo args...]
   voice-models fetch, repackage and publish the speech models (dry run by default)
   voice-test  launch an isolated stack with both locally served speech models
   mcp        check MCP discovery; --console serves stdio in this terminal
+  mcp-add    register this checkout's bridge with Claude Code: mcp-add [name]
+  mcp-remove unregister it: mcp-remove [name]; the name defaults to koru
   voice      run or inspect the voice worker (status | stop)
   document   launch the built-in document on its own
   dist-local package the whole bundle into dist/cloud/ — local signing, no upload
@@ -677,6 +679,40 @@ mcp_verb() {
   exec cargo run -p koru-mcp -- "${command[@]}"
 }
 
+# Register this checkout's bridge with Claude Code under a name — "koru" unless
+# one is given — so testing an agent against a dev build is one verb rather
+# than a path to type: the debug bridge beside the other binaries, with the
+# channel root every other verb uses, so the agent reaches the store the
+# window shows. Built first: `claude mcp add` records a path and says nothing
+# when nothing is there yet. `mcp-remove` undoes it.
+#
+# User scope, not the default local one: a local entry is keyed to the
+# directory `claude mcp add` ran in, so a Claude started anywhere else — a
+# terminal inside Koru, another worktree — does not see it. The bridge is for
+# this person's every session, whatever directory it starts in.
+mcp_name() {
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "koru: claude is not on PATH; this verb registers the bridge with Claude Code." >&2
+    return 1
+  fi
+  MCP_NAME="${1:-koru}"
+}
+
+mcp_add_verb() {
+  mcp_name "$@" || exit 1
+  cargo build -p koru-mcp || exit 1
+  local -a command=("$PWD/target/debug/koru-mcp" serve --stdio)
+  if [ -n "${KORU_ROOT:-}" ]; then
+    command+=(--root "$KORU_ROOT")
+  fi
+  exec claude mcp add --scope user "$MCP_NAME" -- "${command[@]}"
+}
+
+mcp_remove_verb() {
+  mcp_name "$@" || exit 1
+  exec claude mcp remove --scope user "$MCP_NAME"
+}
+
 # Which Cloud a launch talks to is a file, not a flag you can forget —
 # koru.bat's rule, for koru.bat's reason: a desktop pointed at the wrong API
 # signs in, enables Cloud sync and uploads somebody's pictures to it, and
@@ -826,6 +862,8 @@ case "$sub" in
     ;;
   voice)    voice_verb "$@" ;;
   mcp)      mcp_verb "$@" ;;
+  mcp-add)    mcp_add_verb "$@" ;;
+  mcp-remove) mcp_remove_verb "$@" ;;
   document) ensure_fonts; exec cargo run -p koru-document "$@" ;;
   # The whole package — every shipped binary and all thirty fonts — staged and
   # zipped into dist/cloud/, and then nothing: no signing, no upload. It replaced
