@@ -5968,6 +5968,7 @@ mod tests {
     const BAD_ARROW_LINE7: &str =
         include_str!("../../koru-diagram/tests/fixtures/bad-arrow-line7.mmd");
     const PIE: &str = include_str!("../../koru-diagram/tests/fixtures/pie.mmd");
+    const GANTT: &str = include_str!("../../koru-diagram/tests/fixtures/gantt.mmd");
     const EMPTY_DIAGRAM: &str = include_str!("../../koru-diagram/tests/fixtures/empty.mmd");
 
     /// One node **as `read_document` publishes it** — through `document_json`,
@@ -6047,10 +6048,18 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_koru_does_not_draw_reads_back_as_such() {
+    fn a_pie_chart_reads_back_as_drawn_with_its_slices() {
         assert_eq!(
             published_diagram(Some("mermaid"), PIE),
-            Some(json!({"status": "kind_not_drawn", "kind": "pie"}))
+            Some(json!({"status": "draws", "kind": "pie", "slices": 2}))
+        );
+    }
+
+    #[test]
+    fn a_kind_koru_does_not_draw_reads_back_as_such() {
+        assert_eq!(
+            published_diagram(Some("mermaid"), GANTT),
+            Some(json!({"status": "kind_not_drawn", "kind": "gantt"}))
         );
         // Prose under the mermaid label: no diagram keyword at all.
         assert_eq!(
@@ -6123,11 +6132,11 @@ mod tests {
                     parent_id: root.to_storage(),
                     after_node_id: None,
                     kind: InsertKind::Code,
-                    text: PIE.into(),
+                    text: GANTT.into(),
                 },
                 InitialOperation::SetLanguage {
                     node_id: block.to_storage(),
-                    expected: PIE.into(),
+                    expected: GANTT.into(),
                     language: Some("mermaid".into()),
                 },
             ],
@@ -6136,7 +6145,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             published_node(&doc, block)["diagram"],
-            json!({"status": "kind_not_drawn", "kind": "pie"})
+            json!({"status": "kind_not_drawn", "kind": "gantt"})
         );
     }
 

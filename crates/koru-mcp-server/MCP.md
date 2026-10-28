@@ -385,12 +385,13 @@ text is the diagram, it draws in every open view as it arrives, and a read
 tells you whether it drew.
 
 **What draws today.** Flowcharts — a `flowchart` or `graph` header, in any
-direction, `subgraph` groups included — and sequence diagrams, with their
-notes, activations and `loop`, `alt`/`else` and `opt` frames. Every other
-Mermaid kind (`pie`, `gantt`, `classDiagram`, …) keeps its text and is shown as
-text, with a note that it is not drawn. A flowchart draws up to **800 nodes**
-and a sequence diagram up to **500 messages**; over that the block shows its
-text. The node limit was measured (every generated flowchart of that size
+direction, `subgraph` groups included — sequence diagrams, with their
+notes, activations and `loop`, `alt`/`else` and `opt` frames, and pie charts
+(`pie`, with an optional `title` and `showData`). Every other
+Mermaid kind (`gantt`, `classDiagram`, …) keeps its text and is shown as
+text, with a note that it is not drawn. A flowchart draws up to **800 nodes**,
+a sequence diagram up to **500 messages**, and a pie's slices count against
+the node limit; over that the block shows its text. The node limit was measured (every generated flowchart of that size
 lays out well within a page's open time; denser graphs can still be refused
 by the layout engine's own work budget, which the view reports as too large);
 the status below reports the count, so a client never has to know the numbers.
@@ -415,17 +416,18 @@ nodes, so read the document after an edit to see whether the change drew.
 
 | `status` | beside it | meaning, and what to do |
 | --- | --- | --- |
-| `draws` | `kind` — `flowchart` or `sequence` — and its counts: `nodes`, `edges`, `groups` for a flowchart; `participants`, `messages`, `notes` for a sequence diagram | The block draws. Nothing to do. |
+| `draws` | `kind` — `flowchart`, `sequence` or `pie` — and its counts: `nodes`, `edges`, `groups` for a flowchart; `participants`, `messages`, `notes` for a sequence diagram; `slices` for a pie | The block draws. Nothing to do. |
 | `not_parsed` | `line`, `message`, `code` | The parser could not read the text. `line` is the 1-based line of the error in the text as read, front matter included — for a missing `end`, the last non-empty line; `message` is the parser's own English; `code` is its stable diagnostic code. Fix that line with `replace_text` and read again. |
-| `kind_not_drawn` | `kind` — the Mermaid type id, or `null` when the text opens with no diagram keyword | Not a kind Koru draws yet. The text stays and is shown as text; leave it, or rewrite it as a flowchart or a sequence diagram. |
-| `too_large` | `kind`, `count` | Over the size limit. `count` is the nodes of a flowchart or the messages of a sequence diagram, and `0` when the source was too large to parse at all. Draw fewer boxes or messages, or split the diagram across blocks. |
+| `kind_not_drawn` | `kind` — the Mermaid type id, or `null` when the text opens with no diagram keyword | Not a kind Koru draws yet. The text stays and is shown as text; leave it, or rewrite it as a flowchart, a sequence diagram or a pie chart. |
+| `too_large` | `kind`, `count` | Over the size limit. `count` is the nodes of a flowchart, the messages of a sequence diagram or the slices of a pie, and `0` when the source was too large to parse at all. Draw fewer boxes or messages, or split the diagram across blocks. |
 | `empty` | — | The block has no text yet. Write the Mermaid source with `replace_text`. |
 
 ```jsonc
 {"status":"draws","kind":"flowchart","nodes":10,"edges":12,"groups":2}
 {"status":"draws","kind":"sequence","participants":4,"messages":12,"notes":2}
 {"status":"not_parsed","line":7,"message":"Diagram parse error …","code":"merman.parse.diagram_parse"}
-{"status":"kind_not_drawn","kind":"pie"}
+{"status":"draws","kind":"pie","slices":2}
+{"status":"kind_not_drawn","kind":"gantt"}
 {"status":"kind_not_drawn","kind":null}
 {"status":"too_large","kind":"flowchart","count":1000}
 {"status":"empty"}
