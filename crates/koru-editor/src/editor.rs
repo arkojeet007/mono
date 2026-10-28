@@ -1352,9 +1352,12 @@ pub trait Editing {
         self.view().scroll_anim.is_some() || self.drag_autoscroll_velocity() != 0.0
     }
 
-    /// Signed scroll velocity for a live selection drag at a viewport edge.
+    /// Signed scroll velocity for a live selection drag, or a row drag, at a
+    /// viewport edge. A block dragged to the bottom of the window used to
+    /// stop there: the page did not scroll, so it could not be moved below
+    /// what was in view.
     fn drag_autoscroll_velocity(&self) -> f32 {
-        if !self.view().dragging {
+        if !self.view().dragging && self.view().drag_row.is_none() {
             return 0.0;
         }
         let view = self.view();
@@ -1407,6 +1410,18 @@ pub trait Editing {
         let (x, y) = self.view().pointer;
         let cx = x - self.view().content_x;
         let doc_y = y + self.view().scroll;
+        // A row drag: the drop target follows the pointer into the newly
+        // exposed rows, the same way `mouse_move` tracks it.
+        if self.view().drag_row.is_some() {
+            let to = self
+                .body_mut()
+                .row_near_y(doc_y)
+                .max(self.body().first_body_row());
+            let drag = self.view_mut().drag_row.as_mut().expect("checked above");
+            let changed = drag.to != to;
+            drag.to = to;
+            return true || changed;
+        }
         self.drag_selection_to(cx, doc_y)
     }
 
@@ -11288,6 +11303,44 @@ mod tests {
 
         e.mouse_down(&mut ws, 200.0, middle_of(&e, 0), true);
         assert_eq!(selected(&e), vec![2], "a second Ctrl+click toggles off");
+    }
+
+    /// A row dragged by its grip to the bottom edge scrolls the page and the
+    /// drop target follows the pointer into the rows that come into view.
+    /// It stopped at the edge, so a block could not be moved below what was
+    /// on screen.
+    #[test]
+    fn dragging_a_row_at_the_document_edge_scrolls_and_moves_the_drop_target() {
+        let (mut ws, mut e) = overflowing_editor();
+        let grip = e.grip_rect(1).expect("a body row has a grip");
+        e.mouse_down(
+            &mut ws,
+            e.view.content_x + grip.x + grip.w * 0.5,
+            grip.y + grip.h * 0.5 - e.view.scroll,
+            false,
+        );
+        assert_eq!(
+            e.view.drag_row.map(|d| d.from),
+            Some(1),
+            "the grip starts a drag"
+        );
+        let floor = e.view.chrome_h + e.view.content_viewport_h() - 1.0;
+        e.mouse_move(200.0, floor);
+        let to_before = e.view.drag_row.unwrap().to;
+        assert!(e.is_scroll_animating(), "the edge keeps requesting frames");
+
+        let now = Instant::now();
+        e.advance_drag_autoscroll(now);
+        e.advance_drag_autoscroll(now + Duration::from_millis(200));
+
+        assert!(e.view.scroll > 0.0, "the page scrolled under the pointer");
+        assert!(
+            e.view.drag_row.unwrap().to > to_before,
+            "the drop target moved down with the page"
+        );
+        e.mouse_up(&mut ws);
+        assert!(e.view.drag_row.is_none());
+        assert!(!e.is_scroll_animating(), "release stops the edge wakeups");
     }
 
     #[test]
