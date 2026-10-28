@@ -9,6 +9,9 @@
 //! for color too: presentation lives in the theme, the document stores the
 //! name), through [`Outcome::SetAttr`] / [`Outcome::ClearAttr`].
 //!
+//! The same nine rows tint a callout's box, opened with
+//! [`ColorPicker::for_callout`]; that commits [`Outcome::SetCalloutTint`].
+//!
 //! [`LanguagePicker`]: super::language_picker::LanguagePicker
 
 use winit::keyboard::NamedKey;
@@ -37,6 +40,9 @@ pub struct ColorPicker {
     pub sel: usize,
     /// Measured from the labels; floored by `panel_size`.
     pub width: f32,
+    /// Whether the choice tints a callout box rather than setting
+    /// `koru.color` — see [`ColorPicker::for_callout`].
+    pub callout: bool,
 }
 
 impl ColorPicker {
@@ -56,6 +62,17 @@ impl ColorPicker {
             current,
             sel,
             width: 0.0,
+            callout: false,
+        }
+    }
+
+    /// Open for the rows of one callout box, `current` being its tint. The
+    /// rows, the order and the Clear row are the attribute picker's; only
+    /// what a choice commits differs.
+    pub fn for_callout(trigger: Trigger, nodes: Vec<NodeId>, current: Option<AccentColor>) -> Self {
+        Self {
+            callout: true,
+            ..Self::open_for(trigger, nodes, current)
         }
     }
 
@@ -119,6 +136,12 @@ impl ColorPicker {
     }
 
     fn choose(&self, i: usize) -> Outcome {
+        if self.callout {
+            return match self.row(i) {
+                Some(tint) => Outcome::SetCalloutTint(self.nodes.clone(), tint),
+                None => Outcome::Close,
+            };
+        }
         match self.row(i) {
             Some(None) => Outcome::ClearAttr(self.nodes.clone(), KEY_COLOR.to_owned()),
             Some(Some(token)) => Outcome::SetAttr(
@@ -165,6 +188,17 @@ mod tests {
         assert!(matches!(
             p.choose(0),
             Outcome::ClearAttr(_, key) if key == KEY_COLOR
+        ));
+    }
+
+    #[test]
+    fn a_callout_picker_commits_a_tint_not_an_attribute() {
+        let p = ColorPicker::for_callout(Trigger::at_start(), nodes(), Some(AccentColor::Blue));
+        assert!(p.offers_clear());
+        assert!(matches!(p.choose(0), Outcome::SetCalloutTint(_, None)));
+        assert!(matches!(
+            p.choose(1),
+            Outcome::SetCalloutTint(_, Some(AccentColor::Red))
         ));
     }
 

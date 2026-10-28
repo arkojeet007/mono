@@ -28,6 +28,13 @@ pub enum Kind {
     /// it into another quote, but hierarchy belongs to structural blocks
     /// rather than to the quotation's visual inset.
     Quote,
+    /// A highlighted box in a document, drawn tinted with an icon. A
+    /// container like [`ListBlock`](Kind::ListBlock): it carries no text of
+    /// its own, and its children are the lines inside it — paragraphs, and
+    /// lists with their items. The icon and tint live on the container
+    /// ([`crate::callout`]). Never a row of its own; the editor draws the
+    /// box around its children's rows.
+    Callout,
     /// Its text is the title; its children are the body.
     Document,
     /// A named, opaque workspace file. Its bytes live in the blob store and
@@ -81,7 +88,12 @@ impl Kind {
     pub fn accepts_children(self) -> bool {
         matches!(
             self,
-            Self::Task | Self::Paragraph | Self::Document | Self::ListBlock | Self::Trash
+            Self::Task
+                | Self::Paragraph
+                | Self::Callout
+                | Self::Document
+                | Self::ListBlock
+                | Self::Trash
         )
     }
 
@@ -93,6 +105,7 @@ impl Kind {
             Self::Task
             | Self::Paragraph
             | Self::Quote
+            | Self::Callout
             | Self::Document
             | Self::ListBlock
             | Self::Table
@@ -127,6 +140,7 @@ impl Kind {
             Self::Task => "task",
             Self::Paragraph => "paragraph",
             Self::Quote => "quote",
+            Self::Callout => "callout",
             Self::Document => "document",
             Self::File => "file",
             Self::ListBlock => "listblock",
@@ -145,6 +159,7 @@ impl Kind {
             "task" => Self::Task,
             "paragraph" => Self::Paragraph,
             "quote" => Self::Quote,
+            "callout" => Self::Callout,
             "document" => Self::Document,
             "file" => Self::File,
             "listblock" => Self::ListBlock,
@@ -879,6 +894,16 @@ impl Node {
         Self::new(Kind::Quote, Content::text(text))
     }
 
+    /// A callout box, empty: its lines are inserted under it. `icon` is one
+    /// emoji (`None` is the default) and `tint` an `AccentColor` token
+    /// (`None` is the default) — see [`crate::callout`].
+    pub fn callout(icon: Option<&str>, tint: Option<&str>) -> Result<Self, ShapeError> {
+        let mut node = Self::new(Kind::Callout, Content::text(""))?;
+        node.meta.icon = icon.filter(|icon| !icon.is_empty()).map(str::to_owned);
+        node.meta.colour = tint.filter(|tint| !tint.is_empty()).map(str::to_owned);
+        Ok(node)
+    }
+
     /// A code block. Its text may span many lines — newlines are legal for
     /// [`Kind::Code`], and parley treats each as a mandatory break inside one
     /// `Layout`. The grammar is set separately via `NodeMeta::language`.
@@ -955,8 +980,11 @@ impl Node {
                 return Err(ShapeError::NewlineInText);
             }
             // A divider is text-shaped so it can sit in a body, but it carries
-            // no text of its own — a rule with prose on it is not a rule.
-            if kind == Kind::Divider && !text.is_empty() {
+            // no text of its own — a rule with prose on it is not a rule. A
+            // callout is a container the same way: its lines are its
+            // children, and text on the box itself would be a line nothing
+            // can edit.
+            if matches!(kind, Kind::Divider | Kind::Callout) && !text.is_empty() {
                 return Err(ShapeError::NonEmptyText { kind });
             }
         }

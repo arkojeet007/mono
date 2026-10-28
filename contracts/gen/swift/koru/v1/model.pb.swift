@@ -8,6 +8,8 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+// SPDX-License-Identifier: MPL-2.0
+
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -38,6 +40,7 @@ public nonisolated enum KORBlockKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   case canvas // = 8
   case embed // = 9
   case contact // = 10
+  case callout // = 11
   case UNRECOGNIZED(Int)
 
   public init() {
@@ -57,6 +60,7 @@ public nonisolated enum KORBlockKind: SwiftProtobuf.Enum, Swift.CaseIterable {
     case 8: self = .canvas
     case 9: self = .embed
     case 10: self = .contact
+    case 11: self = .callout
     default: self = .UNRECOGNIZED(rawValue)
     }
   }
@@ -74,6 +78,7 @@ public nonisolated enum KORBlockKind: SwiftProtobuf.Enum, Swift.CaseIterable {
     case .canvas: return 8
     case .embed: return 9
     case .contact: return 10
+    case .callout: return 11
     case .UNRECOGNIZED(let i): return i
     }
   }
@@ -91,6 +96,7 @@ public nonisolated enum KORBlockKind: SwiftProtobuf.Enum, Swift.CaseIterable {
     .canvas,
     .embed,
     .contact,
+    .callout,
   ]
 
 }
@@ -605,6 +611,19 @@ public nonisolated struct KORParagraphPayload: Sendable {
   fileprivate var _richText: KORRichText? = nil
 }
 
+/// A callout box. It has no text of its own: its icon and tint are
+/// BlockProperties (icon, color), and the lines inside the box are the blocks
+/// whose parent_id is this block, as with a list.
+public nonisolated struct KORCalloutPayload: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 public nonisolated struct KORTaskPayload: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -849,7 +868,7 @@ public nonisolated struct KORDocumentProjection: Sendable {
 fileprivate nonisolated let _protobuf_package = "koru.v1"
 
 nonisolated extension KORBlockKind: SwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0BLOCK_KIND_UNSPECIFIED\0\u{1}BLOCK_KIND_PARAGRAPH\0\u{1}BLOCK_KIND_TASK\0\u{1}BLOCK_KIND_LIST\0\u{1}BLOCK_KIND_IMAGE\0\u{1}BLOCK_KIND_CODE\0\u{1}BLOCK_KIND_TABLE\0\u{1}BLOCK_KIND_DIVIDER\0\u{1}BLOCK_KIND_CANVAS\0\u{1}BLOCK_KIND_EMBED\0\u{1}BLOCK_KIND_CONTACT\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0BLOCK_KIND_UNSPECIFIED\0\u{1}BLOCK_KIND_PARAGRAPH\0\u{1}BLOCK_KIND_TASK\0\u{1}BLOCK_KIND_LIST\0\u{1}BLOCK_KIND_IMAGE\0\u{1}BLOCK_KIND_CODE\0\u{1}BLOCK_KIND_TABLE\0\u{1}BLOCK_KIND_DIVIDER\0\u{1}BLOCK_KIND_CANVAS\0\u{1}BLOCK_KIND_EMBED\0\u{1}BLOCK_KIND_CONTACT\0\u{1}BLOCK_KIND_CALLOUT\0")
 }
 
 nonisolated extension KORAlignment: SwiftProtobuf._ProtoNameProviding {
@@ -1458,6 +1477,25 @@ nonisolated extension KORParagraphPayload: SwiftProtobuf.Message, SwiftProtobuf.
 
   public static func ==(lhs: KORParagraphPayload, rhs: KORParagraphPayload) -> Bool {
     if lhs._richText != rhs._richText {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension KORCalloutPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CalloutPayload"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: KORCalloutPayload, rhs: KORCalloutPayload) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

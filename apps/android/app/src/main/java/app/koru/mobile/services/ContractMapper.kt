@@ -4,6 +4,7 @@ package app.koru.mobile.services
 
 import app.koru.contract.v1.BlockEnvelope
 import app.koru.contract.v1.BlockKind
+import app.koru.contract.v1.CalloutPayload
 import app.koru.contract.v1.CodePayload
 import app.koru.contract.v1.ContactPayload
 import app.koru.contract.v1.DividerPayload
@@ -73,6 +74,11 @@ object ContractMapper {
             BlockKind.BLOCK_KIND_PARAGRAPH_VALUE -> {
                 requireType(payload.typeUrl, "koru.v1.ParagraphPayload")
                 BlockContent.Paragraph(richText(ParagraphPayload.parseFrom(payload.value).richText))
+            }
+            BlockKind.BLOCK_KIND_CALLOUT_VALUE -> {
+                requireType(payload.typeUrl, "koru.v1.CalloutPayload")
+                CalloutPayload.parseFrom(payload.value)
+                BlockContent.Callout
             }
             BlockKind.BLOCK_KIND_TASK_VALUE -> {
                 requireType(payload.typeUrl, "koru.v1.TaskPayload")

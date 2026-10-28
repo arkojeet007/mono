@@ -228,8 +228,8 @@ fn what_is_written_is_the_approved_shape() {
     );
     assert_eq!(
         koru_core::schema::SCHEMA_VERSION,
-        4,
-        "the pill needs no content-schema bump"
+        5,
+        "the pill needs no content-schema bump (5 is the callout's, not the pill's)"
     );
 }
 

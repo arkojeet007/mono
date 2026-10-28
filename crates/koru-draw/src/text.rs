@@ -559,7 +559,7 @@ impl TextEngine {
         // Icon fills the capital band (baseline ←→ top of M).
         let icon_slot = cap_height_of(&label_layout);
         let icon = if let Some(emoji) = page_emoji {
-            Some(self.page_emoji_layout(emoji, icon_slot))
+            Some(self.emoji_layout(emoji, icon_slot))
         } else if kind == PillKind::Link {
             Some(self.icon_layout(crate::icons::for_scheme(url), icon_slot.max(1.0)))
         } else if kind == PillKind::File {
@@ -597,8 +597,9 @@ impl TextEngine {
         size
     }
 
-    /// A page emoji sized into the pill icon slot (cap-height band).
-    fn page_emoji_layout(&mut self, emoji: &str, slot: f32) -> Layout<Brush> {
+    /// A color emoji sized into a square icon `slot` — a page emoji in a
+    /// pill's icon band, a callout's icon in its box.
+    pub fn emoji_layout(&mut self, emoji: &str, slot: f32) -> Layout<Brush> {
         // Colour emoji fill their em box more than outline icons — a touch
         // under the slot keeps them from reading larger than a document mark.
         let size = (slot * 0.95).max(8.0);

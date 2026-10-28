@@ -4,6 +4,7 @@
 
 use super::*;
 use koru_core::node::{AttrValue, Kind, Node};
+use koru_core::schema::Parent;
 use koru_core::{Heading, Mark, MarkSet, WorkspaceId};
 use koru_draw::theme::ViewMode;
 use koru_window::snap;
@@ -704,6 +705,65 @@ fn rich_paste_rebuilds_numbered_and_nested_bullet_lists() {
         view.editor.body.focused().map(|row| row.text.as_str()),
         Some("after"),
         "the caret lands on the final visible block, not a hidden list container"
+    );
+}
+
+/// A pasted callout box lands as a box node carrying the look, with what
+/// was inside it as the box's children — its lines and a list — and the
+/// block after the box's end as the box's sibling.
+#[test]
+fn rich_paste_nests_a_callout_box_under_its_node() {
+    let (mut ws, mut view) = document();
+    let blocks = vec![
+        RichBlock::CalloutStart {
+            icon: Some("💡".into()),
+            tint: Some("red".into()),
+        },
+        RichBlock::Text(RichTextBlock::from_text("Keep it")),
+        RichBlock::Text(RichTextBlock::from_text("inside")),
+        RichBlock::Text(RichTextBlock {
+            text: "one".into(),
+            list: Some(RichListSpec {
+                style: koru_core::ListStyle::Bullet,
+                depth: 0,
+            }),
+            ..Default::default()
+        }),
+        RichBlock::CalloutEnd,
+        RichBlock::Text(RichTextBlock::from_text("after")),
+    ];
+
+    View::paste_rich(&mut view, &mut ws, None, &blocks);
+
+    let row = |text: &str| {
+        view.editor
+            .body
+            .rows
+            .iter()
+            .find(|row| row.text == text)
+            .unwrap_or_else(|| panic!("no row {text:?}"))
+            .id
+    };
+    let Parent::Node(callout) = ws.parent(row("Keep it")).unwrap() else {
+        panic!("the first line is inside the box");
+    };
+    let node = ws.read(callout).unwrap();
+    assert_eq!(node.kind, Kind::Callout);
+    assert_eq!(node.content.as_text(), Some(""), "the box carries no text");
+    assert_eq!(koru_core::callout::icon(&node.meta), "💡");
+    assert_eq!(
+        koru_core::callout::tint(&node.meta),
+        Some(koru_core::AccentColor::Red)
+    );
+    let inside = ws.children(Parent::Node(callout)).unwrap();
+    assert_eq!(inside.len(), 3, "two paragraphs and a list block");
+    assert_eq!(inside[0], row("Keep it"));
+    assert_eq!(inside[1], row("inside"));
+    assert_eq!(ws.read(inside[2]).unwrap().kind, Kind::ListBlock);
+    assert_eq!(ws.parent(row("one")).unwrap(), Parent::Node(inside[2]));
+    assert_eq!(
+        ws.parent(row("after")).unwrap(),
+        ws.parent(callout).unwrap()
     );
 }
 

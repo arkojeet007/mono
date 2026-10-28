@@ -611,6 +611,7 @@ private fun nativeBlock(value: app.koru.contract.api.v1.Block, workspace: Worksp
     val content = when (value.kind) {
         "paragraph" -> BlockContent.Paragraph(requireNotNull(rich))
         "quote" -> BlockContent.Quote(requireNotNull(rich))
+        "callout" -> BlockContent.Callout
         "task" -> BlockContent.Task(requireNotNull(rich))
         "listblock" -> BlockContent.ListContainer(properties.listStyle ?: ListStyle.Bullet)
         "image" -> BlockContent.Image(requireNotNull(blob))
@@ -846,6 +847,7 @@ private fun nativeBlock(value: JSONObject, workspace: WorkspaceId): Block {
     val content = when (kind) {
         "paragraph" -> BlockContent.Paragraph(requireNotNull(rich))
         "quote" -> BlockContent.Quote(requireNotNull(rich))
+        "callout" -> BlockContent.Callout
         "task" -> BlockContent.Task(requireNotNull(rich))
         "listblock" -> BlockContent.ListContainer(properties.listStyle ?: ListStyle.Bullet)
         "image" -> BlockContent.Image(requireNotNull(blob))

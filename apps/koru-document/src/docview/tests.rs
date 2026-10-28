@@ -16,7 +16,7 @@ use koru_editor::{Editing, Editor};
 /// nothing can press.
 #[test]
 fn every_command_has_an_icon_and_a_tooltip() {
-    const ALL: [Command; 24] = [
+    const ALL: [Command; 25] = [
         Command::Undo,
         Command::Redo,
         Command::H1,
@@ -27,6 +27,7 @@ fn every_command_has_an_icon_and_a_tooltip() {
         Command::BulletedList,
         Command::NumberedList,
         Command::Tasks,
+        Command::Callout,
         Command::Divider,
         Command::Bold,
         Command::Italic,

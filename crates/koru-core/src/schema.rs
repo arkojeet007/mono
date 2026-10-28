@@ -151,7 +151,7 @@ pub(crate) const K_SCHEMA: &str = "schema_version";
 /// below a root it is derived rather than stored.
 const K_DOCUMENT: &str = "document";
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// What a document carrying no marker *is*.
 ///
@@ -1616,6 +1616,54 @@ impl WorkspaceDoc {
         })
     }
 
+    /// Put contiguous siblings into one new [`Kind::Callout`] box, created at
+    /// the first target's position with the targets as its children in order
+    /// — the callout counterpart of [`wrap_in_list_block_many`](Self::wrap_in_list_block_many),
+    /// with the same all-or-nothing validation. The box starts with the
+    /// default look; [`set_icon`](Self::set_icon) and
+    /// [`set_color`](Self::set_color) change it.
+    pub fn wrap_in_callout_many(&mut self, targets: &[NodeId]) -> Result<NodeId> {
+        self.atomic(|ws| {
+            let first = *targets
+                .first()
+                .ok_or(StoreError::Malformed("empty callout selection"))?;
+            let parent = ws.parent(first)?;
+            let index = ws.sibling_index(first)?;
+            for (offset, &target) in targets.iter().enumerate() {
+                if ws.parent(target)? != parent || ws.sibling_index(target)? != index + offset {
+                    return Err(StoreError::Malformed(
+                        "callout selection must be contiguous siblings",
+                    ));
+                }
+            }
+            let callout = ws.insert(parent, Node::callout(None, None)?)?;
+            ws.move_node(callout, parent, index)?;
+            for (at, &target) in targets.iter().enumerate() {
+                ws.move_node(target, Parent::Node(callout), at)?;
+            }
+            Ok(callout)
+        })
+    }
+
+    /// Take a [`Kind::Callout`] box away and keep its lines: the children
+    /// move into the box's own slot, in order, and the empty box is deleted.
+    /// Returns the lines, now siblings where the box was.
+    pub fn dissolve_callout(&mut self, callout: NodeId) -> Result<Vec<NodeId>> {
+        self.atomic(|ws| {
+            if ws.kind_of(callout) != Some(Kind::Callout) {
+                return Err(StoreError::Malformed("not a callout"));
+            }
+            let parent = ws.parent(callout)?;
+            let index = ws.sibling_index(callout)?;
+            let children = ws.children(Parent::Node(callout))?;
+            for (offset, &child) in children.iter().enumerate() {
+                ws.move_node(child, parent, index + 1 + offset)?;
+            }
+            ws.delete(callout)?;
+            Ok(children)
+        })
+    }
+
     /// Merge a ListBlock with compatible ListBlock siblings immediately before
     /// and after it. The surviving container keeps every item in visible order.
     ///
@@ -2569,12 +2617,13 @@ impl WorkspaceDoc {
 
     /// Raise an older workspace's marker only when a write introduces content
     /// that the older schema cannot understand. Ordinary edits keep their
-    /// existing marker; adding a Divider or Quote makes the compatibility gate
-    /// tell the corresponding older build to open read-only.
+    /// existing marker; adding a Divider, Quote or Callout makes the
+    /// compatibility gate tell the corresponding older build to open read-only.
     fn record_schema_for_kind(&self, kind: Kind) -> Result<()> {
         let required = match kind {
             Kind::Divider => 2,
             Kind::Quote => 3,
+            Kind::Callout => 5,
             _ => return Ok(()),
         };
         if self.effective_schema_version() < required {
@@ -2625,6 +2674,21 @@ impl WorkspaceDoc {
     pub fn set_done(&mut self, target: NodeId, done: bool) -> Result<()> {
         let tid = self.tree_id(target)?;
         self.nodes().get_meta(tid)?.insert(K_DONE, done)?;
+        self.doc.commit();
+        Ok(())
+    }
+
+    /// Set a node's presentation color — an `AccentColor` token, never RGB.
+    /// A callout's tint is the one reader today ([`crate::callout`]). `None`
+    /// (or empty) removes it, which draws the default.
+    pub fn set_color(&mut self, target: NodeId, color: Option<&str>) -> Result<()> {
+        let tid = self.tree_id(target)?;
+        let meta = self.nodes().get_meta(tid)?;
+        match color {
+            Some(color) if !color.is_empty() => meta.insert(K_COLOUR, color)?,
+            Some(_) | None if meta.get(K_COLOUR).is_some() => meta.delete(K_COLOUR)?,
+            Some(_) | None => {}
+        }
         self.doc.commit();
         Ok(())
     }
@@ -3651,7 +3715,7 @@ impl WorkspaceDoc {
     /// **The library root's list omits the trash.** That single omission is what
     /// makes the trash invisible everywhere else: `walk_from` is built on this,
     /// and so is every enumerating consumer — the explore column, `backlinks`,
-    /// `walk_all`, `prune_empty_list_blocks`, find-or-create, the document
+    /// `walk_all`, `prune_empty_containers`, find-or-create, the document
     /// count. One filter here rather than a check at each of them, because a
     /// check at each of them is a check somebody will forget to add to the
     /// eighth.
@@ -3834,16 +3898,38 @@ impl WorkspaceDoc {
         Ok((out, repeats))
     }
 
-    /// Delete every `Kind::ListBlock` that has no children — a cleanup pass for
-    /// lists left empty when their last item exited. Called on document open so
-    /// stale containers from a previous session do not accumulate in explore.
-    pub fn prune_empty_list_blocks(&mut self) -> Result<()> {
+    /// Delete `parent` when it is a [`Kind::Callout`] left with no children —
+    /// a box with nothing inside has no row to reach it from — and the box
+    /// around it when that is now empty too. The edits that can empty a box
+    /// (joining its last line into the row above, deleting its rows) call
+    /// this with the parent the rows had. Returns how many boxes went.
+    pub fn prune_empty_callout(&mut self, parent: Parent) -> Result<usize> {
+        let mut pruned = 0;
+        let mut at = parent;
+        while let Parent::Node(id) = at {
+            if self.kind_of(id) != Some(Kind::Callout) || !self.children(at)?.is_empty() {
+                break;
+            }
+            let above = self.parent(id)?;
+            self.delete(id)?;
+            pruned += 1;
+            at = above;
+        }
+        Ok(pruned)
+    }
+
+    /// Delete every container — a `Kind::ListBlock` or a `Kind::Callout` —
+    /// that has no children: a cleanup pass for lists left empty when their
+    /// last item exited and boxes left empty by an older build. Called on
+    /// document open so stale containers from a previous session do not
+    /// accumulate in explore.
+    pub fn prune_empty_containers(&mut self) -> Result<()> {
         let empty: Vec<NodeId> = self
             .walk_all()?
             .into_iter()
             .filter_map(|(id, _)| {
                 let node = self.read(id).ok()?;
-                (node.kind == Kind::ListBlock
+                (matches!(node.kind, Kind::ListBlock | Kind::Callout)
                     && self
                         .children(Parent::Node(id))
                         .unwrap_or_default()

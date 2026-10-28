@@ -8,6 +8,8 @@ publish = false
 description = "Markdown importer for Koru documents."
 
 [dependencies]
+# Recognising the emoji a callout's exported text leads with.
+emojis.workspace = true
 koru-link = { path = "../koru-link" }
 koru-import = { path = "../koru-import" }
 pulldown-cmark.workspace = true

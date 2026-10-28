@@ -97,6 +97,7 @@ Chords are shown as this platform writes them.
 | `Ctrl+Shift+8` | Bulleted list |
 | `Ctrl+Shift+7` | Numbered list |
 | `Ctrl+Shift+9` | Checklist |
+| `Ctrl+Shift+6` | Callout |
 | `Ctrl+\` | Clear formatting |
 | `Ctrl+Shift+=` | Superscript |
 | `Ctrl+Shift+-` | Subscript |

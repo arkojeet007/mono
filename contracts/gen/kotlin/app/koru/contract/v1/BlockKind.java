@@ -55,6 +55,10 @@ public enum BlockKind
    * <code>BLOCK_KIND_CONTACT = 10;</code>
    */
   BLOCK_KIND_CONTACT(10),
+  /**
+   * <code>BLOCK_KIND_CALLOUT = 11;</code>
+   */
+  BLOCK_KIND_CALLOUT(11),
   UNRECOGNIZED(-1),
   ;
 
@@ -102,6 +106,10 @@ public enum BlockKind
    * <code>BLOCK_KIND_CONTACT = 10;</code>
    */
   public static final int BLOCK_KIND_CONTACT_VALUE = 10;
+  /**
+   * <code>BLOCK_KIND_CALLOUT = 11;</code>
+   */
+  public static final int BLOCK_KIND_CALLOUT_VALUE = 11;
 
 
   @java.lang.Override
@@ -135,6 +143,7 @@ public enum BlockKind
       case 8: return BLOCK_KIND_CANVAS;
       case 9: return BLOCK_KIND_EMBED;
       case 10: return BLOCK_KIND_CONTACT;
+      case 11: return BLOCK_KIND_CALLOUT;
       default: return null;
     }
   }

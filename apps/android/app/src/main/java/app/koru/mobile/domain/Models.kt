@@ -118,6 +118,14 @@ data class BlockProperties(
 sealed interface BlockContent {
     data class Paragraph(val richText: RichText) : BlockContent
     data class Quote(val richText: RichText) : BlockContent
+    /** A callout box. It has no text of its own: its icon and tint are the
+     *  block's properties (icon, color), and the lines inside the box are
+     *  the blocks whose parentId is this block, as with a list. */
+    data object Callout : BlockContent {
+        /** The icon a callout shows when none is set — the same default
+         *  as koru-core's `callout::DEFAULT_ICON`. */
+        const val DEFAULT_ICON = "💡"
+    }
     data class Task(val richText: RichText) : BlockContent
     data class ListContainer(val style: ListStyle) : BlockContent
     data class Image(val blob: BlobReference) : BlockContent
@@ -139,6 +147,9 @@ data class Block(
     val properties: BlockProperties = BlockProperties(),
     val content: BlockContent,
 )
+
+/** The icon a callout box draws, with the default filled in. */
+fun BlockProperties.calloutIcon(): String = icon?.takeIf { it.isNotBlank() } ?: BlockContent.Callout.DEFAULT_ICON
 
 data class DocumentSnapshot(
     val id: DocumentId,

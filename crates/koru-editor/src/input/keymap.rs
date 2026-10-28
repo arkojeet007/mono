@@ -274,6 +274,12 @@ pub const DEFAULT: &[(Chord, Action)] = &[
         Chord::new(On::Letter('9'), C, S, false),
         Action::SetListStyle(ListStyle::Checkbox),
     ),
+    // A callout box: the digit beside the three list digits, for the one
+    // other block that wraps a selection of rows rather than styling one.
+    (
+        Chord::new(On::Letter('6'), C, S, false),
+        Action::ToggleCallout,
+    ),
     // Ctrl+`\`, and Ctrl+Space is bound to nothing at all. Space is a character
     // key, and a chord on it competes with typing one in a way no other chord
     // here does — `\` is unclaimed, next to Enter, and never typed by accident.
@@ -595,6 +601,12 @@ mod tests {
             resolve(&ch("9"), None, mods),
             Some(Action::SetListStyle(ListStyle::Checkbox))
         );
+    }
+
+    #[test]
+    fn ctrl_shift_6_toggles_a_callout() {
+        let mods = koru_keys::PRIMARY.union(ModifiersState::SHIFT);
+        assert_eq!(resolve(&ch("6"), None, mods), Some(Action::ToggleCallout));
     }
 
     #[test]

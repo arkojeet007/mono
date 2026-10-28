@@ -2577,6 +2577,20 @@ impl AttributeValue {
     }
 }
 
+/// A field that is **absent**, **null** or **a value**, which `Option<T>` alone
+/// cannot tell apart: serde reads absent and null both as `None`. On a field
+/// that also carries `#[serde(default)]`, absent stays `None` and anything
+/// present is wrapped: `Some(None)` for `null`, `Some(Some(value))` otherwise.
+/// Used where leaving a field alone and restoring its default are different
+/// requests, as they are for a callout's icon and color.
+fn set_or_clear<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(inline)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -2671,6 +2685,39 @@ enum EditOperation {
         /// Exact current text returned by `read_document`.
         expected: String,
         language: Option<String>,
+    },
+    /// Set a callout box's look: the emoji beside its first line and the
+    /// accent color of its tint. Both live on the box, so `node_id` is the node
+    /// `read_document` reports as `"kind": "callout"`, never one of its lines,
+    /// and `expected` is its text, which is empty.
+    ///
+    /// Each field stands alone: leave it out to leave it as it is, send `null`
+    /// to restore the default, send a value to set it. At least one is
+    /// required. `icon` is one emoji. `color` is `red`, `orange`, `yellow`,
+    /// `green`, `teal`, `blue`, `purple`, `pink` or `gray` — what `read_document`
+    /// reports as `metadata.colour` — and `colour` is accepted as its spelling.
+    /// A target that is not a callout, a value that is not one emoji and a
+    /// color that is not one of the nine are `invalid_request`, and nothing is
+    /// written.
+    SetCalloutLook {
+        node_id: String,
+        /// Exact current text returned by `read_document`: empty for a callout.
+        expected: String,
+        /// One emoji; `null` restores the default icon.
+        #[serde(
+            default,
+            deserialize_with = "set_or_clear",
+            skip_serializing_if = "Option::is_none"
+        )]
+        icon: Option<Option<String>>,
+        /// An accent token; `null` restores the default tint.
+        #[serde(
+            default,
+            alias = "colour",
+            deserialize_with = "set_or_clear",
+            skip_serializing_if = "Option::is_none"
+        )]
+        color: Option<Option<String>>,
     },
     /// Set one typed attribute on an existing node — a due date, a priority,
     /// an accent color, or a custom key this workspace defines.
@@ -2813,6 +2860,25 @@ enum InitialOperation {
         expected: String,
         language: Option<String>,
     },
+    /// Set the look of a callout inserted earlier in this batch, exactly as
+    /// the edit operation of the same name does.
+    SetCalloutLook {
+        node_id: String,
+        expected: String,
+        #[serde(
+            default,
+            deserialize_with = "set_or_clear",
+            skip_serializing_if = "Option::is_none"
+        )]
+        icon: Option<Option<String>>,
+        #[serde(
+            default,
+            alias = "colour",
+            deserialize_with = "set_or_clear",
+            skip_serializing_if = "Option::is_none"
+        )]
+        color: Option<Option<String>>,
+    },
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -2828,6 +2894,12 @@ enum InsertKind {
     Code,
     Contact,
     Divider,
+    /// A callout box: a container with no text of its own. The inserted node
+    /// is the box; a non-empty `text` becomes a first paragraph inside it,
+    /// and later inserts under it are the rest of the box's lines. It
+    /// arrives with the default icon and tint; no operation here sets either
+    /// yet (see MCP.md).
+    Callout,
 }
 
 impl From<InsertKind> for Kind {
@@ -2841,6 +2913,7 @@ impl From<InsertKind> for Kind {
             InsertKind::Code => Self::Code,
             InsertKind::Contact => Self::Contact,
             InsertKind::Divider => Self::Divider,
+            InsertKind::Callout => Self::Callout,
         }
     }
 }
@@ -3317,12 +3390,28 @@ fn apply_ops(
                 text,
             } => {
                 let kind = Kind::from(*kind);
-                let mut value = Node::new(kind, Content::text(text))?;
+                // A callout is a container with no text of its own: its lines
+                // are its children (MCP.md, "A callout is a box"). One `insert`
+                // still makes a one-line callout — the box, and when `text` is
+                // non-empty, a first paragraph inside it — so `node_id` names
+                // the box, which is what the caller asked for and what later
+                // inserts use as `parent_id`.
+                let (mut value, first_line) = if kind == Kind::Callout {
+                    let line = (!text.is_empty())
+                        .then(|| Node::paragraph(text.as_str()))
+                        .transpose()?;
+                    (Node::callout(None, None)?, line)
+                } else {
+                    (Node::new(kind, Content::text(text))?, None)
+                };
                 value.id = node(node_id)?;
                 let parent = parent(parent_id)?;
                 let index = after_index(doc, parent, after_node_id.as_deref())?;
                 let id = doc.insert(parent, value)?;
                 doc.move_node(id, parent, index)?;
+                if let Some(line) = first_line {
+                    doc.insert(Parent::Node(id), line)?;
+                }
                 // **And what it was created in** (D-2c, SPEC §5(d), ADR-272).
                 // D-2b wired the arrival half of `Move` and parked this arm as
                 // "a separate question nobody has asked yet"; the answer is the
@@ -3471,6 +3560,49 @@ fn apply_ops(
                     ));
                 }
                 doc.set_language(id, language.as_deref())?;
+            }
+            EditOperation::SetCalloutLook {
+                node_id,
+                expected,
+                icon,
+                color,
+            } => {
+                let id = node(node_id)?;
+                validate_expected_text(doc, id, expected, "set_callout_look")?;
+                let current = doc.read(id)?;
+                if current.kind != Kind::Callout {
+                    return Err(ToolError::invalid(
+                        "set_callout_look target must be a callout, the box read_document reports as kind callout",
+                    ));
+                }
+                if icon.is_none() && color.is_none() {
+                    return Err(ToolError::invalid(
+                        "set_callout_look needs icon, color or both; null restores the default",
+                    ));
+                }
+                // Both values are read before either is written, so a color
+                // that is not one of the nine cannot leave the icon changed.
+                let icon = icon
+                    .as_ref()
+                    .map(|icon| callout_icon(icon.as_deref()))
+                    .transpose()?;
+                let color = color
+                    .as_ref()
+                    .map(|color| callout_color(color.as_deref()))
+                    .transpose()?;
+                // A guarded write, like `set_checkbox`: an agent re-asserting
+                // the look a box already has leaves no phantom undo step for
+                // the person at the keyboard.
+                if let Some(icon) = icon
+                    && icon != current.meta.icon.as_deref()
+                {
+                    doc.set_icon(id, icon)?;
+                }
+                if let Some(color) = color
+                    && color != current.meta.colour.as_deref()
+                {
+                    doc.set_color(id, color)?;
+                }
             }
             EditOperation::SetAttribute {
                 node_id,
@@ -3713,6 +3845,25 @@ fn apply_initial_ops(
                     language: language.clone(),
                 }
             }
+            InitialOperation::SetCalloutLook {
+                node_id,
+                expected,
+                icon,
+                color,
+            } => {
+                let target = node(node_id)?;
+                if !inserted.contains(&target) {
+                    return Err(ToolError::invalid(
+                        "initial set_callout_look node_id must name an earlier insert",
+                    ));
+                }
+                EditOperation::SetCalloutLook {
+                    node_id: node_id.clone(),
+                    expected: expected.clone(),
+                    icon: icon.clone(),
+                    color: color.clone(),
+                }
+            }
         };
         // Seeding produces no task activity, and cannot: `InitialOperation`
         // carries no attribute operation at all (there is nothing here that
@@ -3805,6 +3956,41 @@ fn due_value(key: &str, value: AttrValue) -> Result<koru_core::Temporal, ToolErr
         key: key.to_owned(),
         why,
     }))
+}
+
+/// The one emoji a callout's `icon` names, spelled the way Koru stores it, or
+/// `None` for the default. Anything else is refused: the box would draw a
+/// word beside its first line.
+fn callout_icon(icon: Option<&str>) -> Result<Option<&'static str>, ToolError> {
+    let Some(icon) = icon else {
+        return Ok(None);
+    };
+    emojis::get(icon.trim())
+        .map(|emoji| Some(emoji.as_str()))
+        .ok_or_else(|| {
+            ToolError::invalid(format!(
+                "set_callout_look icon must be one emoji, not {icon:?}; null restores the default"
+            ))
+        })
+}
+
+/// The accent token a callout's `color` names, or `None` for the default tint.
+fn callout_color(color: Option<&str>) -> Result<Option<&'static str>, ToolError> {
+    let Some(color) = color else {
+        return Ok(None);
+    };
+    koru_core::AccentColor::parse(color)
+        .map(|accent| Some(accent.as_str()))
+        .ok_or_else(|| {
+            let tokens: Vec<_> = koru_core::AccentColor::ALL
+                .iter()
+                .map(|accent| accent.as_str())
+                .collect();
+            ToolError::invalid(format!(
+                "set_callout_look color must be one of {}, not {color:?}; null restores the default",
+                tokens.join(", ")
+            ))
+        })
 }
 
 fn validate_expected_text(
@@ -4450,7 +4636,7 @@ impl KoruMcp {
     }
     #[tool(
         title = "Create a Koru document",
-        description = "Atomically create, and optionally seed, a complete document before it becomes visible; returns it as read_document does. parent_document_id nests it (absent: the workspace root); kind defaults to page. A UUID idempotency_key replays the same request for seven days. With initial_operations (non-empty; insert, insert_inline, set_done and set_language only) root_node_id is required, a fresh UUID for the title node; every parent is it or an earlier insert, and no blank paragraph is added. Read koru://docs/model before the first mutation.",
+        description = "Atomically create, and optionally seed, a complete document before it becomes visible; returns it as read_document does. parent_document_id nests it (absent: the workspace root); kind defaults to page. A UUID idempotency_key replays the same request for seven days. With initial_operations (non-empty; insert, insert_inline, set_done, set_language and set_callout_look only) root_node_id is required, a fresh UUID for the title node; every parent is it or an earlier insert, and no blank paragraph is added. Read koru://docs/model before the first mutation.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -4476,7 +4662,7 @@ impl KoruMcp {
     }
     #[tool(
         title = "Edit a Koru document",
-        description = "Atomically apply edits, in order, at base_revision from the latest read_document. Read koru://docs/model before the first mutation. Each op on an existing node carries expected, its exact current text; on stale_node or a mismatch, reread and retry. insert mints node_id; parent_id is required and body blocks go under the document-title node, never the absolute CRDT root. after_node_id is a sibling and null means first; numeric ordinals are unsupported. at_utf8 is a UTF-8 byte offset into expected. remove takes the node's whole subtree. set_attribute writes koru.due, koru.priority, koru.color or a workspace's custom key in the value shapes read_document reports: date {value: YYYY-MM-DD}, datetime_zoned {instant_ms, timezone: IANA name}, datetime_floating {wall}. add_tag and remove_tag take a tag name or a tag_id. Unknown fields are errors.",
+        description = "Atomically apply edits, in order, at base_revision from the latest read_document. Read koru://docs/model before the first mutation. Each op on an existing node carries expected, its exact current text; on stale_node or a mismatch, reread and retry. insert mints node_id; parent_id is required and body blocks go under the document-title node, never the absolute CRDT root. after_node_id is a sibling and null means first; numeric ordinals are unsupported. at_utf8 is a UTF-8 byte offset into expected. remove takes the node's whole subtree. set_attribute writes koru.due, koru.priority, koru.color or a workspace's custom key in the value shapes read_document reports: date {value: YYYY-MM-DD}, datetime_zoned {instant_ms, timezone: IANA name}, datetime_floating {wall}. add_tag and remove_tag take a tag name or a tag_id. set_callout_look takes an emoji icon and an accent color token; omit one to keep it, null restores the default. Unknown fields are errors.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -5133,7 +5319,11 @@ mod tests {
     /// 1.0.34 can lose an 8,192-byte chunk of any longer line
     /// (ADR-433-compacttools); 21 typed tools cannot fit under that, so this
     /// holds what was reached and makes growth a decision rather than a drift.
-    const TOOLS_LIST_BUDGET: usize = 17_500;
+    ///
+    /// Growth decided so far: 17,500 to 17,700 for `set_callout_look`, one edit
+    /// operation and one seed operation (ADR-468-callout). The reply was 17,644
+    /// bytes with it.
+    const TOOLS_LIST_BUDGET: usize = 17_700;
 
     /// What crosses the wire is compact: no prose inside a schema except the
     /// generated union summaries, no `$ref`, `$defs`, `$schema`, `title` or
@@ -5585,6 +5775,20 @@ mod tests {
             "{encoded}"
         );
         assert!(encoded.contains("insert_inline"));
+        // A new operation is published with its fields, optional ones marked.
+        // Their order follows the JSON map in use, which is sorted when this
+        // crate is built alone and in declaration order when another crate in
+        // the same build keeps insertion order, so only the shape is pinned.
+        let summary = encoded
+            .split("set_callout_look(")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .expect("a published set_callout_look summary");
+        assert!(summary.starts_with("node_id, expected, "), "{summary}");
+        assert!(
+            summary.contains("icon?") && summary.contains("color?"),
+            "{summary}"
+        );
         assert!(
             !encoded.contains("$ref"),
             "operation variants must be inline"
@@ -5598,6 +5802,7 @@ mod tests {
             "code",
             "contact",
             "divider",
+            "callout",
         ] {
             assert!(encoded.contains(&format!("\"{kind}\"")), "missing {kind}");
         }
@@ -5616,7 +5821,13 @@ mod tests {
         let encoded = serde_json::to_string(&schema).expect("schema text");
 
         assert!(!encoded.contains("$ref"), "seed variants must be inline");
-        for operation in ["insert", "insert_inline", "set_done", "set_language"] {
+        for operation in [
+            "insert",
+            "insert_inline",
+            "set_done",
+            "set_language",
+            "set_callout_look",
+        ] {
             assert!(
                 encoded.contains(&format!("\"{operation}\"")),
                 "missing seed operation {operation}"
@@ -5817,6 +6028,73 @@ mod tests {
         assert_eq!(doc.children(Parent::Node(root)).unwrap(), vec![b, c, a]);
     }
 
+    /// One `insert` of kind `callout` still makes a one-line callout: the
+    /// box under the asked-for id, with the text as a first paragraph inside
+    /// it, read back as a container with no text and one child.
+    #[test]
+    fn insert_callout_with_text_makes_a_box_with_one_paragraph_inside() {
+        let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
+        let root = doc
+            .insert(Parent::Root, Node::document("Boxes").unwrap())
+            .unwrap();
+        let context = InlineContext {
+            profile: CoreProfileId::new(),
+            workspace: CoreWorkspaceId::new(),
+            documents: HashMap::new(),
+            files: HashMap::new(),
+            attrs: AttrContext::default(),
+        };
+        let box_id = NodeId::new();
+        let empty_id = NodeId::new();
+
+        apply_ops(
+            &mut doc,
+            &[
+                EditOperation::Insert {
+                    node_id: box_id.to_storage(),
+                    parent_id: root.to_storage(),
+                    after_node_id: None,
+                    kind: InsertKind::Callout,
+                    text: "Mind the gap".into(),
+                },
+                EditOperation::Insert {
+                    node_id: empty_id.to_storage(),
+                    parent_id: root.to_storage(),
+                    after_node_id: Some(box_id.to_storage()),
+                    kind: InsertKind::Callout,
+                    text: String::new(),
+                },
+            ],
+            &context,
+        )
+        .unwrap();
+
+        assert_eq!(
+            doc.children(Parent::Node(root)).unwrap(),
+            vec![box_id, empty_id]
+        );
+        let callout = doc.read(box_id).unwrap();
+        assert_eq!(callout.kind, Kind::Callout);
+        assert_eq!(callout.content.as_text(), Some(""));
+        let lines = doc.children(Parent::Node(box_id)).unwrap();
+        assert_eq!(lines.len(), 1, "one paragraph inside the box");
+        let line = doc.read(lines[0]).unwrap();
+        assert_eq!(line.kind, Kind::Paragraph);
+        assert_eq!(line.content.as_text(), Some("Mind the gap"));
+        assert_eq!(doc.parent(lines[0]).unwrap(), Parent::Node(box_id));
+
+        // What a client reads back: the box's kind and look are on the box.
+        let read = node_json(&callout, Parent::Node(root), 0, 1, &[]);
+        assert_eq!(read["kind"], "callout");
+        assert!(read["metadata"]["icon"].is_null());
+        assert!(read["metadata"]["colour"].is_null());
+        assert_eq!(read["content"]["text"], "");
+
+        // An empty text is just the box.
+        assert!(doc.children(Parent::Node(empty_id)).unwrap().is_empty());
+        assert_eq!(doc.read(empty_id).unwrap().kind, Kind::Callout);
+    }
+
     #[test]
     fn set_language_labels_a_code_block_and_null_restores_auto() {
         let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
@@ -5949,6 +6227,263 @@ mod tests {
             &context,
         )
         .expect_err("the title root is not an inserted code block");
+        assert!(error.message.contains("earlier insert"));
+    }
+
+    // ------------------------------------------------------- callout looks
+
+    /// A document holding one callout box with one line inside it, and an
+    /// empty resolution context.
+    fn a_callout_to_restyle() -> (WorkspaceDoc, NodeId, NodeId, NodeId, InlineContext) {
+        let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
+        let root = doc
+            .insert(Parent::Root, Node::document("Looks").unwrap())
+            .unwrap();
+        let callout = doc
+            .insert(Parent::Node(root), Node::callout(None, None).unwrap())
+            .unwrap();
+        let line = doc
+            .insert(Parent::Node(callout), Node::paragraph("inside").unwrap())
+            .unwrap();
+        let context = InlineContext {
+            profile: CoreProfileId::new(),
+            workspace: CoreWorkspaceId::new(),
+            documents: HashMap::new(),
+            files: HashMap::new(),
+            attrs: AttrContext::default(),
+        };
+        (doc, root, callout, line, context)
+    }
+
+    fn look(
+        callout: NodeId,
+        icon: Option<Option<&str>>,
+        color: Option<Option<&str>>,
+    ) -> EditOperation {
+        EditOperation::SetCalloutLook {
+            node_id: callout.to_storage(),
+            expected: String::new(),
+            icon: icon.map(|icon| icon.map(str::to_owned)),
+            color: color.map(|color| color.map(str::to_owned)),
+        }
+    }
+
+    #[test]
+    fn set_callout_look_sets_each_field_alone_and_null_restores_the_default() {
+        let (mut doc, root, callout, _, context) = a_callout_to_restyle();
+
+        apply_ops(
+            &mut doc,
+            &[look(callout, Some(Some("⚠️")), Some(Some("red")))],
+            &context,
+        )
+        .unwrap();
+        let read = node_json(&doc.read(callout).unwrap(), Parent::Node(root), 0, 0, &[]);
+        assert_eq!(read["kind"], "callout");
+        assert_eq!(read["metadata"]["icon"], "⚠️");
+        assert_eq!(read["metadata"]["colour"], "red");
+
+        // Leaving a field out leaves it alone; `null` restores its default.
+        apply_ops(&mut doc, &[look(callout, Some(None), None)], &context).unwrap();
+        let node = doc.read(callout).unwrap();
+        assert_eq!(node.meta.icon, None);
+        assert_eq!(node.meta.colour.as_deref(), Some("red"));
+
+        apply_ops(&mut doc, &[look(callout, None, Some(None))], &context).unwrap();
+        assert_eq!(doc.read(callout).unwrap().meta.colour, None);
+    }
+
+    #[test]
+    fn set_callout_look_stores_an_emoji_the_way_koru_spells_it() {
+        let (mut doc, _, callout, _, context) = a_callout_to_restyle();
+
+        // U+26A0 alone is the unqualified spelling; the box stores the
+        // fully qualified one, which is what draws as a color emoji.
+        apply_ops(
+            &mut doc,
+            &[look(callout, Some(Some("\u{26a0}")), None)],
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            doc.read(callout).unwrap().meta.icon.as_deref(),
+            Some("\u{26a0}\u{fe0f}")
+        );
+
+        apply_ops(
+            &mut doc,
+            &[look(callout, Some(Some(" 🔥 ")), None)],
+            &context,
+        )
+        .unwrap();
+        assert_eq!(doc.read(callout).unwrap().meta.icon.as_deref(), Some("🔥"));
+    }
+
+    #[test]
+    fn set_callout_look_refuses_what_it_cannot_draw_and_writes_nothing() {
+        let (mut doc, _, callout, line, context) = a_callout_to_restyle();
+        let before = doc.version().encode();
+
+        let refused = |doc: &mut WorkspaceDoc, op: EditOperation| {
+            apply_ops(doc, &[op], &context).expect_err("this look cannot be drawn")
+        };
+
+        let error = refused(&mut doc, look(callout, Some(Some("warning")), None));
+        assert!(error.message.contains("one emoji"), "{}", error.message);
+        let error = refused(&mut doc, look(callout, Some(Some("")), None));
+        assert!(error.message.contains("one emoji"), "{}", error.message);
+        let error = refused(&mut doc, look(callout, None, Some(Some("magenta"))));
+        assert!(error.message.contains("red, orange"), "{}", error.message);
+
+        // A good icon beside a bad color changes neither.
+        refused(
+            &mut doc,
+            look(callout, Some(Some("🔥")), Some(Some("magenta"))),
+        );
+        let error = refused(&mut doc, look(callout, None, None));
+        assert!(error.message.contains("icon, color or both"));
+
+        // Only a callout has a look.
+        let error = refused(&mut doc, look(line, Some(Some("🔥")), None));
+        assert!(error.message.contains("callout"), "{}", error.message);
+
+        let stale = EditOperation::SetCalloutLook {
+            node_id: callout.to_storage(),
+            expected: "not empty".into(),
+            icon: Some(Some("🔥".into())),
+            color: None,
+        };
+        assert_eq!(refused(&mut doc, stale).code, "precondition_failed");
+
+        assert_eq!(doc.read(callout).unwrap().meta.icon, None);
+        assert_eq!(
+            doc.version().encode(),
+            before,
+            "a refused look writes no operation"
+        );
+    }
+
+    #[test]
+    fn set_callout_look_leaves_no_trace_when_nothing_changes() {
+        let (mut doc, _, callout, _, context) = a_callout_to_restyle();
+        apply_ops(
+            &mut doc,
+            &[look(callout, Some(Some("🔥")), Some(Some("blue")))],
+            &context,
+        )
+        .unwrap();
+        let before = doc.version().encode();
+
+        // The same look again, and a `null` on a field that is already the
+        // default: neither writes an operation, so neither is an undo step.
+        apply_ops(
+            &mut doc,
+            &[look(callout, Some(Some("🔥")), Some(Some("blue")))],
+            &context,
+        )
+        .unwrap();
+        assert_eq!(doc.version().encode(), before);
+        let (mut fresh, _, fresh_callout, _, context) = a_callout_to_restyle();
+        let untouched = fresh.version().encode();
+        apply_ops(
+            &mut fresh,
+            &[look(fresh_callout, Some(None), Some(None))],
+            &context,
+        )
+        .unwrap();
+        assert_eq!(fresh.version().encode(), untouched);
+    }
+
+    #[test]
+    fn set_callout_look_tells_absent_from_null_and_accepts_the_stored_spelling() {
+        let id = NodeId::new().to_storage();
+        let parse = |fields: Value| -> EditOperation {
+            let mut op = json!({"op": "set_callout_look", "node_id": id, "expected": ""});
+            op.as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            serde_json::from_value(op).expect("a well-formed look")
+        };
+        let fields = |op: EditOperation| match op {
+            EditOperation::SetCalloutLook { icon, color, .. } => (icon, color),
+            other => panic!("not a look: {other:?}"),
+        };
+
+        assert_eq!(
+            fields(parse(json!({"color": "red"}))),
+            (None, Some(Some("red".to_owned())))
+        );
+        assert_eq!(fields(parse(json!({"icon": null}))), (Some(None), None));
+        // `colour` is what `read_document` reports; it names the same field.
+        assert_eq!(
+            fields(parse(json!({"colour": "blue"}))),
+            (None, Some(Some("blue".to_owned())))
+        );
+
+        // What was sent is what is serialized: absent stays absent.
+        let sent = serde_json::to_value(parse(json!({"icon": null}))).unwrap();
+        assert!(sent["icon"].is_null() && sent.get("icon").is_some());
+        assert!(sent.get("color").is_none());
+
+        let misspelt =
+            json!({"op": "set_callout_look", "node_id": id, "expected": "", "tint": "red"});
+        assert!(serde_json::from_value::<EditOperation>(misspelt).is_err());
+    }
+
+    #[test]
+    fn a_seed_batch_can_set_the_look_of_a_callout_it_inserted() {
+        let mut doc = WorkspaceDoc::create(CoreWorkspaceId::new(), "test").unwrap();
+        let root = doc
+            .insert(Parent::Root, Node::document("Seeded").unwrap())
+            .unwrap();
+        let callout = NodeId::new();
+        let context = InlineContext {
+            profile: CoreProfileId::new(),
+            workspace: CoreWorkspaceId::new(),
+            documents: HashMap::new(),
+            files: HashMap::new(),
+            attrs: AttrContext::default(),
+        };
+
+        apply_initial_ops(
+            &mut doc,
+            root,
+            &[
+                InitialOperation::Insert {
+                    node_id: callout.to_storage(),
+                    parent_id: root.to_storage(),
+                    after_node_id: None,
+                    kind: InsertKind::Callout,
+                    text: "Mind the gap".into(),
+                },
+                InitialOperation::SetCalloutLook {
+                    node_id: callout.to_storage(),
+                    expected: String::new(),
+                    icon: Some(Some("⚠️".into())),
+                    color: Some(Some("orange".into())),
+                },
+            ],
+            &context,
+        )
+        .unwrap();
+        let node = doc.read(callout).unwrap();
+        assert_eq!(node.meta.icon.as_deref(), Some("⚠️"));
+        assert_eq!(node.meta.colour.as_deref(), Some("orange"));
+        assert_eq!(doc.children(Parent::Node(callout)).unwrap().len(), 1);
+
+        // The same guard as every seeded op: an earlier insert, never the root.
+        let error = apply_initial_ops(
+            &mut doc,
+            root,
+            &[InitialOperation::SetCalloutLook {
+                node_id: root.to_storage(),
+                expected: "Seeded".into(),
+                icon: Some(Some("🔥".into())),
+                color: None,
+            }],
+            &context,
+        )
+        .expect_err("the title root is not an inserted callout");
         assert!(error.message.contains("earlier insert"));
     }
 
@@ -8181,6 +8716,19 @@ mod tests {
                 expected: expected(),
                 language: None,
             },
+            EditOperation::SetCalloutLook {
+                node_id: id(),
+                expected: expected(),
+                icon: Some(Some("⚠️".into())),
+                color: Some(Some("red".into())),
+            },
+            // `null` restores the default and must pass the published schema.
+            EditOperation::SetCalloutLook {
+                node_id: id(),
+                expected: expected(),
+                icon: Some(None),
+                color: None,
+            },
             value(AttributeValue::Date {
                 value: "2026-09-04".into(),
             }),
@@ -8283,9 +8831,15 @@ mod tests {
                 done: false,
             },
             InitialOperation::SetLanguage {
-                node_id: first,
+                node_id: first.clone(),
                 expected: "fn main() {}".into(),
                 language: Some("rust".into()),
+            },
+            InitialOperation::SetCalloutLook {
+                node_id: first,
+                expected: String::new(),
+                icon: Some(Some("🔥".into())),
+                color: Some(None),
             },
         ];
         let request = json!({

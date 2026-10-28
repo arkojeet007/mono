@@ -49,6 +49,44 @@ private val profileDark = listOf(
 internal fun workspaceTileColor(token: String?, dark: Boolean): Color? =
     (if (dark) workspaceDark else workspaceLight)[token?.trim()?.lowercase()]
 
+// koru-core's `AccentColor` tokens — what a callout's `color` property holds.
+private val accentLight = mapOf(
+    "red" to Color(0xFFB33D35),
+    "orange" to Color(0xFFC06A1E),
+    "yellow" to Color(0xFFB08A1A),
+    "green" to Color(0xFF3B7D44),
+    "teal" to Color(0xFF1F7D75),
+    "blue" to Color(0xFF2F6FB5),
+    "purple" to Color(0xFF6B4FC4),
+    "pink" to Color(0xFFA83C77),
+    "gray" to Color(0xFF555F6B),
+)
+
+private val accentDark = mapOf(
+    "red" to Color(0xFFE06C63),
+    "orange" to Color(0xFFE0964A),
+    "yellow" to Color(0xFFD9B44A),
+    "green" to Color(0xFF66AE70),
+    "teal" to Color(0xFF45ADA2),
+    "blue" to Color(0xFF5E9CE0),
+    "purple" to Color(0xFF9B86EA),
+    "pink" to Color(0xFFD46EA6),
+    "gray" to Color(0xFF8B96A4),
+)
+
+/**
+ * The background a callout box draws for its accent token: the token's
+ * color washed over the surface, so the text keeps the surface's contrast.
+ * `null` is the default tint — the token is absent, or comes from a newer
+ * palette than this build knows, which reads as the default rather than as
+ * an error, as koru-core's `callout::tint` does.
+ */
+// No token is the default tint, which the desktop draws as the yellow tone;
+// a token this build does not know draws the surface color instead.
+internal fun calloutTint(token: String?, dark: Boolean): Color? =
+    (if (dark) accentDark else accentLight)[token?.trim()?.lowercase() ?: "yellow"]
+        ?.copy(alpha = if (dark) 0.24f else 0.14f)
+
 internal fun profileTileColors(
     colorToken: String?,
     paletteKey: String,

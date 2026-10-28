@@ -5,6 +5,12 @@
 //! The grid lists default skin tones only. A short click inserts the preferred
 //! tone; a long-press opens a strip of variants and, when one is chosen, updates
 //! that preference.
+//!
+//! Opened for a callout's look ([`EmojiPicker::offer_tints`]) the same grid
+//! carries a strip of tint swatches above its search field, so the box's
+//! icon and color are chosen in one place — the way the profile and
+//! workspace pickers offer both. A swatch commits at once and keeps the
+//! picker open; an emoji commits and closes it.
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -17,8 +23,12 @@ use super::name_prompt::NamePrompt;
 use super::text_field::TextField;
 use crate::emoji::{self, EmojiSearch};
 use crate::trigger::Trigger;
+use koru_core::attributes::AccentColor;
 use koru_draw::geometry::Rect;
 use koru_draw::text::TextEngine;
+use koru_draw::theme;
+use koru_ui::Swatch;
+use vello::peniko::Color;
 
 pub const PANEL_W: f32 = 380.0;
 pub const SEARCH_H: f32 = 30.0;
@@ -43,6 +53,11 @@ const SCROLLBAR_GUTTER: f32 = SCROLLBAR_GAP + SCROLLBAR_W;
 pub const LONG_PRESS_MS: u64 = 400;
 const TONE_PAD: f32 = 6.0;
 const TONE_CELL: f32 = 36.0;
+/// The tint strip's height: a row of swatches with the reach of their rings
+/// above and below, so a ring never paints over the search field.
+const TINT_STRIP_H: f32 = Swatch::SIZE + 2.0 * Swatch::RING_REACH;
+/// The swatches on offer: the default tint, then every accent token.
+const TINT_COUNT: usize = 1 + AccentColor::ALL.len();
 
 pub const GROUPS: [Group; 9] = [
     Group::SmileysAndEmotion,
@@ -78,6 +93,43 @@ struct CellPress {
     since: Instant,
 }
 
+/// The tint swatches a look picker offers above its grid: the tint the box
+/// has now, ringed, and the swatch under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TintStrip {
+    pub current: Option<AccentColor>,
+    pub hover: Option<usize>,
+}
+
+/// The swatch colors, in strip order: the default tint drawn hollow, then
+/// each accent token's saturated swatch in the current theme.
+pub fn tint_colors() -> Vec<Option<Color>> {
+    std::iter::once(None)
+        .chain(
+            AccentColor::ALL
+                .iter()
+                .map(|token| theme::accent_tone(token.as_str()).map(|tone| tone.swatch)),
+        )
+        .collect()
+}
+
+/// Which swatch a tint is.
+pub fn tint_index(tint: Option<AccentColor>) -> usize {
+    tint.map_or(0, |tint| {
+        1 + AccentColor::ALL
+            .iter()
+            .position(|token| *token == tint)
+            .unwrap_or(0)
+    })
+}
+
+/// Which tint a swatch is.
+fn tint_of_index(index: usize) -> Option<AccentColor> {
+    index
+        .checked_sub(1)
+        .and_then(|i| AccentColor::ALL.get(i).copied())
+}
+
 pub struct EmojiPicker {
     pub trigger: Trigger,
     /// `Some` for the full picker. Shortcode completion leaves its query in the
@@ -103,6 +155,9 @@ pub struct EmojiPicker {
     /// `Some` when the picker fills a given width edge to edge (an
     /// appearance panel) rather than being the editor's fixed popover.
     fill_width: Option<f32>,
+    /// `Some` when this is a callout's look picker, which offers the box's
+    /// tint above the grid. See [`EmojiPicker::offer_tints`].
+    pub tints: Option<TintStrip>,
 }
 
 impl EmojiPicker {
@@ -121,6 +176,7 @@ impl EmojiPicker {
             tone_strip: None,
             tone_hover: None,
             fill_width: None,
+            tints: None,
         };
         picker.refresh_hits();
         picker
@@ -141,6 +197,7 @@ impl EmojiPicker {
             tone_strip: None,
             tone_hover: None,
             fill_width: None,
+            tints: None,
         };
         picker.search.set_query(query);
         picker.refresh_hits();
@@ -164,6 +221,62 @@ impl EmojiPicker {
         match self.fill_width {
             Some(width) => Geometry::filling(width, has_search),
             None => Geometry::popup(has_search),
+        }
+        .with_tint_strip(self.tints.is_some())
+    }
+
+    /// Offer a callout box's tint above the grid, `current` being the tint
+    /// it has now. From then on a swatch commits
+    /// [`Outcome::SetCalloutTint`] for the trigger's node — the box itself —
+    /// and the picker stays open; the grid still commits an emoji.
+    pub fn offer_tints(&mut self, current: Option<AccentColor>) {
+        self.tints = Some(TintStrip {
+            current,
+            hover: None,
+        });
+    }
+
+    pub fn offers_tints(&self) -> bool {
+        self.tints.is_some()
+    }
+
+    /// The tint the strip rings, after a swatch was committed.
+    pub fn set_current_tint(&mut self, tint: Option<AccentColor>) {
+        if let Some(strip) = &mut self.tints {
+            strip.current = tint;
+        }
+    }
+
+    /// Where each tint swatch sits, panel-local; empty without a strip.
+    pub fn tint_rects(&self) -> Vec<Rect> {
+        self.geometry()
+            .tint_strip_rect()
+            .map(|strip| {
+                Swatch::row(
+                    strip.x + Swatch::RING_REACH,
+                    strip.y + Swatch::RING_REACH,
+                    TINT_COUNT,
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    /// Which tint swatch a panel-local point is on.
+    pub fn tint_at(&self, local_x: f32, local_y: f32) -> Option<usize> {
+        self.tint_rects()
+            .iter()
+            .position(|swatch| swatch.contains(local_x, local_y))
+    }
+
+    /// Update which tint swatch is hovered. True when the highlight moved.
+    pub fn set_tint_hover(&mut self, local_x: f32, local_y: f32) -> bool {
+        let next = self.tint_at(local_x, local_y);
+        match &mut self.tints {
+            Some(strip) if strip.hover != next => {
+                strip.hover = next;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -385,6 +498,13 @@ impl EmojiPicker {
             self.tone_hover = None;
             self.press = None;
             return Outcome::Consumed;
+        }
+        // A tint commits on the press and leaves the picker up: the swatch is
+        // half of the look, and the emoji is still to choose.
+        if let Some(index) = self.tint_at(local_x, local_y) {
+            let tint = tint_of_index(index);
+            self.set_current_tint(tint);
+            return Outcome::SetCalloutTint(vec![self.trigger.node], tint);
         }
         if let Some(category) = self.geometry().category_at(local_x, local_y) {
             self.select_category(engine, category);
@@ -753,6 +873,9 @@ pub struct Geometry {
     pub cell: f32,
     pub category_cell: f32,
     pub has_search: bool,
+    /// Whether a strip of tint swatches sits above the search field — the
+    /// callout look picker's. Everything below it moves down by its height.
+    pub tint_strip: bool,
 }
 
 impl Geometry {
@@ -764,6 +887,7 @@ impl Geometry {
             cell: CELL,
             category_cell: CATEGORY_CELL,
             has_search,
+            tint_strip: false,
         }
     }
 
@@ -776,22 +900,49 @@ impl Geometry {
             cell: ((width - SCROLLBAR_GUTTER) / COLS as f32).max(1.0),
             category_cell: width / GROUPS.len() as f32,
             has_search,
+            tint_strip: false,
         }
+    }
+
+    pub fn with_tint_strip(mut self, on: bool) -> Self {
+        self.tint_strip = on;
+        self
     }
 
     pub fn panel_height(&self) -> f32 {
         self.category_top() + CATEGORY_H + BOTTOM
     }
 
+    /// The tint strip, rings' reach included, or `None` without one.
+    pub fn tint_strip_rect(&self) -> Option<Rect> {
+        self.tint_strip
+            .then(|| Rect::new(self.inset, TOP, self.width - self.inset * 2.0, TINT_STRIP_H))
+    }
+
+    /// Where the search field, or the grid without one, begins: under the
+    /// tint strip when there is one.
+    fn top(&self) -> f32 {
+        if self.tint_strip {
+            TOP + TINT_STRIP_H + SEARCH_GAP
+        } else {
+            TOP
+        }
+    }
+
     pub fn search_rect(&self) -> Rect {
-        Rect::new(self.inset, TOP, self.width - self.inset * 2.0, SEARCH_H)
+        Rect::new(
+            self.inset,
+            self.top(),
+            self.width - self.inset * 2.0,
+            SEARCH_H,
+        )
     }
 
     pub fn grid_top(&self) -> f32 {
         if self.has_search {
-            TOP + SEARCH_H + SEARCH_GAP
+            self.top() + SEARCH_H + SEARCH_GAP
         } else {
-            TOP
+            self.top()
         }
     }
 
@@ -884,6 +1035,50 @@ mod tests {
         assert_eq!(picker.sel, VISIBLE);
         assert_eq!(picker.first, COLS);
         assert!(matches!(picker.choose(0), Outcome::CommitText(_)));
+    }
+
+    /// A look picker offers the box's tint above the grid: the search field
+    /// and the grid move down to make room, a swatch commits the tint for the
+    /// trigger's node and leaves the picker open, and the chosen swatch is
+    /// the ringed one from then on.
+    #[test]
+    fn a_look_picker_offers_tints_above_the_grid_and_stays_open() {
+        let mut engine = TextEngine::new();
+        let plain = EmojiPicker::standalone(&mut engine, Trigger::at_start());
+        let mut picker = EmojiPicker::standalone(&mut engine, Trigger::at_start());
+        assert!(plain.tint_rects().is_empty());
+        picker.offer_tints(Some(AccentColor::Blue));
+        assert_eq!(picker.tint_rects().len(), TINT_COUNT);
+        assert_eq!(tint_colors().len(), TINT_COUNT);
+        let strip = picker.geometry().tint_strip_rect().expect("a strip");
+        assert!(
+            picker.geometry().search_rect().y >= strip.y + strip.h,
+            "the search field sits under the strip"
+        );
+        assert!(picker.geometry().grid_top() > plain.geometry().grid_top());
+        assert_eq!(tint_index(Some(AccentColor::Blue)), 6);
+
+        let red = picker.tint_rects()[1];
+        let (x, y) = red.centre();
+        assert_eq!(picker.tint_at(x, y), Some(1));
+        assert!(matches!(
+            picker.click(&mut engine, x, y),
+            Outcome::SetCalloutTint(nodes, Some(AccentColor::Red)) if nodes == vec![picker.trigger.node]
+        ));
+        assert_eq!(picker.tints.unwrap().current, Some(AccentColor::Red));
+        // A swatch arms no grid cell, so the release that follows the press
+        // commits nothing more.
+        assert!(matches!(picker.release(), Outcome::Consumed));
+
+        let (x, y) = picker.tint_rects()[0].centre();
+        assert!(matches!(
+            picker.click(&mut engine, x, y),
+            Outcome::SetCalloutTint(_, None)
+        ));
+        assert_eq!(picker.tints.unwrap().current, None);
+        assert!(picker.set_tint_hover(x, y));
+        assert_eq!(picker.tints.unwrap().hover, Some(0));
+        assert!(!picker.set_tint_hover(x, y), "unchanged hover is no change");
     }
 
     #[test]

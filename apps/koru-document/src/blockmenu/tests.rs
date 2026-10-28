@@ -163,11 +163,16 @@ fn every_list_row_resolves_to_its_own_command() {
     let rows = list_rows(&plain());
     assert_eq!(
         labels(&rows),
-        vec!["Bulleted list", "Numbered list", "Checklist"]
+        vec!["Bulleted list", "Numbered list", "Checklist", "Callout"]
     );
-    for (i, expected) in [Command::BulletedList, Command::NumberedList, Command::Tasks]
-        .into_iter()
-        .enumerate()
+    for (i, expected) in [
+        Command::BulletedList,
+        Command::NumberedList,
+        Command::Tasks,
+        Command::Callout,
+    ]
+    .into_iter()
+    .enumerate()
     {
         assert_eq!(list_choice_at(i), Some(expected));
     }
@@ -184,6 +189,7 @@ fn every_list_row_resolves_to_its_own_command() {
             MenuChord::Id(koru_keys::ShortcutId::BulletedList),
             MenuChord::Id(koru_keys::ShortcutId::NumberedList),
             MenuChord::Id(koru_keys::ShortcutId::Checklist),
+            MenuChord::Id(koru_keys::ShortcutId::Callout),
         ]
     );
     assert_eq!(list_choice_at(rows.len()), None, "past the end");

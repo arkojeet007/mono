@@ -141,6 +141,9 @@ pub enum Command {
     Divider,
     /// Make this block quoted prose. Document-only.
     Quote,
+    /// Make this block a callout: a tinted box with an icon. Document-only,
+    /// offered wherever quotes are.
+    Callout,
     /// Make this block a heading. The only entry that does not become another
     /// picker — there is nothing left to choose once the level is named.
     Heading(Heading),
@@ -222,9 +225,10 @@ impl Command {
     ///
     /// Image, Code, Divider, the lists and the headings are filtered out by
     /// [`matching`] for views that do not offer them.
-    pub const ALL: [Command; 29] = [
+    pub const ALL: [Command; 30] = [
         Command::Attachment,
         Command::Attr,
+        Command::Callout,
         Command::Code,
         Command::Color,
         Command::Complete,
@@ -278,6 +282,7 @@ impl Command {
             Self::Table => "Table",
             Self::Divider => "Divider",
             Self::Quote => "Quote",
+            Self::Callout => "Callout",
             Self::Heading(Heading::H1) => "Heading 1",
             Self::Heading(Heading::H2) => "Heading 2",
             Self::Heading(Heading::H3) => "Heading 3",
@@ -321,6 +326,7 @@ impl Command {
             Self::Table => icons::TABLE,
             Self::Divider => icons::DIVIDER,
             Self::Quote => icons::QUOTES,
+            Self::Callout => icons::LIGHTBULB,
             Self::Heading(Heading::H1) => icons::HEADING_1,
             Self::Heading(Heading::H2) => icons::HEADING_2,
             Self::Heading(Heading::H3) => icons::HEADING_3,
@@ -374,6 +380,7 @@ impl Command {
             Self::Table => "table",
             Self::Divider => "divider",
             Self::Quote => "quote",
+            Self::Callout => "callout",
             Self::Heading(Heading::H1) => "header1",
             Self::Heading(Heading::H2) => "header2",
             Self::Heading(Heading::H3) => "header3",
@@ -398,11 +405,14 @@ impl Command {
 
     /// Whether text after the name in the search field is an argument this
     /// command can commit from directly — `due friday`, `priority high`.
-    /// D7's typed-argument sugar, and only these two: everything else either
-    /// has nothing to type (`/color` is nine rows) or its own richer query
-    /// (the tag chooser's field).
+    /// D7's typed-argument sugar: everything else either has nothing to type
+    /// (`/color` is nine rows) or its own richer query (the tag chooser's
+    /// field). `callout blue` / `callout ⚠️` set a callout's look.
     pub fn takes_argument(self) -> bool {
-        matches!(self, Self::Due | Self::Priority | Self::Remind)
+        matches!(
+            self,
+            Self::Due | Self::Priority | Self::Remind | Self::Callout
+        )
     }
 
     /// The typing shorthand that does the same thing, set quietly at the row's
@@ -439,6 +449,7 @@ impl Command {
             Self::Table => "",
             Self::Divider => "---",
             Self::Quote => ">",
+            Self::Callout => "",
             Self::Heading(Heading::H1) => "#",
             Self::Heading(Heading::H2) => "##",
             Self::Heading(Heading::H3) => "###",
@@ -522,7 +533,7 @@ pub fn matching(q: &str, allows: &Allows) -> Vec<Command> {
         .filter(|c| !matches!(c, Command::Code | Command::Diagram) || allows.code)
         .filter(|c| *c != Command::Table || allows.table)
         .filter(|c| *c != Command::Divider || allows.divider)
-        .filter(|c| *c != Command::Quote || allows.quote)
+        .filter(|c| !matches!(c, Command::Quote | Command::Callout) || allows.quote)
         .filter(|c| !matches!(c, Command::Heading(_)) || allows.headings)
         // A surface this build hides is absent, not dimmed — the same answer
         // `voice` gets, for the same reason: it is not part of this product.
@@ -1323,6 +1334,13 @@ mod tests {
         assert_eq!(Command::Quote.hint(), ">");
     }
 
+    /// A callout is offered wherever quotes are, and nowhere else.
+    #[test]
+    fn callout_is_offered_only_where_quotes_are() {
+        assert_eq!(matching("callout", &ALL_ALLOWED), vec![Command::Callout]);
+        assert!(matching("callout", &without(|a| a.quote = false)).is_empty());
+    }
+
     /// The list is alphabetical by label, and stays that way as commands are
     /// added. Sixteen rows grouped by kind is a list you have to read twice.
     #[test]
@@ -1856,6 +1874,19 @@ mod tests {
             Command::Delegate.hint().is_empty(),
             "the chord belongs to the modal, not to the row"
         );
+    }
+
+    /// `callout blue ⚠️` hands its look to the editor rather than opening a
+    /// bare callout.
+    #[test]
+    fn callout_takes_its_look_as_an_argument() {
+        let (mut engine, mut m) = menu();
+        typed(&mut engine, &mut m, "callout blue ⚠️");
+        assert_eq!(m.hits, vec![Command::Callout]);
+        assert!(matches!(
+            press(&mut engine, &mut m, NamedKey::Enter),
+            Outcome::CommandArg(Command::Callout, arg) if arg == "blue ⚠️"
+        ));
     }
 
     #[test]

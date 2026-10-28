@@ -57,6 +57,100 @@ const DRAG_SCROLL_EDGE: f32 = 48.0;
 /// Maximum edge-drag speed. Distance into the edge band scales up to this.
 const DRAG_SCROLL_PX_PER_SEC: f32 = 900.0;
 
+/// The look typed after `/callout`: the icon, the tint (`Some(None)` for
+/// `default` / `none`), and the words that were neither a Koru color token
+/// nor an emoji. The last word of each kind wins, so `red blue` is blue.
+fn parse_callout_look(
+    arg: &str,
+) -> (
+    Option<&str>,
+    Option<Option<koru_core::AccentColor>>,
+    Vec<&str>,
+) {
+    let mut icon = None;
+    let mut tint = None;
+    let mut unknown = Vec::new();
+    for word in arg.split_whitespace() {
+        let named = match word {
+            "default" | "none" => Some(None),
+            token => koru_core::AccentColor::parse(token).map(Some),
+        };
+        if let Some(named) = named {
+            tint = Some(named);
+        } else if emojis::get(word).is_some() {
+            icon = Some(word);
+        } else {
+            unknown.push(word);
+        }
+    }
+    (icon, tint, unknown)
+}
+
+/// Whether `ids` are consecutive siblings under one parent, in order — the
+/// shape a selection must have to go into one box.
+fn contiguous_siblings(ws: &WorkspaceDoc, ids: &[NodeId]) -> bool {
+    let Some(&first) = ids.first() else {
+        return false;
+    };
+    let (Ok(parent), Ok(index)) = (ws.parent(first), ws.sibling_index(first)) else {
+        return false;
+    };
+    ids.iter().enumerate().all(|(offset, &id)| {
+        ws.parent(id).is_ok_and(|p| p == parent)
+            && ws.sibling_index(id).is_ok_and(|at| at == index + offset)
+    })
+}
+
+/// The nodes a callout wraps for the selected `rows`: the rows themselves,
+/// except that a run of rows that is *every* item of one list block stands
+/// for the block — a list goes into a box whole, as the list it is — and a
+/// list block the selection names directly stays as it is.
+///
+/// A list block is never a row, so a selection can only ever name its items;
+/// this is what lets "select the list, make it a callout" mean the list.
+fn callout_targets(ws: &WorkspaceDoc, rows: &[NodeId]) -> Vec<NodeId> {
+    let mut out: Vec<NodeId> = Vec::with_capacity(rows.len());
+    for &id in rows {
+        let block = match ws.parent(id) {
+            Ok(Parent::Node(parent)) if ws.kind_of(parent) == Some(Kind::ListBlock) => parent,
+            _ => {
+                out.push(id);
+                continue;
+            }
+        };
+        if out.last() == Some(&block) {
+            continue;
+        }
+        let items = ws.children(Parent::Node(block)).unwrap_or_default();
+        if items.iter().all(|item| rows.contains(item)) {
+            out.push(block);
+        } else {
+            // A part of a list: left as the item it is, which the refusal
+            // below names.
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// Why `targets` cannot become one box, or `None` when they can. A list's
+/// item cannot go in on its own — a boxed bullet is not a thing, and the
+/// whole list can go instead — and the rest must be the rows right beside it,
+/// or a selection with a gap in the tree would move something from somewhere
+/// else into the box. Asked before anything is written, so a refusal leaves
+/// every row as it was.
+fn callout_refusal(ws: &WorkspaceDoc, targets: &[NodeId]) -> Option<&'static str> {
+    let in_list = targets.iter().any(|&id| {
+        ws.parent(id)
+            .is_ok_and(|p| matches!(p, Parent::Node(n) if ws.kind_of(n) == Some(Kind::ListBlock)))
+    });
+    if in_list {
+        return Some("select the whole list to put it in a callout");
+    }
+    (!contiguous_siblings(ws, targets))
+        .then_some("rows go into one callout only when they sit side by side")
+}
+
 fn valid_overlay_span(ws: &WorkspaceDoc, trigger: &Trigger, start: usize, end: usize) -> bool {
     let Some(text) = ws
         .read(trigger.node)
@@ -78,7 +172,10 @@ fn valid_overlay_span(ws: &WorkspaceDoc, trigger: &Trigger, start: usize, end: u
         }
         Anchor::Pill => span == ANCHOR_STR,
         Anchor::Insert | Anchor::Chip | Anchor::Selection(_) | Anchor::NewBlock { .. } => true,
-        Anchor::Rename(_) | Anchor::RenameImage(_) | Anchor::PageIcon(_) => false,
+        Anchor::Rename(_)
+        | Anchor::RenameImage(_)
+        | Anchor::PageIcon(_)
+        | Anchor::CalloutIcon(_) => false,
     }
 }
 
@@ -2796,6 +2893,9 @@ pub trait Editing {
         // is noise rather than history. A promoted child is not a departure
         // either — it lands in its parent's place, under the same task.
         let departing = koru_core::tasks::departing_all(ws, &doomed);
+        // The boxes the doomed rows leave: one emptied by the delete has no
+        // row to reach it from and goes too.
+        let emptied: Vec<Parent> = doomed.iter().filter_map(|id| ws.parent(*id).ok()).collect();
 
         ws.begin_group();
         let mut removed = false;
@@ -2828,6 +2928,9 @@ pub trait Editing {
         if !removed {
             ws.checkpoint();
             return false;
+        }
+        for parent in emptied {
+            let _ = ws.prune_empty_callout(parent);
         }
         // Only the rows that actually went. A delete that refused is not a
         // departure, the same way a row that refused to move is not a move.
@@ -3838,7 +3941,10 @@ pub trait Editing {
                 .unwrap_or(fallback_end)
                 .min(len),
             // Handled above; it never reaches the text.
-            Anchor::Rename(_) | Anchor::RenameImage(_) | Anchor::PageIcon(_) => return,
+            Anchor::Rename(_)
+            | Anchor::RenameImage(_)
+            | Anchor::PageIcon(_)
+            | Anchor::CalloutIcon(_) => return,
         };
         if !valid_overlay_span(ws, &trigger, start, end) {
             self.view_mut().notice = Some("that insertion point changed elsewhere".into());
@@ -3895,6 +4001,18 @@ pub trait Editing {
             _ => None,
         };
         self.view_mut().overlay = Overlay::None;
+        if let Anchor::CalloutIcon(callout) = trigger.anchor {
+            // The look lives on the container and nowhere else, so this is
+            // the one write; every row of the box draws from it.
+            ws.checkpoint();
+            let saved = ws.set_icon(callout, Some(value)).is_ok();
+            ws.checkpoint();
+            if !saved {
+                self.view_mut().notice = Some("could not set this callout's icon".into());
+            }
+            self.body_mut().rebuild(ws);
+            return;
+        }
         if let Anchor::PageIcon(node) = trigger.anchor {
             ws.checkpoint();
             let saved = ws.set_icon(node, Some(value)).is_ok();
@@ -4294,6 +4412,7 @@ pub trait Editing {
                 }
                 outcome @ (Outcome::SetAttr(..)
                 | Outcome::ClearAttr(..)
+                | Outcome::SetCalloutTint(..)
                 | Outcome::AddTag(..)
                 | Outcome::RemoveTag(..)
                 | Outcome::CreateTag(..)
@@ -4607,6 +4726,7 @@ pub trait Editing {
             Action::SetHeading(heading) => self.set_heading(ws, heading),
             Action::SetListStyle(style) => self.set_list_style(ws, style),
             Action::CodeBlock => self.toggle_code_block(ws),
+            Action::ToggleCallout => self.toggle_callout(ws),
             Action::InsertDivider => self.insert_divider(ws),
             Action::ClearFormatting => self.clear_formatting(ws),
 
@@ -5501,6 +5621,30 @@ pub trait Editing {
         }
     }
 
+    /// The look picker for the callout box `callout`: the emoji grid with the
+    /// box's tint swatches above it. An emoji becomes the box's icon and
+    /// closes the picker (`commit_unicode`); a swatch sets the box's tint at
+    /// once and leaves the picker open, so both halves of the look can be
+    /// chosen in one visit — the way the profile and workspace pickers offer
+    /// an emoji and a color together.
+    fn open_callout_look_picker(&mut self, ws: &WorkspaceDoc, callout: NodeId) {
+        let current = ws
+            .read(callout)
+            .map(|node| koru_core::callout::tint(&node.meta))
+            .unwrap_or(None);
+        let trigger = Trigger {
+            kind: TriggerKind::Colon,
+            start: 0,
+            node: callout,
+            anchor: Anchor::CalloutIcon(callout),
+            stable: None,
+        };
+        let view = self.view_mut();
+        let mut picker = EmojiPicker::standalone(&mut view.engine, trigger);
+        picker.offer_tints(current);
+        view.overlay = Overlay::Emoji(picker);
+    }
+
     fn open_page_icon_picker(
         &mut self,
         node: NodeId,
@@ -5654,6 +5798,13 @@ pub trait Editing {
             }
             return;
         }
+        if cmd == command_menu::Command::Callout {
+            self.view_mut().overlay = Overlay::None;
+            if let Some(t) = trigger {
+                self.commit_callout(ws, t, "");
+            }
+            return;
+        }
         // **A heading, not a picker.** There is nothing left to choose once
         // `/task` is named — the reason it is applied here rather than becoming
         // an overlay.
@@ -5736,6 +5887,7 @@ pub trait Editing {
         };
         match cmd {
             command_menu::Command::Remind => self.arm_reminder(ws, t, arg),
+            command_menu::Command::Callout => self.commit_callout(ws, t, arg),
             command_menu::Command::Due => {
                 // The clock is resolved here and injected — the parser never
                 // reads system time (its whole test story).
@@ -6161,6 +6313,22 @@ pub trait Editing {
     }
 
     fn open_color_chooser(&mut self, ws: &WorkspaceDoc, trigger: Trigger, nodes: Vec<NodeId>) {
+        // `/color` anywhere inside a callout box tints the box: the tint is
+        // the container's, and every row inside draws from it.
+        if let [node] = nodes.as_slice()
+            && let Some(callout) = self.body().row(*node).and_then(|row| row.callout)
+            && let Ok(read) = ws.read(callout)
+        {
+            let width = color_picker::ColorPicker::measure_width(&mut self.view_mut().engine);
+            let mut picker = color_picker::ColorPicker::for_callout(
+                trigger,
+                vec![callout],
+                koru_core::callout::tint(&read.meta),
+            );
+            picker.width = width;
+            self.view_mut().overlay = Overlay::Color(picker);
+            return;
+        }
         let current = current_color(ws, nodes.first().copied());
         let width = color_picker::ColorPicker::measure_width(&mut self.view_mut().engine);
         let mut picker = color_picker::ColorPicker::open_for(trigger, nodes, current);
@@ -6441,6 +6609,32 @@ pub trait Editing {
                 for one in owed {
                     crate::tasks::remember(&mut self.body_mut().task_activity, one);
                 }
+            }
+            Outcome::SetCalloutTint(nodes, tint) => {
+                let token = tint.map(koru_core::AccentColor::as_str);
+                // From the look picker the swatch is one of two choices on
+                // offer, so the panel stays up for the emoji: the tint lands
+                // at once, as its own undo step, and nothing closes.
+                if let Overlay::Emoji(picker) = &mut self.view_mut().overlay
+                    && picker.offers_tints()
+                {
+                    picker.set_current_tint(*tint);
+                    ws.checkpoint();
+                    for &node in nodes {
+                        let _ = ws.set_color(node, token);
+                    }
+                    ws.checkpoint();
+                    // The box is no row, so no row re-read carries its new
+                    // look: the walk does.
+                    self.body_mut().rebuild(ws);
+                    self.reflow();
+                    return true;
+                }
+                // From `/color`: the same undo bracket and trigger removal an
+                // attribute gets; the write is the box's tint.
+                self.commit_attribute(ws, trigger, nodes, &mut |ws| {
+                    nodes.iter().try_for_each(|&node| ws.set_color(node, token))
+                });
             }
             Outcome::AddTag(nodes, tag) => {
                 // **The tag chooser stays open across several choices**
@@ -6798,31 +6992,179 @@ pub trait Editing {
         self.place_caret(trigger.start);
     }
 
-    /// Take `/quote` back out and make the row quoted prose without changing
-    /// its identity. This mirrors `commit_code`: both are semantic block kinds,
-    /// not marks painted over a paragraph.
+    /// Take the typed command back out of the row that holds it and focus
+    /// that row. The front half every block relabel shares; inside the
+    /// caller's undo group. `None` when the trigger's row is not in the body.
+    fn take_trigger_text(&mut self, ws: &mut WorkspaceDoc, trigger: &Trigger) -> Option<NodeId> {
+        let row = self.body().row(trigger.node)?;
+        let (len, caret) = (row.text.len(), row.caret());
+        let end = caret.clamp(trigger.start, len);
+        let id = trigger.node;
+        self.body_mut().focus_on(id);
+        if end > trigger.start {
+            let _ = ws.delete_text(id, trigger.start..end);
+        }
+        Some(id)
+    }
+
+    /// Take the typed command back out and make its row `kind` in place,
+    /// keeping its identity — what `/quote` and `/callout` share. This
+    /// mirrors `commit_code`: these are semantic block kinds, not marks
+    /// painted over a paragraph. Inside the caller's undo group.
+    fn relabel_row(
+        &mut self,
+        ws: &mut WorkspaceDoc,
+        trigger: &Trigger,
+        kind: Kind,
+    ) -> Option<NodeId> {
+        let id = self.take_trigger_text(ws, trigger)?;
+        let _ = ws.set_heading(id, None);
+        let _ = ws.set_kind(id, kind);
+        Some(id)
+    }
+
+    /// `/quote`: the row becomes quoted prose, one undo step.
     fn commit_quote(&mut self, ws: &mut WorkspaceDoc, trigger: Trigger) {
         if !self.view().quotes_enabled {
             return;
         }
-        let Some(row) = self.body_mut().row(trigger.node) else {
-            return;
-        };
-        let (len, caret) = (row.text.len(), row.caret());
-        let end = caret.clamp(trigger.start, len);
-        self.body_mut().focus_on(trigger.node);
-        let id = trigger.node;
         ws.checkpoint();
         ws.begin_group();
-        if end > trigger.start {
-            let _ = ws.delete_text(id, trigger.start..end);
-        }
-        let _ = ws.set_heading(id, None);
-        let _ = ws.set_kind(id, Kind::Quote);
+        let id = self.relabel_row(ws, &trigger, Kind::Quote);
         ws.checkpoint();
+        if let Some(id) = id {
+            self.body_mut().rebuild(ws);
+            self.body_mut().focus_on(id);
+            self.place_caret(trigger.start);
+        }
+    }
+
+    /// `/callout`, with or without a look typed after it (`/callout blue`,
+    /// `/callout ⚠️`, `/callout red 🔥`; a color is a Koru token, `default`
+    /// or `none`, and anything else that is an emoji is the icon).
+    ///
+    /// On an ordinary row, the row goes into a new box of its own. With a
+    /// multi-row selection holding the row, the selected rows — contiguous
+    /// siblings, or nothing moves — go into one box in order. On a row
+    /// already inside a box, `/callout` addresses *that* box rather than
+    /// nesting another: a typed look lands on it, and no look opens the look
+    /// picker for it. One undo step in every case.
+    fn commit_callout(&mut self, ws: &mut WorkspaceDoc, trigger: Trigger, arg: &str) {
+        if !self.view().quotes_enabled {
+            return;
+        }
+        // The menu comes down either way — `choose_command_arg` leaves that
+        // to the command, since a reminder's prompt replaces it instead.
+        self.view_mut().overlay = Overlay::None;
+        let (icon, tint, unknown) = parse_callout_look(arg);
+        let Some(row) = self.body().row(trigger.node) else {
+            return;
+        };
+        let (id, inside) = (row.id, row.callout);
+        let marked = if inside.is_none() && self.body().has_row_selection() {
+            self.body().selection_roots(ws)
+        } else {
+            Vec::new()
+        };
+        let wrap = marked.len() > 1 && marked.contains(&id);
+        let targets = if wrap {
+            callout_targets(ws, &marked)
+        } else {
+            vec![id]
+        };
+        if inside.is_none()
+            && let Some(why) = callout_refusal(ws, &targets)
+        {
+            self.view_mut().notice = Some(why.into());
+            return;
+        }
+
+        ws.checkpoint();
+        ws.begin_group();
+        self.take_trigger_text(ws, &trigger);
+        let callout = match inside {
+            Some(callout) => callout,
+            None => match ws.wrap_in_callout_many(&targets) {
+                Ok(callout) => callout,
+                Err(_) => {
+                    ws.checkpoint();
+                    self.body_mut().rebuild(ws);
+                    return;
+                }
+            },
+        };
+        if let Some(icon) = icon {
+            let _ = ws.set_icon(callout, Some(icon));
+        }
+        if let Some(tint) = tint {
+            let _ = ws.set_color(callout, tint.map(koru_core::AccentColor::as_str));
+        }
+        ws.checkpoint();
+        if wrap {
+            self.body_mut().clear_selection();
+        }
         self.body_mut().rebuild(ws);
         self.body_mut().focus_on(id);
         self.place_caret(trigger.start);
+        if !unknown.is_empty() {
+            self.view_mut().notice = Some(format!(
+                "not a callout color or emoji: {}",
+                unknown.join(" ")
+            ));
+        } else if inside.is_some() && icon.is_none() && tint.is_none() {
+            self.open_callout_look_picker(ws, callout);
+        }
+    }
+
+    /// `Ctrl+Shift+6`, and the Callout row of the bubble's list menu: the
+    /// selected rows go into one box in order, the focused row alone into a
+    /// box of its own, and a focused row already in a box takes that box
+    /// away. One control for apply and undo, the bargain `SetHeading` makes,
+    /// on the selection-aware path the lists take through `set_list_style`.
+    fn toggle_callout(&mut self, ws: &mut WorkspaceDoc) {
+        if !self.view().quotes_enabled || self.title_focused() {
+            return;
+        }
+        let Some(row) = self.body().focused() else {
+            return;
+        };
+        let (focused, caret, inside) = (row.id, row.caret(), row.callout);
+        let rows = self.body().selection_roots(ws);
+        if rows.len() <= 1 {
+            if let Some(callout) = inside {
+                if self.body_mut().dissolve_callout(ws, callout).is_some() {
+                    self.place_caret(caret);
+                    self.reflow();
+                }
+                return;
+            }
+        } else if rows
+            .iter()
+            .any(|&id| self.body().row(id).is_some_and(|r| r.callout.is_some()))
+        {
+            self.view_mut().notice = Some("those rows are already in a callout".into());
+            return;
+        }
+        if rows.is_empty() {
+            return;
+        }
+        let targets = callout_targets(ws, &rows);
+        if let Some(why) = callout_refusal(ws, &targets) {
+            self.view_mut().notice = Some(why.into());
+            return;
+        }
+        ws.checkpoint();
+        ws.begin_group();
+        let wrapped = ws.wrap_in_callout_many(&targets).is_ok();
+        ws.checkpoint();
+        if !wrapped {
+            return;
+        }
+        self.body_mut().clear_selection();
+        self.body_mut().rebuild(ws);
+        self.body_mut().focus_on(focused);
+        self.place_caret(caret);
+        self.reflow();
     }
 
     /// Take the typed `/tasks` back out and wrap the row into a ListBlock.
@@ -7076,6 +7418,35 @@ pub trait Editing {
                 top
             } else {
                 (chip.y - self.view().scroll - h - 4.0).clamp(floor, ceiling)
+            };
+            return Some(Rect::new(x, y, w, h));
+        }
+
+        // The look picker hangs off the icon it was opened from, the way an
+        // attribute chip's picker hangs off its chip. A callout is a
+        // container with no row of its own, so the generic arm below, which
+        // anchors to the trigger node's row, has nothing to find for it and
+        // would answer no panel at all: the picker would be open and neither
+        // drawn nor clickable. The icon sits beside the box's first row.
+        if let Anchor::CalloutIcon(callout) = trigger.anchor {
+            let span = self.body().callout_span(callout)?;
+            let first = self.body().rows.get(*span.start())?;
+            let icon = rowlayout::callout_icon_rect(first, first.y);
+            let (w, h) = self.view().overlay.panel_size();
+            let x = (cx + icon.x).clamp(8.0, (vw - w - 8.0).max(8.0));
+            let icon_top = icon.y - self.view().scroll;
+            // Below the icon when the whole panel fits there, above it when
+            // that fits, and otherwise pinned inside the viewport.
+            let floor = self.view().chrome_h + 8.0;
+            let limit = self.view().viewport.1 - 8.0;
+            let below = icon_top + icon.h + 4.0;
+            let above = icon_top - h - 4.0;
+            let y = if below + h <= limit {
+                below
+            } else if above >= floor {
+                above
+            } else {
+                below.min((limit - h).max(floor))
             };
             return Some(Rect::new(x, y, w, h));
         }
@@ -7798,7 +8169,9 @@ pub trait Editing {
                 }
                 Overlay::Emoji(picker) => {
                     let cleared = picker.tone_hover.take().is_some();
-                    cleared
+                    // The look picker's tint swatches light under the pointer
+                    // the same way, beside the grid's own selection.
+                    picker.set_tint_hover(px, py) || cleared
                 }
                 _ => false,
             }
@@ -7924,6 +8297,12 @@ pub trait Editing {
         }
         if self.checkbox_rect(i).is_some_and(|r| r.contains(x, doc_y)) {
             return Some(Hover::Checkbox(i));
+        }
+        if self
+            .callout_icon_rect(i)
+            .is_some_and(|r| r.contains(x, doc_y))
+        {
+            return Some(Hover::CalloutIcon(i));
         }
         if let Some(reminder) = self.reminder_at_point(i, x, doc_y) {
             return Some(Hover::Reminder { row: i, reminder });
@@ -8427,6 +8806,16 @@ pub trait Editing {
             let (id, done) = (self.body_mut().rows[i].id, self.body_mut().rows[i].done);
             self.body_mut().set_done(ws, id, !done);
             self.reflow();
+            return true;
+        }
+
+        // A callout's icon opens the look picker for its box.
+        if self
+            .callout_icon_rect(i)
+            .is_some_and(|r| r.contains(cx, doc_y))
+            && let Some(callout) = self.body().rows[i].callout
+        {
+            self.open_callout_look_picker(ws, callout);
             return true;
         }
 
@@ -9278,6 +9667,7 @@ pub trait Editing {
             }
             outcome @ (Outcome::SetAttr(..)
             | Outcome::ClearAttr(..)
+            | Outcome::SetCalloutTint(..)
             | Outcome::AddTag(..)
             | Outcome::RemoveTag(..)
             | Outcome::CreateTag(..)
@@ -9339,6 +9729,19 @@ pub trait Editing {
         // became a third caller: a control published somewhere other than where
         // it answers is a control a screen reader cannot press.
         rowlayout::checkbox_band(row, row.y)
+    }
+
+    /// Rect of the icon beside the first row of a callout box, in document
+    /// coordinates — `None` on every other row, the other rows of the box
+    /// included, and in a read-only view, where the icon is only a picture.
+    fn callout_icon_rect(&self, i: usize) -> Option<Rect> {
+        if self.view().read_only {
+            return None;
+        }
+        let row = self.body().rows.get(i)?;
+        self.body()
+            .is_callout_first_row(i)
+            .then(|| rowlayout::callout_icon_rect(row, row.y))
     }
 
     /// Rect of a row's drag grip, which lives in the affordance lane.
@@ -9427,7 +9830,27 @@ pub trait Editing {
         let (Some(src), Some(dst)) = (body.rows.get(from), body.rows.get(to)) else {
             return;
         };
-        let (src, dst) = (src.id, dst.id);
+        let (mut src, mut dst) = (src.id, dst.id);
+        // The grip on a callout box's first row moves the whole box, with
+        // everything inside it, among the box's siblings: the dragged node is
+        // the container, and the landing row stands for whichever of its
+        // ancestors is the container's sibling. Dropping a box on a row
+        // inside itself is no move at all. On any other row of the box, the
+        // grip reorders that row within the box as it would anywhere.
+        if let Some(callout) = body.callout_starting_at(from) {
+            src = callout;
+            let Ok(parent) = ws.parent(callout) else {
+                return;
+            };
+            let mut landing = dst;
+            while ws.parent(landing).is_ok_and(|p| p != parent) {
+                match ws.parent(landing) {
+                    Ok(Parent::Node(above)) if above != callout => landing = above,
+                    _ => return,
+                }
+            }
+            dst = landing;
+        }
         let parent = self.body().parent_of(ws, dst);
         let Ok(mut at) = ws.sibling_index(dst) else {
             return;
@@ -12816,6 +13239,656 @@ mod tests {
         assert_eq!(node.content.as_text(), Some("let x = 1;"));
     }
 
+    /// The body rows of `e` below the title, in order.
+    fn body_ids(e: &Editor) -> Vec<NodeId> {
+        e.body
+            .rows
+            .iter()
+            .filter(|r| !r.is_title)
+            .map(|r| r.id)
+            .collect()
+    }
+
+    /// Put `lines` — contiguous siblings — into one callout box, the way the
+    /// model does it, and bring the rows up to date.
+    fn boxed(ws: &mut WorkspaceDoc, e: &mut Editor, lines: &[NodeId]) -> NodeId {
+        let callout = ws.wrap_in_callout_many(lines).unwrap();
+        e.body.rebuild(ws);
+        callout
+    }
+
+    /// `/callout` puts the row into a box of its own, which draws around it:
+    /// the row answers to the container, the container is no row and carries
+    /// the default look, and Enter at the end of the line writes the next
+    /// line *inside* the box — a paragraph under the container, which the
+    /// body reports as a row of that box.
+    #[test]
+    fn slash_callout_wraps_the_row_and_enter_inside_stays_inside() {
+        let (mut ws, mut e) = doc_editor(&["Book tickets early", "after"]);
+        e.view.active = true;
+        e.view.quotes_enabled = true;
+        let [line, after] = body_ids(&e)[..] else {
+            panic!("two body rows");
+        };
+        e.body.focus_on(line);
+        e.place_caret("Book tickets early".len());
+        type_str(&mut e, &mut ws, "/callout");
+        enter(&mut e, &mut ws);
+        let Parent::Node(callout) = ws.parent(line).unwrap() else {
+            panic!("the row is in a box");
+        };
+        assert_eq!(ws.read(callout).unwrap().kind, Kind::Callout);
+        assert_eq!(
+            ws.read(line).unwrap().content.as_text(),
+            Some("Book tickets early"),
+            "the trigger text is gone"
+        );
+        assert!(
+            ws.effective_schema_version() >= 5,
+            "an older build must open a document with a callout read-only"
+        );
+        assert_eq!(ws.parent(callout).unwrap(), ws.parent(after).unwrap());
+        assert_eq!(body_ids(&e), vec![line, after], "the box is no row");
+        assert_eq!(e.body.row(line).unwrap().callout, Some(callout));
+        assert_eq!(e.body.row(after).unwrap().callout, None);
+        assert_eq!(e.body.callout_rows(callout), vec![line]);
+        let found = e.body.callout_box(callout).expect("the box's look");
+        assert_eq!(
+            koru_core::callout::icon_of(found.icon.as_deref()),
+            koru_core::callout::DEFAULT_ICON
+        );
+        assert_eq!(found.color, None);
+        assert!(e.body.is_callout_first_row(e.body.index_of(line).unwrap()));
+        assert_eq!(e.body.focused().unwrap().id, line);
+
+        e.reflow();
+        assert!(e.act(&mut ws, Action::SplitLine));
+        let inside = e.body.focused().unwrap().id;
+        assert_ne!(inside, line);
+        assert_eq!(ws.read(inside).unwrap().kind, Kind::Paragraph);
+        assert_eq!(ws.parent(inside).unwrap(), Parent::Node(callout));
+        assert_eq!(e.body.row(inside).unwrap().callout, Some(callout));
+        assert_eq!(e.body.callout_rows(callout), vec![line, inside]);
+
+        e.type_text(&mut ws, "and bring the printout");
+        e.reflow();
+        assert!(e.act(&mut ws, Action::SplitLine));
+        let third = e.body.focused().unwrap().id;
+        assert_eq!(ws.parent(third).unwrap(), Parent::Node(callout));
+        assert_eq!(
+            e.body.callout_rows(callout),
+            vec![line, inside, third],
+            "a split line stays in the box"
+        );
+        assert_eq!(body_ids(&e), vec![line, inside, third, after]);
+    }
+
+    /// Enter on the empty last line of a box steps out of it, the way it
+    /// steps out of a list: the empty paragraph becomes the box's next
+    /// sibling and keeps the caret, and the box keeps what is left. When that
+    /// line was the only one in the box, the box goes with it rather than
+    /// staying behind empty where no row could reach it.
+    #[test]
+    fn enter_on_the_empty_last_line_of_a_callout_steps_out() {
+        let (mut ws, mut e) = doc_editor(&["Mind the gap", "after"]);
+        e.view.quotes_enabled = true;
+        let [line, after] = body_ids(&e)[..] else {
+            panic!("two body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[line]);
+        e.body.focus_on(line);
+        e.place_caret("Mind the gap".len());
+        e.reflow();
+        assert!(e.act(&mut ws, Action::SplitLine));
+        let empty = e.body.focused().unwrap().id;
+        assert_eq!(ws.read(empty).unwrap().content.as_text(), Some(""));
+        assert_eq!(e.body.callout_rows(callout), vec![line, empty]);
+
+        assert!(e.act(&mut ws, Action::SplitLine));
+        assert_eq!(
+            e.body.focused().unwrap().id,
+            empty,
+            "the caret stays on the line that stepped out"
+        );
+        assert_eq!(ws.parent(empty).unwrap(), ws.parent(callout).unwrap());
+        assert_eq!(
+            ws.sibling_index(empty).unwrap(),
+            ws.sibling_index(callout).unwrap() + 1
+        );
+        assert_eq!(e.body.row(empty).unwrap().callout, None);
+        assert_eq!(e.body.callout_rows(callout), vec![line]);
+        assert_eq!(body_ids(&e), vec![line, empty, after]);
+
+        let (mut ws, mut e) = doc_editor(&["", "after"]);
+        e.view.quotes_enabled = true;
+        let [only, after] = body_ids(&e)[..] else {
+            panic!("two body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[only]);
+        e.body.focus_on(only);
+        e.place_caret(0);
+        e.reflow();
+        assert!(e.act(&mut ws, Action::SplitLine));
+        assert_eq!(body_ids(&e), vec![only, after], "no line was added");
+        assert_eq!(e.body.row(only).unwrap().callout, None);
+        assert_eq!(ws.parent(only).unwrap(), ws.parent(after).unwrap());
+        assert!(
+            e.body.callout_box(callout).is_none(),
+            "the empty box is gone"
+        );
+    }
+
+    /// A box with nothing left inside has no row to reach it from, so the
+    /// edits that empty one take the box with them: Delete at the end of the
+    /// line above a one-line box, and deleting the box's only row.
+    #[test]
+    fn emptying_a_callout_removes_the_box() {
+        let (mut ws, mut e) = doc_editor(&["above", "only", "after"]);
+        e.view.quotes_enabled = true;
+        let [above, only, after] = body_ids(&e)[..] else {
+            panic!("three body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[only]);
+        let parent = ws.parent(above).unwrap();
+        e.body.focus_on(above);
+        e.place_caret("above".len());
+        e.reflow();
+        assert!(e.act(&mut ws, Action::DeleteForward { by_word: false }));
+        assert_eq!(ws.read(above).unwrap().content.as_text(), Some("aboveonly"));
+        assert_eq!(
+            ws.children(parent).unwrap(),
+            vec![above, after],
+            "the emptied box went with its line"
+        );
+        assert!(e.body.callout_box(callout).is_none());
+
+        let (mut ws, mut e) = doc_editor(&["above", "only", "after"]);
+        e.view.quotes_enabled = true;
+        let [above, only, after] = body_ids(&e)[..] else {
+            panic!("three body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[only]);
+        let parent = ws.parent(above).unwrap();
+        e.body.focus_on(only);
+        e.reflow();
+        assert!(e.act(&mut ws, Action::DeleteRows));
+        assert_eq!(ws.children(parent).unwrap(), vec![above, after]);
+        assert!(e.body.callout_box(callout).is_none());
+    }
+
+    /// Backspace at the start of a box's first row takes the box away: the
+    /// lines become siblings where the box stood, nothing joins the line
+    /// above, and the caret stays at the start of the same row — one undo
+    /// step. Anywhere else in the box, Backspace is the ordinary join.
+    #[test]
+    fn backspace_at_the_first_row_start_dissolves_the_callout() {
+        let (mut ws, mut e) = doc_editor(&["above", "one", "two", "after"]);
+        e.view.quotes_enabled = true;
+        let [above, one, two, after] = body_ids(&e)[..] else {
+            panic!("four body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[one, two]);
+        assert_eq!(e.body.callout_rows(callout), vec![one, two]);
+        e.body.focus_on(two);
+        e.place_caret(0);
+        e.reflow();
+        assert!(e.act(&mut ws, Action::DeleteBack { by_word: false }));
+        assert_eq!(
+            ws.read(one).unwrap().content.as_text(),
+            Some("onetwo"),
+            "inside the box, the ordinary join"
+        );
+        assert_eq!(e.body.callout_rows(callout), vec![one]);
+        assert_eq!(e.body.focused().unwrap().id, one);
+        e.reflow();
+        assert_eq!(
+            e.body.focused().unwrap().caret(),
+            "one".len(),
+            "the caret sits at the seam"
+        );
+
+        e.place_caret(0);
+        e.reflow();
+        assert!(e.act(&mut ws, Action::DeleteBack { by_word: false }));
+        assert_eq!(
+            ws.read(one).unwrap().content.as_text(),
+            Some("onetwo"),
+            "nothing joined the row above"
+        );
+        assert_eq!(ws.read(above).unwrap().content.as_text(), Some("above"));
+        assert_eq!(ws.parent(one).unwrap(), ws.parent(above).unwrap());
+        assert_eq!(body_ids(&e), vec![above, one, after]);
+        assert!(e.body.rows.iter().all(|r| r.callout.is_none()));
+        assert!(e.body.callout_box(callout).is_none());
+        assert_eq!(e.body.focused().unwrap().id, one);
+        e.reflow();
+        assert_eq!(e.body.focused().unwrap().caret(), 0);
+
+        assert!(e.act(&mut ws, Action::Undo));
+        let Parent::Node(back) = ws.parent(one).unwrap() else {
+            panic!("the box is back");
+        };
+        assert_eq!(ws.read(back).unwrap().kind, Kind::Callout);
+        assert_eq!(e.body.callout_rows(back), vec![one]);
+        assert_eq!(body_ids(&e), vec![above, one, after]);
+    }
+
+    /// Typing `- ` on a line inside a box makes a list inside the box: the
+    /// item keeps its marker and the box still covers it and the item Enter
+    /// adds after it. Enter on an empty item leaves the list first, and only
+    /// then, as a plain last line, the box.
+    #[test]
+    fn a_list_typed_inside_a_callout_stays_in_its_box() {
+        let (mut ws, mut e) = doc_editor(&["Head", ""]);
+        e.view.active = true;
+        e.view.quotes_enabled = true;
+        e.view.task_lists_enabled = true;
+        let [first, line] = body_ids(&e)[..] else {
+            panic!("two body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[first, line]);
+        e.body.focus_on(line);
+        e.place_caret(0);
+        e.reflow();
+        type_str(&mut e, &mut ws, "- ");
+        let row = e.body.row(line).unwrap();
+        assert_eq!(row.list_style, Some(ListStyle::Bullet));
+        assert_eq!(row.callout, Some(callout));
+        assert_eq!(row.text, "", "the marker is gone");
+        let Parent::Node(block) = ws.parent(line).unwrap() else {
+            panic!("the item is in a list block");
+        };
+        assert_eq!(ws.read(block).unwrap().kind, Kind::ListBlock);
+        assert_eq!(ws.parent(block).unwrap(), Parent::Node(callout));
+
+        type_str(&mut e, &mut ws, "first");
+        assert!(e.act(&mut ws, Action::SplitLine));
+        let next = e.body.focused().unwrap().id;
+        assert_eq!(
+            e.body.row(next).unwrap().list_style,
+            Some(ListStyle::Bullet)
+        );
+        assert_eq!(e.body.callout_rows(callout), vec![first, line, next]);
+
+        assert!(e.act(&mut ws, Action::SplitLine));
+        assert_eq!(
+            e.body.row(next).unwrap().list_style,
+            None,
+            "out of the list"
+        );
+        assert_eq!(
+            e.body.row(next).unwrap().callout,
+            Some(callout),
+            "still in the box"
+        );
+        assert!(e.act(&mut ws, Action::SplitLine));
+        assert_eq!(e.body.row(next).unwrap().callout, None, "out of the box");
+        assert_eq!(e.body.callout_rows(callout), vec![first, line]);
+    }
+
+    /// `/callout` over several marked rows puts them in one box, in order;
+    /// the row after the selection stays outside, and one undo step takes it
+    /// all back. Typing clears a row selection, so the rows are marked here
+    /// with the menu already up — the shape a menu opened over a selection
+    /// presents.
+    #[test]
+    fn slash_callout_with_a_selection_wraps_the_rows() {
+        let (mut ws, mut e) = doc_editor(&["one", "two", "three", "four"]);
+        e.view.active = true;
+        e.view.quotes_enabled = true;
+        let ids = body_ids(&e);
+        e.body.focus_on(ids[2]);
+        e.place_caret(0);
+        type_str(&mut e, &mut ws, "/callout");
+        assert!(matches!(e.view.overlay, Overlay::Command(_)));
+        e.body.anchor = Some(ids[0]);
+        e.body.mark_selection();
+        assert_eq!(e.body.selected_ids(), ids[..3].to_vec());
+        enter(&mut e, &mut ws);
+
+        let Parent::Node(callout) = ws.parent(ids[0]).unwrap() else {
+            panic!("the rows are in a box");
+        };
+        assert_eq!(ws.read(callout).unwrap().kind, Kind::Callout);
+        assert_eq!(
+            ws.children(Parent::Node(callout)).unwrap(),
+            ids[..3].to_vec()
+        );
+        assert_eq!(
+            ws.read(ids[2]).unwrap().content.as_text(),
+            Some("three"),
+            "the trigger text is gone"
+        );
+        assert_eq!(ws.parent(ids[3]).unwrap(), ws.parent(callout).unwrap());
+        assert_eq!(e.body.callout_rows(callout), ids[..3].to_vec());
+        assert_eq!(body_ids(&e), ids, "the box is no row");
+        assert!(!e.body.has_row_selection());
+        assert_eq!(e.body.focused().unwrap().id, ids[2]);
+
+        assert!(e.act(&mut ws, Action::Undo));
+        assert_eq!(ws.parent(ids[0]).unwrap(), ws.parent(ids[3]).unwrap());
+        assert!(e.body.rows.iter().all(|r| r.callout.is_none()));
+        assert_eq!(body_ids(&e), ids);
+    }
+
+    /// `Ctrl+Shift+6` on a row selection puts it into one box, the way the
+    /// list shortcuts wrap one into a list; on a row inside a box it takes
+    /// the box away; on a lone row it makes a box of that row.
+    #[test]
+    fn toggle_callout_wraps_the_selected_rows_and_dissolves_a_box() {
+        let (mut ws, mut e) = doc_editor(&["one", "two", "three", "four"]);
+        e.view.active = true;
+        e.view.quotes_enabled = true;
+        let ids = body_ids(&e);
+        e.body.focus_on(ids[2]);
+        e.body.anchor = Some(ids[0]);
+        e.body.mark_selection();
+        e.act(&mut ws, Action::ToggleCallout);
+        let Parent::Node(callout) = ws.parent(ids[0]).unwrap() else {
+            panic!("the rows are in a box");
+        };
+        assert_eq!(ws.read(callout).unwrap().kind, Kind::Callout);
+        assert_eq!(
+            ws.children(Parent::Node(callout)).unwrap(),
+            ids[..3].to_vec()
+        );
+        assert_eq!(ws.parent(ids[3]).unwrap(), ws.parent(callout).unwrap());
+        assert!(!e.body.has_row_selection());
+        assert_eq!(e.body.focused().unwrap().id, ids[2]);
+
+        // From inside the box, the same key takes the box away.
+        e.act(&mut ws, Action::ToggleCallout);
+        assert_eq!(ws.parent(ids[0]).unwrap(), ws.parent(ids[3]).unwrap());
+        assert!(e.body.rows.iter().all(|r| r.callout.is_none()));
+        assert_eq!(body_ids(&e), ids);
+        assert_eq!(e.body.focused().unwrap().id, ids[2]);
+
+        // A lone row goes into a box of its own.
+        e.body.focus_on(ids[3]);
+        e.act(&mut ws, Action::ToggleCallout);
+        let Parent::Node(own) = ws.parent(ids[3]).unwrap() else {
+            panic!("the row is in a box");
+        };
+        assert_eq!(ws.read(own).unwrap().kind, Kind::Callout);
+        assert_eq!(e.body.callout_rows(own), vec![ids[3]]);
+    }
+
+    /// A list goes into a callout whole: selecting a line and every item of
+    /// the list after it puts the line and the list block — still a list —
+    /// into one box. Selecting part of a list is refused, and nothing moves.
+    #[test]
+    fn a_whole_list_goes_into_a_callout_as_a_list() {
+        let (mut ws, mut e) = doc_editor(&["intro", "a", "b", "after"]);
+        e.view.active = true;
+        e.view.quotes_enabled = true;
+        let [intro, a, b, after] = body_ids(&e)[..] else {
+            panic!("four body rows");
+        };
+        let list = ws
+            .wrap_in_list_block_many(&[a, b], ListStyle::Bullet)
+            .unwrap();
+        e.body.rebuild(&ws);
+
+        e.body.focus_on(a);
+        e.body.anchor = Some(intro);
+        e.body.mark_selection();
+        e.act(&mut ws, Action::ToggleCallout);
+        assert_eq!(
+            ws.parent(intro).unwrap(),
+            ws.parent(after).unwrap(),
+            "part of a list: nothing moved"
+        );
+        assert!(e.body.rows.iter().all(|r| r.callout.is_none()));
+        assert!(e.view.notice.is_some(), "and the refusal is said");
+
+        e.body.clear_selection();
+        e.body.focus_on(b);
+        e.body.anchor = Some(intro);
+        e.body.mark_selection();
+        e.act(&mut ws, Action::ToggleCallout);
+        let Parent::Node(callout) = ws.parent(intro).unwrap() else {
+            panic!("the line is in a box");
+        };
+        assert_eq!(ws.read(callout).unwrap().kind, Kind::Callout);
+        assert_eq!(
+            ws.children(Parent::Node(callout)).unwrap(),
+            vec![intro, list],
+            "the list went in as its block"
+        );
+        assert_eq!(ws.children(Parent::Node(list)).unwrap(), vec![a, b]);
+        assert_eq!(e.body.callout_rows(callout), vec![intro, a, b]);
+        assert_eq!(e.body.row(a).unwrap().list_style, Some(ListStyle::Bullet));
+        assert_eq!(e.body.row(after).unwrap().callout, None);
+    }
+
+    /// `/callout blue ⚠️` makes a box with that look. Inside a box,
+    /// `/callout red` recolors the box and leaves the line alone, and a
+    /// bare `/callout` opens the look picker for the box rather than nesting
+    /// a second one.
+    #[test]
+    fn slash_callout_with_a_look_sets_the_box_and_inside_a_box_addresses_it() {
+        let (mut ws, mut e) = doc_editor(&[""]);
+        e.view.active = true;
+        e.view.quotes_enabled = true;
+        let line = e.body.focused().unwrap().id;
+        type_str(&mut e, &mut ws, "/callout blue ⚠️");
+        enter(&mut e, &mut ws);
+        let Parent::Node(callout) = ws.parent(line).unwrap() else {
+            panic!("the row is in a box");
+        };
+        let node = ws.read(callout).unwrap();
+        assert_eq!(node.kind, Kind::Callout);
+        assert_eq!(node.meta.colour.as_deref(), Some("blue"));
+        assert_eq!(node.meta.icon.as_deref(), Some("⚠️"));
+        assert_eq!(ws.read(line).unwrap().content.as_text(), Some(""));
+        let found = e.body.callout_box(callout).unwrap();
+        assert_eq!(found.color.as_deref(), Some("blue"));
+        assert_eq!(found.icon.as_deref(), Some("⚠️"));
+
+        e.type_text(&mut ws, "Mind the gap");
+        e.reflow();
+        assert!(e.act(&mut ws, Action::SplitLine));
+        let inside = e.body.focused().unwrap().id;
+        type_str(&mut e, &mut ws, "/callout red");
+        enter(&mut e, &mut ws);
+        assert_eq!(
+            ws.read(callout).unwrap().meta.colour.as_deref(),
+            Some("red")
+        );
+        assert_eq!(ws.read(callout).unwrap().meta.icon.as_deref(), Some("⚠️"));
+        let node = ws.read(inside).unwrap();
+        assert_eq!(node.kind, Kind::Paragraph, "no box inside the box");
+        assert_eq!(node.content.as_text(), Some(""));
+        assert_eq!(node.meta.colour, None, "the look lives on the box only");
+        assert_eq!(ws.parent(inside).unwrap(), Parent::Node(callout));
+        assert_eq!(e.body.callout_rows(callout), vec![line, inside]);
+        assert!(matches!(e.view.overlay, Overlay::None));
+
+        type_str(&mut e, &mut ws, "/callout");
+        enter(&mut e, &mut ws);
+        let Overlay::Emoji(picker) = &e.view.overlay else {
+            panic!("the look picker opens for the box");
+        };
+        assert!(picker.offers_tints());
+        assert_eq!(
+            e.view.overlay.trigger().unwrap().anchor,
+            Anchor::CalloutIcon(callout)
+        );
+        assert_eq!(
+            ws.read(inside).unwrap().content.as_text(),
+            Some(""),
+            "the typed command is gone"
+        );
+    }
+
+    /// The icon is pressable beside a box's first row only, and pressing it
+    /// opens the look picker for the box. An emoji chosen there becomes the
+    /// box's icon and closes the picker; nothing lands on the rows inside.
+    #[test]
+    fn the_callout_icon_opens_the_look_picker_and_an_emoji_sets_the_box_icon() {
+        let (mut ws, mut e) = doc_editor(&["first", "inside", "other"]);
+        e.view.quotes_enabled = true;
+        let [first, inside, other] = body_ids(&e)[..] else {
+            panic!("three body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[first, inside]);
+        e.reflow();
+        let index = |e: &Editor, id| e.body.index_of(id).unwrap();
+        let icon = e
+            .callout_icon_rect(index(&e, first))
+            .expect("the icon sits beside the first row");
+        assert!(
+            e.callout_icon_rect(index(&e, inside)).is_none(),
+            "the other rows of the box have no icon"
+        );
+        assert!(e.callout_icon_rect(index(&e, other)).is_none());
+
+        let (x, y) = icon.centre();
+        assert!(e.mouse_down(&mut ws, x + e.view.content_x, y - e.view.scroll, false));
+        let trigger = e.view.overlay.trigger().expect("the look picker is open");
+        assert_eq!(trigger.anchor, Anchor::CalloutIcon(callout));
+        assert!(matches!(&e.view.overlay, Overlay::Emoji(p) if p.offers_tints()));
+        // It also has a panel to draw and to click. The box is no row, so the
+        // picker is placed from the icon; with no anchor it was open and
+        // nowhere on screen.
+        let panel = e
+            .overlay_panel_rect()
+            .expect("the look picker has a panel beside the icon it hangs from");
+        let (icon_top, icon_bottom) = (icon.y - e.view.scroll, icon.y + icon.h - e.view.scroll);
+        assert!(
+            panel.y >= icon_bottom || panel.y + panel.h <= icon_top,
+            "the panel ({}..{}) does not cover its icon ({icon_top}..{icon_bottom})",
+            panel.y,
+            panel.y + panel.h
+        );
+        assert!(panel.x >= 0.0 && panel.x + panel.w <= e.view.viewport.0);
+        e.commit_unicode(&mut ws, trigger, "🚀");
+        assert!(matches!(e.view.overlay, Overlay::None));
+        assert_eq!(ws.read(callout).unwrap().meta.icon.as_deref(), Some("🚀"));
+        assert_eq!(
+            e.body.callout_box(callout).unwrap().icon.as_deref(),
+            Some("🚀"),
+            "the rows draw the new icon"
+        );
+        assert_eq!(ws.read(first).unwrap().meta.icon, None);
+        assert_eq!(ws.read(inside).unwrap().meta.icon, None);
+        assert_eq!(e.body.callout_rows(callout), vec![first, inside]);
+    }
+
+    /// A tint swatch in the look picker tints the box at once — its own undo
+    /// step — and leaves the picker open for the emoji; the hollow swatch
+    /// brings the default tint back.
+    #[test]
+    fn a_tint_swatch_in_the_look_picker_tints_the_box_and_keeps_it_open() {
+        let (mut ws, mut e) = doc_editor(&["first", "inside"]);
+        e.view.quotes_enabled = true;
+        let [first, inside] = body_ids(&e)[..] else {
+            panic!("two body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[first, inside]);
+        e.reflow();
+        e.open_callout_look_picker(&ws, callout);
+        let trigger = e.view.overlay.trigger();
+
+        let choose = |e: &mut Editor, ws: &mut WorkspaceDoc, swatch: usize| {
+            let (x, y) = {
+                let Overlay::Emoji(picker) = &e.view.overlay else {
+                    panic!("the look picker is open");
+                };
+                picker.tint_rects()[swatch].centre()
+            };
+            let outcome = {
+                let Overlay::Emoji(picker) = &mut e.view.overlay else {
+                    panic!("the look picker is open");
+                };
+                picker.click(&mut e.view.engine, x, y)
+            };
+            e.apply_overlay_outcome(ws, trigger.clone(), outcome);
+        };
+        // Swatch 1 is red: the first token after the hollow default.
+        choose(&mut e, &mut ws, 1);
+        assert!(
+            matches!(&e.view.overlay, Overlay::Emoji(p) if p.offers_tints()),
+            "stays open for the emoji"
+        );
+        assert_eq!(
+            ws.read(callout).unwrap().meta.colour.as_deref(),
+            Some("red")
+        );
+        assert_eq!(
+            ws.read(first).unwrap().meta.colour,
+            None,
+            "the look lives on the box only"
+        );
+        assert_eq!(
+            e.body.callout_box(callout).unwrap().color.as_deref(),
+            Some("red"),
+            "the rows draw the new tint"
+        );
+        choose(&mut e, &mut ws, 0);
+        assert_eq!(ws.read(callout).unwrap().meta.colour, None);
+        assert_eq!(e.body.callout_box(callout).unwrap().color, None);
+        assert!(matches!(e.view.overlay, Overlay::Emoji(_)));
+
+        assert!(e.act(&mut ws, Action::Undo));
+        assert_eq!(
+            ws.read(callout).unwrap().meta.colour.as_deref(),
+            Some("red"),
+            "each swatch was its own undo step"
+        );
+    }
+
+    /// The grip on a box's first row carries the whole box: dropped past a
+    /// row outside, the container lands there with everything inside it. The
+    /// grip on any other row of the box reorders that row within the box, and
+    /// dropping the box on a row inside itself moves nothing.
+    #[test]
+    fn dragging_the_first_row_of_a_callout_moves_the_whole_box() {
+        let (mut ws, mut e) = doc_editor(&["above", "one", "two", "below"]);
+        e.view.quotes_enabled = true;
+        let [above, one, two, below] = body_ids(&e)[..] else {
+            panic!("four body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[one, two]);
+        e.reflow();
+        let index = |e: &Editor, id| e.body.index_of(id).unwrap();
+        let parent = ws.parent(callout).unwrap();
+
+        e.drop_row(&mut ws, index(&e, one), index(&e, below));
+        assert_eq!(ws.children(parent).unwrap(), vec![above, below, callout]);
+        assert_eq!(
+            ws.children(Parent::Node(callout)).unwrap(),
+            vec![one, two],
+            "everything inside came along"
+        );
+        assert_eq!(body_ids(&e), vec![above, below, one, two]);
+        assert_eq!(e.body.callout_rows(callout), vec![one, two]);
+
+        e.drop_row(&mut ws, index(&e, two), index(&e, one));
+        assert_eq!(
+            ws.children(Parent::Node(callout)).unwrap(),
+            vec![two, one],
+            "another row of the box reorders within it"
+        );
+        assert_eq!(ws.children(parent).unwrap(), vec![above, below, callout]);
+        assert_eq!(body_ids(&e), vec![above, below, two, one]);
+
+        e.drop_row(&mut ws, index(&e, two), index(&e, one));
+        assert_eq!(
+            ws.children(Parent::Node(callout)).unwrap(),
+            vec![two, one],
+            "the box cannot be dropped into itself"
+        );
+
+        e.drop_row(&mut ws, index(&e, two), index(&e, above));
+        assert_eq!(
+            ws.children(parent).unwrap(),
+            vec![callout, above, below],
+            "and it moves up as a whole too"
+        );
+        assert_eq!(body_ids(&e), vec![two, one, above, below]);
+    }
+
     #[test]
     fn slash_attach_asks_the_host_for_the_focused_row() {
         let (mut ws, mut editor) = doc_editor(&[""]);
@@ -14454,6 +15527,61 @@ mod tests {
             1,
             "and choosing the unticked row puts it back"
         );
+    }
+
+    /// `/color` anywhere inside a callout opens the same nine colors for the
+    /// box: the choice tints the container, which every row inside draws
+    /// from, sets no `koru.color`, and takes the typed `/color` back out.
+    #[test]
+    fn slash_color_in_a_callout_tints_its_box() {
+        use koru_core::attributes::KEY_COLOR;
+        let (mut ws, mut e) = doc_editor(&["first", "second "]);
+        e.view.active = true;
+        let [first, inside] = body_ids(&e)[..] else {
+            panic!("two body rows");
+        };
+        let callout = boxed(&mut ws, &mut e, &[first, inside]);
+        e.body.focus_on(inside);
+        e.place_caret("second ".len());
+
+        type_str(&mut e, &mut ws, "/color");
+        enter(&mut e, &mut ws);
+        let Overlay::Color(picker) = &e.view.overlay else {
+            panic!("the color picker is open");
+        };
+        assert!(picker.callout);
+        assert_eq!(picker.nodes, vec![callout], "the box itself");
+        // Row 0 with nothing set is Red.
+        enter(&mut e, &mut ws);
+        let node = ws.read(callout).unwrap();
+        assert_eq!(node.meta.colour.as_deref(), Some("red"));
+        assert!(!node.content.attrs().iter().any(|a| a.role == KEY_COLOR));
+        let line = ws.read(inside).unwrap();
+        assert_eq!(line.meta.colour, None, "the look lives on the box only");
+        assert_eq!(line.content.as_text(), Some("second "));
+        assert_eq!(
+            e.body.callout_rows(callout),
+            vec![first, inside],
+            "still one box"
+        );
+        assert_eq!(
+            e.body.callout_box(callout).unwrap().color.as_deref(),
+            Some("red"),
+            "the rows draw the new tint"
+        );
+
+        // Clear — the row above the preselected current tint — brings back
+        // the default.
+        type_str(&mut e, &mut ws, "/color");
+        enter(&mut e, &mut ws);
+        e.key(
+            &mut ws,
+            &Key::Named(NamedKey::ArrowUp),
+            None,
+            ModifiersState::empty(),
+        );
+        enter(&mut e, &mut ws);
+        assert_eq!(ws.read(callout).unwrap().meta.colour, None);
     }
 
     /// `/color` sets the token, the picker preselects it next time, and Clear

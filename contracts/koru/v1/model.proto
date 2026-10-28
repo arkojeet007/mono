@@ -88,6 +88,7 @@ enum BlockKind {
   BLOCK_KIND_CANVAS = 8;
   BLOCK_KIND_EMBED = 9;
   BLOCK_KIND_CONTACT = 10;
+  BLOCK_KIND_CALLOUT = 11;
 }
 
 enum Alignment {
@@ -127,6 +128,10 @@ message BlockProperties {
 message ParagraphPayload {
   RichText rich_text = 1;
 }
+// A callout box. It has no text of its own: its icon and tint are
+// BlockProperties (icon, color), and the lines inside the box are the blocks
+// whose parent_id is this block, as with a list.
+message CalloutPayload {}
 message TaskPayload {
   RichText rich_text = 1;
 }

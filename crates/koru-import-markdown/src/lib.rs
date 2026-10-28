@@ -85,7 +85,12 @@ impl Importer for MarkdownImporter {
             match read_markdown(&path) {
                 Ok(text) => {
                     let parsed = parse_document(&path, &text);
-                    let nodes = parsed.blocks.len() + 1;
+                    let nodes = parsed
+                        .blocks
+                        .iter()
+                        .filter(|b| !matches!(b, Block::CalloutEnd))
+                        .count()
+                        + 1;
                     image_count += parsed
                         .blocks
                         .iter()
@@ -402,12 +407,26 @@ fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
     (None, text)
 }
 
+/// One block of the stream. A callout box is flat here: it opens with a
+/// [`Block::CalloutStart`] carrying its look, every block up to the matching
+/// [`Block::CalloutEnd`] is inside it, and the builder nests those under one
+/// box node ([`koru_core::callout`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
     Text(TextBlock),
     Table(String),
     Image(ImageBlock),
     Rule,
+    /// A callout box opens. Markdown carries a box two ways: the `<aside>` an
+    /// export writes, and the blockquote this crate's exporter writes, whose
+    /// first line leads with the icon. `icon` is an emoji, `tint` an
+    /// `AccentColor` token; `None` is the default for either.
+    CalloutStart {
+        icon: Option<String>,
+        tint: Option<String>,
+    },
+    /// The box closes: the blocks since its start are its children.
+    CalloutEnd,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -419,6 +438,22 @@ pub struct TextBlock {
     pub runs: Vec<TextRun>,
     pub links: Vec<TextLink>,
     pub task: Option<bool>,
+    /// Where the line sits in a callout box — between its
+    /// [`Block::CalloutStart`] and [`Block::CalloutEnd`] — or `None` outside
+    /// one. The markers say the same, and the builder reads those; this is
+    /// for a renderer that sees one block at a time and still has to draw
+    /// the line as inside the box, with the icon on the first.
+    pub callout: Option<CalloutLine>,
+}
+
+/// A text line's place inside a callout box.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CalloutLine {
+    /// The first line inside the box, which leads with the box's icon
+    /// (`None` is the default, [`koru_core::callout::DEFAULT_ICON`]).
+    First { icon: Option<String> },
+    /// Any later line.
+    Inside,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -488,12 +523,40 @@ impl MarkDepth {
     }
 }
 
+/// A callout box that is open: an `<aside>`, or a blockquote whose first
+/// line led with an emoji. The first line inside settles the look; the
+/// box's start marker goes in the stream before its first block, and every
+/// block after it, until the box closes, is inside ([`Adapter::push`]).
+#[derive(Default)]
+struct OpenCallout {
+    icon: Option<String>,
+    tint: Option<String>,
+    /// Whether the icon has been settled — from a leading `<img>`, or from the
+    /// first line's leading emoji. Only the first line can carry it.
+    settled: bool,
+    /// Whether the start marker is in the stream; what follows is inside.
+    started: bool,
+    /// The quote depth the box opened at. A block quoted deeper is a quote
+    /// inside the box; one at this depth is a line of the box.
+    quote_depth: u16,
+    /// Whether a blockquote opened the box, so that blockquote's end closes
+    /// it; an `<aside>` closes at its `</aside>`.
+    opened_by_quote: bool,
+    /// Markdown an export left inside the raw HTML block that opened the
+    /// aside, parsed as Markdown once that block ends ([`Adapter::flush_raw`]).
+    raw: String,
+}
+
 struct Adapter {
     blocks: Vec<Block>,
     current: Option<TextBlock>,
     lists: Vec<ListStyle>,
     item_depth: u16,
     quote_depth: u16,
+    callout: Option<OpenCallout>,
+    /// A blockquote has just opened and its first block has not been seen:
+    /// if that block is a line led by an emoji, the quote is a callout box.
+    quote_head_pending: bool,
     marks: MarkDepth,
     open_links: Vec<(usize, String)>,
     image: Option<ImageBlock>,
@@ -507,6 +570,8 @@ impl Adapter {
             lists: Vec::new(),
             item_depth: 0,
             quote_depth: 0,
+            callout: None,
+            quote_head_pending: false,
             marks: MarkDepth::default(),
             open_links: Vec::new(),
             image: None,
@@ -528,14 +593,15 @@ impl Adapter {
     }
     fn ensure(&mut self) {
         if self.current.is_none() {
-            self.begin(
-                None,
-                if self.quote_depth > 0 {
-                    TextKind::Quote
-                } else {
-                    TextKind::Paragraph
-                },
-            );
+            // Inside a box, the box's own lines are paragraphs; only a quote
+            // nested deeper than the box is a quote.
+            let box_depth = self.callout.as_ref().map_or(0, |c| c.quote_depth);
+            let kind = if self.quote_depth > box_depth {
+                TextKind::Quote
+            } else {
+                TextKind::Paragraph
+            };
+            self.begin(None, kind);
         }
     }
     fn append(&mut self, value: &str, extra: Option<Mark>) {
@@ -579,10 +645,166 @@ impl Adapter {
         } else {
             block.text = block.text.trim_matches(['\r', '\n']).to_owned();
         }
+        // The first block of a blockquote decides whether the quote is a
+        // box: a line led by an emoji opens one, the emoji its icon, and the
+        // quote's blocks are the lines inside. Anything else leaves it a quote.
+        if std::mem::take(&mut self.quote_head_pending)
+            && block.kind == TextKind::Quote
+            && block.list.is_none()
+            && block.heading.is_none()
+            && let Some((icon, cut)) = leading_icon(&block.text)
+        {
+            strip_front(&mut block, cut);
+            block.kind = TextKind::Paragraph;
+            self.callout = Some(OpenCallout {
+                icon: Some(icon),
+                settled: true,
+                quote_depth: self.quote_depth,
+                opened_by_quote: true,
+                ..Default::default()
+            });
+        }
         if !block.text.trim().is_empty() || block.task.is_some() {
-            self.blocks.push(Block::Text(block));
+            self.push(Block::Text(block));
         }
     }
+
+    /// Put a finished block in the stream. Inside an open box the first
+    /// block settles the look — a plain paragraph's leading emoji is the
+    /// icon, and is not prose — then the box's start marker goes in, and
+    /// every block from the first on is inside the box.
+    fn push(&mut self, mut block: Block) {
+        self.quote_head_pending = false;
+        let Some(callout) = self.callout.as_mut() else {
+            self.blocks.push(block);
+            return;
+        };
+        if !callout.started {
+            if let Block::Text(text) = &mut block
+                && !callout.settled
+            {
+                callout.settled = true;
+                if text.kind == TextKind::Paragraph
+                    && text.list.is_none()
+                    && text.heading.is_none()
+                    && text.task.is_none()
+                    && let Some((icon, cut)) = leading_icon(&text.text)
+                {
+                    callout.icon = Some(icon);
+                    strip_front(text, cut);
+                    if text.text.trim().is_empty() {
+                        // The icon alone on its line: the box's first line is
+                        // the next one.
+                        return;
+                    }
+                }
+            }
+            callout.started = true;
+            self.blocks.push(Block::CalloutStart {
+                icon: callout.icon.clone(),
+                tint: callout.tint.clone(),
+            });
+            if let Block::Text(text) = &mut block {
+                text.callout = Some(CalloutLine::First {
+                    icon: callout.icon.clone(),
+                });
+            }
+            self.blocks.push(block);
+            return;
+        }
+        if let Block::Text(text) = &mut block {
+            text.callout = Some(CalloutLine::Inside);
+        }
+        self.blocks.push(block);
+    }
+
+    /// Close the open box, if there is one: its end goes in the stream after
+    /// what was inside. A box that never started — nothing was inside it —
+    /// leaves nothing behind: an empty box would be a node no row shows.
+    fn close_callout(&mut self) {
+        self.flush();
+        if let Some(callout) = self.callout.take()
+            && callout.started
+        {
+            self.blocks.push(Block::CalloutEnd);
+        }
+    }
+
+    /// Raw HTML, which is where an exported callout lives: `<aside>` opens a
+    /// box, `</aside>` closes it, and the text between is inside it. Any
+    /// other HTML lands as text, as it always has.
+    fn html(&mut self, value: &str) {
+        let mut rest = value;
+        loop {
+            let lower = rest.to_ascii_lowercase();
+            let open = lower.find("<aside");
+            let close = lower.find("</aside>");
+            match (open, close) {
+                (Some(o), c) if c.is_none_or(|c| o < c) => {
+                    self.callout_html(&rest[..o]);
+                    self.flush_raw();
+                    // A box does not nest in a box: an aside inside one
+                    // closes it.
+                    self.close_callout();
+                    self.callout = Some(OpenCallout {
+                        quote_depth: self.quote_depth,
+                        ..Default::default()
+                    });
+                    let end = rest[o..].find('>').map_or(rest.len(), |e| o + e + 1);
+                    rest = &rest[end..];
+                }
+                (_, Some(c)) => {
+                    self.callout_html(&rest[..c]);
+                    self.flush_raw();
+                    self.close_callout();
+                    rest = &rest[c + "</aside>".len()..];
+                }
+                _ => return self.callout_html(rest),
+            }
+        }
+    }
+
+    /// HTML text that is not an `<aside>` tag. Inside a box the raw lines
+    /// are its prose — and a leading `<img>` of the icon-set shape
+    /// [`builtin_icon`] knows is its icon.
+    fn callout_html(&mut self, raw: &str) {
+        let Some(callout) = self.callout.as_mut() else {
+            return self.append(raw, None);
+        };
+        let mut raw = raw.trim();
+        if !callout.settled && raw.to_ascii_lowercase().starts_with("<img") {
+            let end = raw.find('>').map_or(raw.len(), |e| e + 1);
+            if let Some((icon, tint)) = html_attribute(&raw[..end], "src").and_then(builtin_icon) {
+                callout.icon = icon.map(str::to_owned);
+                callout.tint = tint.map(|tint| tint.as_str().to_owned());
+            }
+            callout.settled = true;
+            raw = raw[end..].trim();
+        }
+        callout.raw.push_str(raw);
+        callout.raw.push('\n');
+    }
+
+    /// The Markdown gathered from a raw HTML block inside a box, as the box's
+    /// lines. An export writes the box's first line there, so `**bold**` in
+    /// it is still bold.
+    fn flush_raw(&mut self) {
+        let Some(raw) = self
+            .callout
+            .as_mut()
+            .map(|callout| std::mem::take(&mut callout.raw))
+        else {
+            return;
+        };
+        if raw.trim().is_empty() {
+            return;
+        }
+        self.flush();
+        for block in parse(&raw) {
+            self.push(block);
+        }
+    }
+
     fn start_link(&mut self, url: String) {
         self.ensure();
         self.open_links
@@ -600,6 +822,113 @@ impl Adapter {
             block.links.push(TextLink { start, end, url });
         }
     }
+}
+
+/// Drop the first `cut` bytes of `block`'s text, moving its runs and links
+/// with it — the callout icon the text led with is not prose.
+fn strip_front(block: &mut TextBlock, cut: usize) {
+    block.text.drain(..cut);
+    block
+        .runs
+        .retain_mut(|run| shift_span(&mut run.start, &mut run.end, cut));
+    block
+        .links
+        .retain_mut(|link| shift_span(&mut link.start, &mut link.end, cut));
+}
+
+/// Move a `start..end` byte span left by `cut`, the first `cut` bytes of its
+/// text having been dropped; `false` when nothing of the span is left. The
+/// one rule every reader of an exported callout line needs, since the icon
+/// the line leads with is not prose. Public for the clipboard's HTML reader.
+pub fn shift_span(start: &mut usize, end: &mut usize, cut: usize) -> bool {
+    *start = start.saturating_sub(cut);
+    *end = end.saturating_sub(cut);
+    start < end
+}
+
+/// The emoji a callout's exported text leads with — `💡 First line` — and
+/// how many bytes of `text` it and the space after it take, so the caller can
+/// strip them. `None` when the first word is not a single emoji. Public for
+/// the clipboard reader, which meets the same shape in pasted HTML.
+pub fn leading_icon(text: &str) -> Option<(String, usize)> {
+    let start = text.len() - text.trim_start().len();
+    let rest = &text[start..];
+    let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let word = &rest[..word_end];
+    emojis::get(word)?;
+    let after = &rest[word_end..];
+    let space = after.len() - after.trim_start().len();
+    Some((word.to_owned(), start + word_end + space))
+}
+
+/// A color name as an export writes it — a Koru token, or a `<hue>`,
+/// `<hue>_background` or `<hue>_bg` block color — as the tint Koru stores.
+/// `Some(None)` is an explicit *default*; `None` means the name is not a
+/// color at all. `brown` has no Koru tone and lands on orange, the nearest.
+fn color_name(name: &str) -> Option<Option<koru_core::AccentColor>> {
+    use koru_core::AccentColor;
+    let name = name.trim().to_ascii_lowercase();
+    let hue = name
+        .strip_suffix("_background")
+        .or_else(|| name.strip_suffix("_bg"))
+        .unwrap_or(&name);
+    match hue {
+        "default" | "none" | "clear" => Some(None),
+        "brown" => Some(Some(AccentColor::Orange)),
+        "grey" | "lightgray" | "lightgrey" => Some(Some(AccentColor::Gray)),
+        other => AccentColor::parse(other).map(Some),
+    }
+}
+
+/// The icon and tint behind a built-in icon address of the shape
+/// `…/icons/<name>_<color>.svg`, which is what an export writes for a
+/// callout whose icon is one of the app's own rather than an emoji. Koru
+/// stores an emoji, so the common shapes map onto the nearest one; a shape
+/// with no near emoji keeps the default. The color suffix is the tint.
+fn builtin_icon(url: &str) -> Option<(Option<&'static str>, Option<koru_core::AccentColor>)> {
+    let (_, file) = url.rsplit_once("/icons/")?;
+    let stem = file.strip_suffix(".svg").unwrap_or(file);
+    let (name, color) = match stem.rsplit_once('_') {
+        Some((name, color)) => (name, color_name(color).flatten()),
+        None => (stem, None),
+    };
+    let base = name.split('-').next().unwrap_or(name);
+    let emoji = match base {
+        "info" => Some("ℹ️"),
+        "warning" | "alert" | "exclamation" => Some("⚠️"),
+        "lightbulb" | "idea" => Some("💡"),
+        "checkmark" | "check" => Some("✅"),
+        "close" | "cross" | "error" | "stop" | "forbidden" => Some("⛔"),
+        "question" | "help" => Some("❓"),
+        "star" => Some("⭐"),
+        "fire" => Some("🔥"),
+        "pin" | "pushpin" => Some("📌"),
+        "bookmark" => Some("🔖"),
+        "book" | "library" => Some("📚"),
+        "clock" | "timer" | "hourglass" => Some("⏰"),
+        "calendar" => Some("📅"),
+        "code" | "terminal" => Some("💻"),
+        "document" | "page" | "notes" | "note" => Some("📝"),
+        "link" => Some("🔗"),
+        "flag" => Some("🚩"),
+        "heart" => Some("❤️"),
+        "rocket" => Some("🚀"),
+        "target" => Some("🎯"),
+        "token" | "key" | "lock" => Some("🔑"),
+        "megaphone" | "announcement" => Some("📣"),
+        "cursor" => Some("👉"),
+        _ => None,
+    };
+    Some((emoji, color))
+}
+
+/// The value of `name="…"` in one HTML tag.
+fn html_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let at = tag.to_ascii_lowercase().find(&format!("{name}="))? + name.len() + 1;
+    let rest = &tag[at..];
+    let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    let rest = &rest[1..];
+    Some(&rest[..rest.find(quote)?])
 }
 
 /// Parse Markdown into semantic Koru-shaped blocks. This is deliberately pure:
@@ -641,7 +970,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                 .trim_end()
                 .to_owned();
             append_table_references(&mut source, &references, &mut table_references);
-            out.blocks.push(Block::Table(source));
+            out.push(Block::Table(source));
             skip_candidate_until = Some(candidate.end);
             candidate_index += 1;
             continue;
@@ -656,17 +985,21 @@ pub fn parse(text: &str) -> Vec<Block> {
             out.flush();
             let mut source = text.get(range).unwrap_or_default().trim_end().to_owned();
             append_table_references(&mut source, &references, &mut table_references);
-            out.blocks.push(Block::Table(source));
+            out.push(Block::Table(source));
             in_table = true;
             continue;
         }
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => out.ensure(),
+                Tag::HtmlBlock if out.callout.is_some() => out.flush(),
                 Tag::Heading { level, .. } => out.begin(Some(heading(level)), TextKind::Paragraph),
                 Tag::BlockQuote(_) => {
                     out.flush();
                     out.quote_depth = out.quote_depth.saturating_add(1);
+                    // A box does not nest in a box: inside one, a quote is a
+                    // quote.
+                    out.quote_head_pending = out.callout.is_none();
                 }
                 Tag::CodeBlock(kind) => {
                     let language = match kind {
@@ -707,8 +1040,18 @@ pub fn parse(text: &str) -> Vec<Block> {
             },
             Event::End(tag) => match tag {
                 TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::CodeBlock => out.flush(),
+                TagEnd::HtmlBlock => out.flush_raw(),
                 TagEnd::BlockQuote(_) => {
-                    out.flush();
+                    if out
+                        .callout
+                        .as_ref()
+                        .is_some_and(|c| c.opened_by_quote && c.quote_depth == out.quote_depth)
+                    {
+                        out.close_callout();
+                    } else {
+                        out.flush();
+                    }
+                    out.quote_head_pending = false;
                     out.quote_depth = out.quote_depth.saturating_sub(1);
                 }
                 TagEnd::List(_) => {
@@ -725,7 +1068,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                 TagEnd::Link => out.end_link(),
                 TagEnd::Image => {
                     if let Some(image) = out.image.take() {
-                        out.blocks.push(Block::Image(image));
+                        out.push(Block::Image(image));
                     }
                 }
                 _ => {}
@@ -738,7 +1081,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                 out.append(&value, None);
                 out.flush();
             }
-            Event::Html(value) | Event::InlineHtml(value) => out.append(&value, None),
+            Event::Html(value) | Event::InlineHtml(value) => out.html(&value),
             Event::FootnoteReference(label) => out.append(&format!("[{label}]"), None),
             Event::SoftBreak | Event::HardBreak => {
                 let separator = if out
@@ -754,7 +1097,7 @@ pub fn parse(text: &str) -> Vec<Block> {
             }
             Event::Rule => {
                 out.flush();
-                out.blocks.push(Block::Rule);
+                out.push(Block::Rule);
             }
             Event::TaskListMarker(done) => {
                 out.ensure();
@@ -767,7 +1110,8 @@ pub fn parse(text: &str) -> Vec<Block> {
             }
         }
     }
-    out.flush();
+    // An `<aside>` nobody closed still ends with the text.
+    out.close_callout();
     for reference in references {
         if table_references.contains(&reference.label) {
             continue;
@@ -990,20 +1334,39 @@ fn build_document(
     let mut warnings = Vec::new();
     let mut lists: Vec<ListLevel> = Vec::new();
     let mut last_root = None;
+    // The open callout boxes, innermost last: a block lands under the
+    // innermost rather than under the document.
+    let mut boxes: Vec<NodeId> = Vec::new();
     let block_total = parsed.blocks.len();
     for (index, block) in parsed.blocks.into_iter().enumerate() {
         progress.update(ImportStage::ReadingMedia, index, Some(block_total));
         if progress.cancelled() {
             return Err(ImportError::cancelled());
         }
+        let parent = boxes.last().copied().unwrap_or(root);
         if let Block::Text(text) = &block
             && text.list.is_some()
         {
-            insert_list_text(&mut doc, root, &mut lists, &mut last_root, text)?;
+            insert_list_text(&mut doc, parent, &mut lists, &mut last_root, text)?;
             continue;
         }
         lists.clear();
         let node = match block {
+            Block::CalloutStart { icon, tint } => {
+                let id = doc
+                    .insert(
+                        Parent::Node(parent),
+                        Node::callout(icon.as_deref(), tint.as_deref()).map_err(import_failed)?,
+                    )
+                    .map_err(import_failed)?;
+                boxes.push(id);
+                last_root = Some(id);
+                continue;
+            }
+            Block::CalloutEnd => {
+                boxes.pop();
+                continue;
+            }
             Block::Text(text) => {
                 let node = match &text.kind {
                     TextKind::Paragraph if text.task.is_some() => {
@@ -1015,7 +1378,7 @@ fn build_document(
                 }
                 .map_err(import_failed)?;
                 let id = doc
-                    .insert(Parent::Node(root), node)
+                    .insert(Parent::Node(parent), node)
                     .map_err(import_failed)?;
                 decorate_text(&mut doc, id, &text)?;
                 last_root = Some(id);
@@ -1030,7 +1393,7 @@ fn build_document(
                     Some((bytes, mime)) => {
                         let id = insert_image(
                             &mut doc,
-                            root,
+                            parent,
                             source,
                             &image,
                             bytes,
@@ -1049,7 +1412,7 @@ fn build_document(
                                 let mime = image_mime(&path);
                                 let id = insert_image(
                                     &mut doc,
-                                    root,
+                                    parent,
                                     source,
                                     &image,
                                     bytes,
@@ -1072,12 +1435,12 @@ fn build_document(
                                         path.display()
                                     ),
                                 });
-                                fallback_link(&mut doc, root, &image)?;
+                                fallback_link(&mut doc, parent, &image)?;
                                 continue;
                             }
                         },
                         None => {
-                            fallback_link(&mut doc, root, &image)?;
+                            fallback_link(&mut doc, parent, &image)?;
                             continue;
                         }
                     },
@@ -1086,7 +1449,7 @@ fn build_document(
         }
         .map_err(import_failed)?;
         let id = doc
-            .insert(Parent::Node(root), node)
+            .insert(Parent::Node(parent), node)
             .map_err(import_failed)?;
         last_root = Some(id);
     }
@@ -1094,9 +1457,11 @@ fn build_document(
     Ok((parsed.title, snapshot, warnings))
 }
 
+/// One list line under `parent` — the document, or the callout box it is
+/// inside.
 fn insert_list_text(
     doc: &mut WorkspaceDoc,
-    root: NodeId,
+    parent: NodeId,
     levels: &mut Vec<ListLevel>,
     last_root: &mut Option<NodeId>,
     text: &TextBlock,
@@ -1119,12 +1484,9 @@ fn insert_list_text(
     if !reusable {
         levels.truncate(depth);
         let list = Node::list_block().map_err(import_failed)?;
-        let list_id = if let Some(parent) = parent_item {
-            doc.insert(Parent::Node(parent), list)
-        } else {
-            doc.insert(Parent::Node(root), list)
-        }
-        .map_err(import_failed)?;
+        let list_id = doc
+            .insert(Parent::Node(parent_item.unwrap_or(parent)), list)
+            .map_err(import_failed)?;
         doc.set_list_style(list_id, Some(spec.style))
             .map_err(import_failed)?;
         *last_root = Some(list_id);
@@ -1246,7 +1608,7 @@ fn koru_link_spans(text: &str) -> Vec<(usize, usize, Attr)> {
 
 fn fallback_link(
     doc: &mut WorkspaceDoc,
-    root: NodeId,
+    parent: NodeId,
     image: &ImageBlock,
 ) -> Result<NodeId, ImportError> {
     let label = if image.alt.trim().is_empty() {
@@ -1256,7 +1618,7 @@ fn fallback_link(
     };
     let id = doc
         .insert(
-            Parent::Node(root),
+            Parent::Node(parent),
             Node::paragraph(label).map_err(import_failed)?,
         )
         .map_err(import_failed)?;
@@ -1273,7 +1635,7 @@ fn fallback_link(
 /// On a store failure the image degrades to a link, as elsewhere.
 fn insert_image(
     doc: &mut WorkspaceDoc,
-    root: NodeId,
+    parent: NodeId,
     source: &Path,
     image: &ImageBlock,
     bytes: Vec<u8>,
@@ -1296,13 +1658,13 @@ fn insert_image(
                     None => format!("could not store the embedded image: {error}"),
                 },
             });
-            return fallback_link(doc, root, image);
+            return fallback_link(doc, parent, image);
         }
     };
     let node =
         Node::image(BlobHash(stored.hash), stored.mime, width, height).map_err(import_failed)?;
     let id = doc
-        .insert(Parent::Node(root), node)
+        .insert(Parent::Node(parent), node)
         .map_err(import_failed)?;
     let name = (!image.alt.trim().is_empty())
         .then_some(image.alt.as_str())
@@ -1492,6 +1854,319 @@ mod tests {
             vec![true, true]
         );
         assert!(table_candidate_ranges("```\n| a | b |\n| - | - |\n```\n").is_empty());
+    }
+
+    /// The stream's shape, for the callout tests: a text block as its kind,
+    /// text and whether it is inside a box; a box's start with its look; a
+    /// box's end; anything else.
+    #[derive(Debug, PartialEq)]
+    enum Row<'a> {
+        Text(TextKind, &'a str, bool),
+        Start(Option<&'a str>, Option<&'a str>),
+        End,
+        Other,
+    }
+
+    fn rows(blocks: &[Block]) -> Vec<Row<'_>> {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Text(text) => {
+                    Row::Text(text.kind.clone(), &text.text, text.callout.is_some())
+                }
+                Block::CalloutStart { icon, tint } => Row::Start(icon.as_deref(), tint.as_deref()),
+                Block::CalloutEnd => Row::End,
+                _ => Row::Other,
+            })
+            .collect()
+    }
+
+    /// The whole document, built from `markdown`.
+    fn built(markdown: &str) -> WorkspaceDoc {
+        let context = ImportContext {
+            target_profile: None,
+            target_workspace: Some(koru_store_core_id()),
+            occupied_titles: &std::collections::BTreeSet::new(),
+            blobs: &Sink,
+            tags: &koru_import::NoTagSink,
+        };
+        let (_, snapshot, _) = build_document_from_text(
+            koru_core::WorkspaceId::new(),
+            "Doc",
+            "export.md",
+            markdown,
+            &context,
+            &koru_import::NoProgress,
+        )
+        .unwrap();
+        WorkspaceDoc::from_snapshot(&snapshot).unwrap()
+    }
+
+    /// The children of `parent` as `(kind, text, icon)`.
+    fn shape(doc: &WorkspaceDoc, parent: NodeId) -> Vec<(koru_core::Kind, String, Option<String>)> {
+        doc.children(Parent::Node(parent))
+            .unwrap()
+            .into_iter()
+            .map(|id| {
+                let node = doc.read(id).unwrap();
+                (
+                    node.kind,
+                    node.content.as_text().unwrap_or_default().to_owned(),
+                    node.meta.icon,
+                )
+            })
+            .collect()
+    }
+
+    /// The `<aside>` form a Markdown export writes: the icon leading the
+    /// first line, more blocks after a blank line, `</aside>`. The box opens
+    /// before its first line, which carries the icon for a renderer that
+    /// sees one block at a time; the rest is inside the box; nothing of the
+    /// HTML is left in the text.
+    #[test]
+    fn an_aside_is_a_box_around_its_lines() {
+        let blocks =
+            parse("before\n\n<aside>\n⚠️ Back up **weekly**.\n\nSecond line\n\n</aside>\n\nafter");
+        assert_eq!(
+            rows(&blocks),
+            vec![
+                Row::Text(TextKind::Paragraph, "before", false),
+                Row::Start(Some("⚠️"), None),
+                Row::Text(TextKind::Paragraph, "Back up weekly.", true),
+                Row::Text(TextKind::Paragraph, "Second line", true),
+                Row::End,
+                Row::Text(TextKind::Paragraph, "after", false),
+            ]
+        );
+        let place = |index: usize| match &blocks[index] {
+            Block::Text(text) => text.callout.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            place(2),
+            Some(CalloutLine::First {
+                icon: Some("⚠️".to_owned())
+            })
+        );
+        assert_eq!(place(3), Some(CalloutLine::Inside));
+    }
+
+    /// Everything inside the aside, in order, lands under the box: its
+    /// first line, a paragraph, a list with its items, a heading, an image.
+    /// The box itself carries no text, only the look. A box does not nest
+    /// in a box, so the next aside is the box's sibling.
+    #[test]
+    fn everything_inside_an_aside_builds_under_the_box() {
+        use koru_core::Kind;
+        let doc = built(
+            "<aside>\n💡 Head\n\nSecond\n\n- one\n  - nested\n- two\n\n## Title\n\n![pic](https://example.com/a.png)\n\n</aside>\n\n<aside>\n📌 Next\n\n</aside>\n\nafter",
+        );
+        let root = doc.children(Parent::Root).unwrap()[0];
+        assert_eq!(
+            shape(&doc, root),
+            vec![
+                (Kind::Callout, String::new(), Some("💡".to_owned())),
+                (Kind::Callout, String::new(), Some("📌".to_owned())),
+                (Kind::Paragraph, "after".to_owned(), None),
+            ]
+        );
+        let callout = doc.children(Parent::Node(root)).unwrap()[0];
+        let inside = shape(&doc, callout);
+        assert_eq!(inside.len(), 5, "{inside:?}");
+        assert_eq!(inside[0], (Kind::Paragraph, "Head".to_owned(), None));
+        assert_eq!(inside[1], (Kind::Paragraph, "Second".to_owned(), None));
+        assert_eq!(inside[2].0, Kind::ListBlock);
+        assert_eq!(inside[3], (Kind::Paragraph, "Title".to_owned(), None));
+        assert_eq!(inside[4].0, Kind::Paragraph, "a remote image is a link");
+        let list = doc.children(Parent::Node(callout)).unwrap()[2];
+        let items = shape(&doc, list);
+        assert_eq!(items[0].1, "one");
+        assert_eq!(items[1].1, "two");
+        let one = doc.children(Parent::Node(list)).unwrap()[0];
+        assert_eq!(
+            shape(&doc, one)[0].0,
+            Kind::ListBlock,
+            "nested list under its item"
+        );
+        let title = doc.children(Parent::Node(callout)).unwrap()[3];
+        assert_eq!(doc.read(title).unwrap().meta.heading, Some(Heading::H2));
+        let next = doc.children(Parent::Node(root)).unwrap()[1];
+        assert_eq!(
+            shape(&doc, next),
+            vec![(Kind::Paragraph, "Next".to_owned(), None)]
+        );
+    }
+
+    /// The icon on a line of its own, and a first line that is markdown
+    /// rather than raw HTML: the marks survive the icon being cut away.
+    #[test]
+    fn an_icon_alone_on_its_line_still_belongs_to_the_callout() {
+        let blocks = parse("<aside>\n💡\n\n**Tip:** read this\n\n</aside>");
+        assert_eq!(
+            rows(&blocks),
+            vec![
+                Row::Start(Some("💡"), None),
+                Row::Text(TextKind::Paragraph, "Tip: read this", true),
+                Row::End
+            ]
+        );
+        let Block::Text(text) = &blocks[1] else {
+            unreachable!()
+        };
+        assert_eq!(&text.text[text.runs[0].start..text.runs[0].end], "Tip:");
+
+        let blocks = parse("<aside>\n\n🔥 **Hot** take\n\n</aside>");
+        assert_eq!(rows(&blocks)[0], Row::Start(Some("🔥"), None));
+        let Block::Text(text) = &blocks[1] else {
+            unreachable!()
+        };
+        assert_eq!(text.text, "Hot take");
+        assert_eq!(&text.text[text.runs[0].start..text.runs[0].end], "Hot");
+    }
+
+    /// A built-in icon arrives as an `<img>` of an icon set; its name picks
+    /// the emoji and its color the tint.
+    #[test]
+    fn an_icon_image_becomes_the_icon_and_the_tint() {
+        let blocks = parse(
+            "<aside>\n<img src=\"https://example.com/icons/clock_gray.svg\" alt=\"x\" width=\"40px\" /> Keep learning\n\n</aside>",
+        );
+        assert_eq!(
+            rows(&blocks),
+            vec![
+                Row::Start(Some("⏰"), Some("gray")),
+                Row::Text(TextKind::Paragraph, "Keep learning", true),
+                Row::End
+            ]
+        );
+    }
+
+    /// A box whose first block is a list, not a line: the box opens with the
+    /// default look and the list is inside it rather than dropped. The same
+    /// shape as a quote led by the icon alone, which is how the exporter
+    /// writes a box whose first line is not prose.
+    #[test]
+    fn a_box_that_opens_with_a_list_is_a_box_around_the_list() {
+        let expected = vec![
+            Row::Start(None, None),
+            Row::Text(TextKind::Paragraph, "one", true),
+            Row::Text(TextKind::Paragraph, "two", true),
+            Row::End,
+        ];
+        assert_eq!(
+            rows(&parse("<aside>\n\n- one\n- two\n\n</aside>")),
+            expected
+        );
+        let mut led = expected;
+        led[0] = Row::Start(Some("💡"), None);
+        assert_eq!(rows(&parse("> 💡\n>\n> - one\n> - two")), led);
+    }
+
+    /// The one-line shape some exports write, and the whole document built:
+    /// the box is a callout node with the icon in its metadata and no text
+    /// of its own; the line is under it.
+    #[test]
+    fn a_one_line_aside_builds_a_callout_node() {
+        let blocks = parse("<aside> 📌 Pinned note\n</aside>");
+        assert_eq!(
+            rows(&blocks),
+            vec![
+                Row::Start(Some("📌"), None),
+                Row::Text(TextKind::Paragraph, "Pinned note", true),
+                Row::End
+            ]
+        );
+
+        let doc = built("<aside>\n📌 Pinned note\n\n</aside>");
+        let root = doc.children(Parent::Root).unwrap()[0];
+        let body = doc.children(Parent::Node(root)).unwrap();
+        let node = doc.read(body[0]).unwrap();
+        assert_eq!(node.kind, koru_core::Kind::Callout);
+        assert_eq!(node.meta.icon.as_deref(), Some("📌"));
+        assert_eq!(node.content.as_text(), Some(""));
+        assert_eq!(
+            shape(&doc, body[0]),
+            vec![(koru_core::Kind::Paragraph, "Pinned note".to_owned(), None)]
+        );
+    }
+
+    /// The form this crate's exporter writes: a blockquote whose first line
+    /// leads with an emoji is a box around the rest of the quote. A quote
+    /// whose first line is prose stays a quote, and a quote nested inside
+    /// the box is a quote.
+    #[test]
+    fn a_blockquote_led_by_an_emoji_is_a_box_and_a_plain_one_is_a_quote() {
+        let blocks = parse(
+            "> 💡 Keep it\n>\n> Second\n>\n> - one\n> - two\n>\n> > deeper\n\n> plain quote\n\n> - just a list",
+        );
+        assert_eq!(
+            rows(&blocks),
+            vec![
+                Row::Start(Some("💡"), None),
+                Row::Text(TextKind::Paragraph, "Keep it", true),
+                Row::Text(TextKind::Paragraph, "Second", true),
+                Row::Text(TextKind::Paragraph, "one", true),
+                Row::Text(TextKind::Paragraph, "two", true),
+                Row::Text(TextKind::Quote, "deeper", true),
+                Row::End,
+                Row::Text(TextKind::Quote, "plain quote", false),
+                Row::Text(TextKind::Quote, "just a list", false),
+            ]
+        );
+        let Block::Text(one) = &blocks[3] else {
+            unreachable!()
+        };
+        assert_eq!(one.list.map(|list| list.style), Some(ListStyle::Bullet));
+    }
+
+    #[test]
+    fn a_leading_emoji_is_the_icon_and_a_word_is_not() {
+        assert_eq!(
+            leading_icon(" 💡 Read this"),
+            Some(("💡".to_owned(), " 💡 ".len()))
+        );
+        assert_eq!(leading_icon("⚠️"), Some(("⚠️".to_owned(), "⚠️".len())));
+        assert_eq!(leading_icon("Read this"), None);
+        assert_eq!(leading_icon(""), None);
+    }
+
+    #[test]
+    fn exported_color_names_map_onto_koru_tints() {
+        use koru_core::AccentColor;
+        assert_eq!(color_name("blue_background"), Some(Some(AccentColor::Blue)));
+        assert_eq!(color_name("red_bg"), Some(Some(AccentColor::Red)));
+        assert_eq!(color_name("Brown"), Some(Some(AccentColor::Orange)));
+        assert_eq!(color_name("default"), Some(None));
+        assert_eq!(color_name("teal"), Some(Some(AccentColor::Teal)));
+        assert_eq!(color_name("🔥"), None);
+    }
+
+    #[test]
+    fn a_built_in_icon_address_becomes_an_emoji_and_a_tint() {
+        use koru_core::AccentColor;
+        assert_eq!(
+            builtin_icon("https://example.com/icons/info-alternate_gray.svg"),
+            Some((Some("ℹ️"), Some(AccentColor::Gray)))
+        );
+        assert_eq!(
+            builtin_icon("/icons/token_blue.svg"),
+            Some((Some("🔑"), Some(AccentColor::Blue)))
+        );
+        assert_eq!(
+            builtin_icon("https://example.com/icons/squiggle_purple.svg"),
+            Some((None, Some(AccentColor::Purple)))
+        );
+        assert_eq!(builtin_icon("https://example.com/a.png"), None);
+    }
+
+    /// Other HTML is still text, as it was before callouts.
+    #[test]
+    fn html_that_is_not_an_aside_is_unchanged() {
+        let blocks = parse("a <kbd>K</kbd> key");
+        assert_eq!(
+            rows(&blocks),
+            vec![Row::Text(TextKind::Paragraph, "a <kbd>K</kbd> key", false)]
+        );
     }
 
     #[test]

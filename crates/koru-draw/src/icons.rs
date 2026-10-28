@@ -316,7 +316,7 @@ pub const QUESTION: char = '\u{E3E8}';
 /// A bug report — `ph-bug`
 pub const BUG: char = '\u{E0C4}';
 /// An idea — `ph-lightbulb`
-pub const LIGHTBULB: char = '\u{E2E6}';
+pub const LIGHTBULB: char = '\u{E2DC}';
 /// Attachments — `ph-paperclip`
 pub const PAPERCLIP: char = '\u{E39A}';
 /// Recently opened — `ph-clock-counter-clockwise`

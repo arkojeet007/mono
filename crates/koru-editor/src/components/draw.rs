@@ -1265,6 +1265,27 @@ pub fn draw_emoji_picker_surface(
 
     let geometry = picker.geometry();
     let _ = pw;
+    // The look picker's tint strip: the shared swatch row, so the chosen
+    // tint is ringed the way every other color choice in the app is.
+    if let Some(strip) = picker.tints
+        && let Some(rect) = geometry.tint_strip_rect()
+    {
+        let colors = emoji_picker::tint_colors();
+        koru_ui::ColorPickerRow::new(&colors)
+            .selected(Some(emoji_picker::tint_index(strip.current)))
+            .hovered(strip.hover)
+            .draw(
+                scene,
+                root,
+                engine,
+                koru_draw::geometry::Rect::new(
+                    px + rect.x + koru_ui::Swatch::RING_REACH,
+                    py + rect.y + koru_ui::Swatch::RING_REACH,
+                    rect.w - koru_ui::Swatch::RING_REACH * 2.0,
+                    koru_ui::Swatch::SIZE,
+                ),
+            );
+    }
     if has_search {
         let field_rect = geometry.search_rect();
         if let Some(field) = &mut picker.query {

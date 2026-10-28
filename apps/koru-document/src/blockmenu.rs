@@ -127,15 +127,23 @@ pub fn block_icon(state: &State) -> char {
 
 // ---------------------------------------------------------------- list styles
 
-/// The list flyout is deliberately one short menu: all three choices are
-/// visible at once and the active one is checked, matching the mark buttons.
-const LISTS: [Command; 3] = [Command::BulletedList, Command::NumberedList, Command::Tasks];
+/// The list flyout is deliberately one short menu: every choice is visible
+/// at once and the active one is checked, matching the mark buttons. The
+/// callout is here because it is the same kind of thing as a list: a block
+/// that wraps the selected lines rather than a way of setting one.
+const LISTS: [Command; 4] = [
+    Command::BulletedList,
+    Command::NumberedList,
+    Command::Tasks,
+    Command::Callout,
+];
 
 fn list_label(cmd: Command) -> &'static str {
     match cmd {
         Command::BulletedList => "Bulleted list",
         Command::NumberedList => "Numbered list",
         Command::Tasks => "Checklist",
+        Command::Callout => "Callout",
         _ => "",
     }
 }
@@ -146,6 +154,7 @@ fn list_shortcut(cmd: Command) -> MenuChord {
         Command::BulletedList => ShortcutId::BulletedList,
         Command::NumberedList => ShortcutId::NumberedList,
         Command::Tasks => ShortcutId::Checklist,
+        Command::Callout => ShortcutId::Callout,
         _ => unreachable!("only list commands reach this menu"),
     })
 }

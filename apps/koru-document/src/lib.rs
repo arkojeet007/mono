@@ -1576,6 +1576,23 @@ impl BuiltInDocument {
                 .is_some_and(|i| !self.editor.body.is_title_row(i))
         });
         Self::promote_complete_list_blocks(ws, &mut ids);
+        // A box moves as one: the row that opens a callout stands for the
+        // whole box, the way a completely selected list stands for its block,
+        // and the way the grip on that row drags the box.
+        let mut ids = {
+            let body = &self.editor.body;
+            let mut promoted: Vec<koru_core::NodeId> = Vec::new();
+            for id in ids {
+                let id = body
+                    .index_of(id)
+                    .and_then(|i| body.callout_starting_at(i))
+                    .unwrap_or(id);
+                if !promoted.contains(&id) {
+                    promoted.push(id);
+                }
+            }
+            promoted
+        };
         if ids.is_empty() {
             return;
         }

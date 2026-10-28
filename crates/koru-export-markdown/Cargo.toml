@@ -15,3 +15,7 @@ koru-core = { path = "../koru-core" }
 
 [dev-dependencies]
 tempfile.workspace = true
+# The round trip: what this crate writes for a callout box is what the
+# importer reads back as one.
+koru-import = { path = "../koru-import" }
+koru-import-markdown = { path = "../koru-import-markdown" }

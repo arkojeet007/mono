@@ -1087,6 +1087,116 @@ mod tests {
         assert_eq!(nested.parent, Some(workspace_page.id));
     }
 
+    /// A Notion callout survives the export: the `<aside>` Notion's Markdown
+    /// writes lands as a callout box carrying the icon, emoji or built-in,
+    /// with its blocks — the first line, a paragraph, a bullet list — as the
+    /// box's children, and the text on the children only.
+    #[test]
+    fn a_notion_callout_lands_as_a_callout_with_its_icon() {
+        let id = "22222222222222222222222222222222";
+        let (_dir, zip) = write_zip(&[(
+            &format!("Guide {id}.md"),
+            "# Guide\n\n<aside>\n⚠️ Back up first\n\nThen check the copy\n\n- nightly\n- weekly\n\n</aside>\n\n<aside>\n<img src=\"https://www.notion.so/icons/info-alternate_blue.svg\" alt=\"i\" width=\"40px\" /> Built-in icon\n\n</aside>\n",
+        )]);
+        let prepared = NotionImporter
+            .inspect(ImportSource::Files(vec![zip]), &NoProgress)
+            .unwrap();
+        let blobs = MemBlobs(Mutex::new(Vec::new()));
+        let product = prepared
+            .build(
+                ImportOptions {
+                    identity: IdentityMode::Copy,
+                    accept_warnings: true,
+                },
+                &ImportContext {
+                    target_profile: None,
+                    target_workspace: Some(StoreWorkspaceId::new()),
+                    occupied_titles: &std::collections::BTreeSet::new(),
+                    blobs: &blobs,
+                    tags: &koru_import::NoTagSink,
+                },
+                &NoProgress,
+            )
+            .unwrap();
+        let ImportProduct::Documents(content) = product else {
+            panic!("expected documents");
+        };
+        let page = content
+            .documents
+            .iter()
+            .find(|d| d.title == "Guide")
+            .unwrap();
+        let doc = WorkspaceDoc::from_snapshot(&page.snapshot).unwrap();
+        let root = doc.children(Parent::Root).unwrap()[0];
+        // The page's heading row stays in the body; the boxes are the rows
+        // after it. A box carries the look and no text of its own.
+        let boxes: Vec<NodeId> = doc
+            .children(Parent::Node(root))
+            .unwrap()
+            .into_iter()
+            .filter(|&id| doc.read(id).unwrap().kind == koru_core::Kind::Callout)
+            .collect();
+        let callouts: Vec<_> = boxes
+            .iter()
+            .map(|&id| doc.read(id).unwrap())
+            .map(|node| {
+                (
+                    node.content.as_text().unwrap_or_default().to_owned(),
+                    node.meta.icon,
+                    node.meta.colour,
+                )
+            })
+            .collect();
+        assert_eq!(
+            callouts,
+            vec![
+                (String::new(), Some("⚠️".to_owned()), None),
+                (
+                    String::new(),
+                    Some("ℹ️".to_owned()),
+                    Some("blue".to_owned())
+                ),
+            ]
+        );
+
+        // What was in each callout is under its box, in order, with the
+        // text on the children only.
+        let shape = |parent: NodeId| -> Vec<(koru_core::Kind, String)> {
+            doc.children(Parent::Node(parent))
+                .unwrap()
+                .into_iter()
+                .map(|id| {
+                    let node = doc.read(id).unwrap();
+                    (
+                        node.kind,
+                        node.content.as_text().unwrap_or_default().to_owned(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            shape(boxes[0]),
+            vec![
+                (koru_core::Kind::Paragraph, "Back up first".to_owned()),
+                (koru_core::Kind::Paragraph, "Then check the copy".to_owned()),
+                (koru_core::Kind::ListBlock, String::new()),
+            ]
+        );
+        let list = doc.children(Parent::Node(boxes[0])).unwrap()[2];
+        assert_eq!(
+            shape(list),
+            vec![
+                (koru_core::Kind::Paragraph, "nightly".to_owned()),
+                (koru_core::Kind::Paragraph, "weekly".to_owned()),
+            ]
+        );
+        assert_eq!(
+            shape(boxes[1]),
+            vec![(koru_core::Kind::Paragraph, "Built-in icon".to_owned())],
+            "the second callout holds its one line"
+        );
+    }
+
     /// **An import restores; it never commands** (SPEC §5, ADR-273).
     ///
     /// A Notion to-do is a checked box, which is content, and never a completed

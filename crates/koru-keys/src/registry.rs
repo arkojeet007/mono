@@ -265,6 +265,7 @@ pub enum ShortcutId {
     BulletedList,
     NumberedList,
     Checklist,
+    Callout,
     ClearFormatting,
     Superscript,
     Subscript,
@@ -888,6 +889,12 @@ pub const REGISTRY: &[Shortcut] = &[
         Layer::Editor,
         "Checklist",
         Chord::new(On::Letter('9'), PRIMARY_SHIFT),
+    ),
+    s(
+        ShortcutId::Callout,
+        Layer::Editor,
+        "Callout",
+        Chord::new(On::Letter('6'), PRIMARY_SHIFT),
     ),
     s(
         ShortcutId::ClearFormatting,

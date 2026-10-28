@@ -46,6 +46,10 @@ pub enum Command {
     /// Directly wraps the current row into a `ListBlock(Checkbox)` — a task
     /// list. Intercepted in `mouse_down`, like `List`.
     Tasks,
+    /// Wrap the selected rows into one callout box, or take the box away;
+    /// the `Ctrl+Shift+6` counterpart, in the list menu because a callout,
+    /// like a list, wraps lines rather than styling one.
+    Callout,
     /// A horizontal rule block, the same thing `/divider` and `---` produce.
     Divider,
     Bold,
@@ -88,6 +92,7 @@ impl Command {
             Self::BulletedList => Action::SetListStyle(ListStyle::Bullet),
             Self::NumberedList => Action::SetListStyle(ListStyle::Numbered),
             Self::Tasks => Action::SetListStyle(ListStyle::Checkbox),
+            Self::Callout => Action::ToggleCallout,
             Self::Divider => Action::InsertDivider,
             Self::Bold => Action::ToggleMark(Mark::Bold),
             Self::Italic => Action::ToggleMark(Mark::Italic),
@@ -119,6 +124,7 @@ impl Command {
             Self::BulletedList => icons::LIST,
             Self::NumberedList => icons::LIST_NUM,
             Self::Tasks => icons::LIST_CHECKS,
+            Self::Callout => icons::LIGHTBULB,
             Self::Divider => icons::DIVIDER,
             Self::Bold => icons::BOLD,
             Self::Italic => icons::ITALIC,
@@ -150,6 +156,7 @@ impl Command {
             Self::BulletedList => "Bulleted list  Ctrl+Shift+8",
             Self::NumberedList => "Numbered list  Ctrl+Shift+7",
             Self::Tasks => "Checklist  Ctrl+Shift+9",
+            Self::Callout => "Callout  Ctrl+Shift+6",
             Self::Divider => "Divider  ---",
             Self::Bold => "Bold  Ctrl+B",
             Self::Italic => "Italic  Ctrl+I",
@@ -213,6 +220,8 @@ pub struct State {
     pub align: Align,
     pub heading: Option<Heading>,
     pub list_style: Option<ListStyle>,
+    /// Whether the focused row is in a callout box, head or inside.
+    pub in_callout: bool,
     pub can_undo: bool,
     pub can_redo: bool,
 }
@@ -250,6 +259,7 @@ impl State {
             align: row.align,
             heading: row.heading,
             list_style: row.list_style,
+            in_callout: row.callout.is_some(),
             can_undo: ws.can_undo(),
             can_redo: ws.can_redo(),
         }
@@ -274,6 +284,7 @@ impl State {
             Command::BulletedList => self.list_style == Some(ListStyle::Bullet),
             Command::NumberedList => self.list_style == Some(ListStyle::Numbered),
             Command::Tasks => self.list_style == Some(ListStyle::Checkbox),
+            Command::Callout => self.in_callout,
             _ => false,
         }
     }

@@ -98,6 +98,12 @@ impl EnmlElement {
         })
     }
 
+    /// Whether an Evernote `--en-*: true` marker is set in the style.
+    fn style_flag(&self, wanted: &str) -> bool {
+        self.style_value(wanted)
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    }
+
     fn has_element_child(&self) -> bool {
         self.children
             .iter()
@@ -455,6 +461,7 @@ impl Converter<'_> {
                 Ok(true)
             }
             "p" => self.flush_inline(&element.children, parent, Kind::Paragraph, None, true),
+            "div" if element.style_flag("--en-callout") => self.render_callout(element, parent),
             "div" => {
                 self.render_flow(&element.children, parent, true)?;
                 Ok(true)
@@ -498,6 +505,29 @@ impl Converter<'_> {
                 self.flush_inline(&element.children, parent, Kind::Paragraph, None, false)
             }
         }
+    }
+
+    /// An Evernote callout — `<div style="--en-callout:true; --en-emoji:🤖">`
+    /// around its blocks — is a Koru callout box at the div's slot, carrying
+    /// the emoji (absent means Evernote's 💡, which is also Koru's default),
+    /// with everything inside the div — paragraphs, lists, tables, headings
+    /// — rendered under it in the order it was written. A callout with
+    /// nothing in it gets an empty line, as any empty flow does, so the box
+    /// is never a node no row shows.
+    fn render_callout(&mut self, element: &EnmlElement, parent: NodeId) -> Result<bool, EnmlError> {
+        let icon = element
+            .style_value("--en-emoji")
+            .map(|value| value.trim_matches(['"', '\'']).trim())
+            .filter(|value| !value.is_empty());
+        let callout = self
+            .document
+            .insert(
+                Parent::Node(parent),
+                Node::callout(icon, None).map_err(build_error)?,
+            )
+            .map_err(build_error)?;
+        self.render_flow(&element.children, callout, true)?;
+        Ok(true)
     }
 
     fn render_table(&mut self, table: &EnmlElement, parent: NodeId) -> Result<bool, EnmlError> {

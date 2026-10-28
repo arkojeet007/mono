@@ -32,6 +32,9 @@ use koru_draw::theme::{self, Brush, FontChoice};
 /// row geometry so layout, hit-testing, selection and caret inherit one inset.
 pub const QUOTE_INSET_X: f32 = 34.0;
 pub const QUOTE_BAR_W: f32 = 4.0;
+/// Horizontal room reserved for a callout's icon and the air around it, on
+/// row geometry for the same reason as [`QUOTE_INSET_X`].
+pub const CALLOUT_INSET_X: f32 = 40.0;
 
 /// The image a row renders in place of text: enough to address its bytes and
 /// size it. The decoded pixels are fetched from the shell's `ImageCache` at draw
@@ -141,6 +144,11 @@ pub struct Paragraph {
     pub chips: Vec<crate::chips::ChipSpec>,
     pub icon: Option<String>,
     pub level_name: Option<String>,
+    /// The callout box this row is in, or `None` outside every box. Derived
+    /// from the tree by `Body::rebuild`, never stored: a callout's children
+    /// *are* its box, and the innermost box wins when callouts nest. The box
+    /// itself is no row; its look and extent are `Body::callout_box`'s.
+    pub callout: Option<NodeId>,
 
     /// The image this row renders instead of text. `None` for every text row;
     /// the one content shape a `Paragraph` may carry besides text.
@@ -297,6 +305,7 @@ impl Paragraph {
             chips: crate::chips::attribute_chips(node),
             icon: node.meta.icon.clone(),
             level_name: node.meta.level_name.clone(),
+            callout: None,
             image: image_of(&node.content, &node.meta),
             layout: Layout::new(),
             selection: Selection::default(),
@@ -338,10 +347,18 @@ impl Paragraph {
     /// `geometry::text_x` with a depth: the column now depends on the checkbox
     /// too, and a call site that remembered one and forgot the other would draw
     /// the glyphs somewhere the clicks do not land.
+    ///
+    /// Every row of a callout box takes the box's inset, so the text inside
+    /// a box is one column and the icon has its room beside the first row.
     pub fn text_x(&self) -> f32 {
         text_x(self.depth, self.is_task() || self.list_style.is_some())
             + if self.kind == Kind::Quote {
                 QUOTE_INSET_X
+            } else {
+                0.0
+            }
+            + if self.callout.is_some() {
+                CALLOUT_INSET_X
             } else {
                 0.0
             }

@@ -319,6 +319,9 @@ fn emit_node(
                 out.push('\n');
             }
         }
+        Kind::Callout => {
+            emit_callout(ws, id, node, list_depth, blobs, assets_rel, out, assets)?;
+        }
         Kind::Paragraph | Kind::Task | Kind::Quote | Kind::Contact => {
             if let Some(style) = parent_list {
                 let indent = "  ".repeat(list_depth);
@@ -361,8 +364,7 @@ fn emit_node(
                     out.push('\n');
                 }
             } else {
-                let prefix = block_prefix(node);
-                out.push_str(prefix);
+                out.push_str(block_prefix(node));
                 out.push_str(&inline_line(ws, id, node)?);
                 out.push_str("\n\n");
                 emit_children(
@@ -430,6 +432,86 @@ fn emit_node(
     if matches!(node.content, Content::Embed { .. }) {
         out.push_str("<!-- embed omitted -->\n\n");
     }
+    Ok(())
+}
+
+/// A callout box. Markdown has no box, so it is written as one blockquote
+/// that any viewer draws as one, led by the box's icon: `> 💡 first line`
+/// when the first line inside is a plain paragraph, or `> 💡` alone when it
+/// is not (a list, a heading, code), then every line inside — paragraphs,
+/// lists with their nesting, headings, code — as further lines of the same
+/// quote, with a bare `>` between blocks. The importer reads a blockquote
+/// whose first line leads with an emoji back as a box
+/// (`koru-import-markdown`), so a document round-trips. The tint has no
+/// Markdown form and is not written. Under a list item the quote is
+/// indented like the item's other nested blocks.
+fn emit_callout(
+    ws: &WorkspaceDoc,
+    id: NodeId,
+    node: &Node,
+    list_depth: usize,
+    blobs: &dyn BlobSource,
+    assets_rel: &str,
+    out: &mut String,
+    assets: &mut Vec<RenderedAsset>,
+) -> Result<(), ExportError> {
+    let indent = "  ".repeat(list_depth);
+    let children = ws
+        .children(Parent::Node(id))
+        .map_err(|e| ExportError::new(e.to_string()))?;
+    let first_is_line = match children.first() {
+        Some(&first) => {
+            let first = ws
+                .read(first)
+                .map_err(|e| ExportError::new(e.to_string()))?;
+            first.kind == Kind::Paragraph
+                && first.meta.heading.is_none()
+                && !matches!(first.content, Content::Embed { .. })
+        }
+        None => false,
+    };
+    let mut inside = String::new();
+    emit_children(
+        ws,
+        Parent::Node(id),
+        0,
+        None,
+        blobs,
+        assets_rel,
+        &mut inside,
+        assets,
+    )?;
+    let inside = inside.trim_end();
+    let mut lines = inside.lines();
+    out.push_str(&indent);
+    out.push_str("> ");
+    out.push_str(koru_core::callout::icon(&node.meta));
+    let first = if first_is_line { lines.next() } else { None };
+    if let Some(first) = first {
+        if !first.is_empty() {
+            out.push(' ');
+            out.push_str(first);
+        }
+        out.push('\n');
+    } else {
+        // The icon alone on its line, and a bare `>` after it — or the first
+        // line inside would continue the icon's paragraph.
+        out.push('\n');
+        if !inside.is_empty() {
+            out.push_str(&indent);
+            out.push_str(">\n");
+        }
+    }
+    for line in lines {
+        out.push_str(&indent);
+        out.push('>');
+        if !line.is_empty() {
+            out.push(' ');
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out.push('\n');
     Ok(())
 }
 

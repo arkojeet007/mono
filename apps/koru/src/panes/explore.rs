@@ -7902,6 +7902,7 @@ fn label_for(node: &koru_core::node::Node, image_no: usize, code_no: usize) -> S
                 .to_string();
         }
         Kind::ListBlock => format!("List {image_no}"),
+        Kind::Callout => "Callout".to_string(),
         _ => {
             return node
                 .content
@@ -7942,6 +7943,7 @@ fn icon_for(kind: Kind) -> char {
         Kind::Image | Kind::Canvas => icons::IMAGE,
         Kind::Divider => icons::DIVIDER,
         Kind::Quote => icons::QUOTES,
+        Kind::Callout => icons::LIGHTBULB,
         // The trash root never earns a row — `children(Parent::Root)` omits
         // it, so `push` never sees one. The arm exists because this match has no
         // `_`, and it names the right glyph anyway: the pinned row at the foot of

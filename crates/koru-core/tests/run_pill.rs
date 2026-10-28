@@ -240,7 +240,10 @@ fn a_run_document_target_round_trips_by_id_and_a_deep_target_comes_back() {
 /// created document, so a bump would reach far beyond pill-carrying ones.
 #[test]
 fn a_run_pill_needs_no_content_schema_bump() {
-    assert_eq!(SCHEMA_VERSION, 4, "P1.0 established the pill at schema 4");
+    assert_eq!(
+        SCHEMA_VERSION, 5,
+        "P1.0 established the pill at schema 4; callouts moved it to 5"
+    );
     let (mut ws, root) = a_document();
     let line = ws
         .insert(Parent::Node(root), Node::paragraph("x").unwrap())

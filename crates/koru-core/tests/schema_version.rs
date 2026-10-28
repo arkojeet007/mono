@@ -145,8 +145,9 @@ fn stamping_marks_an_unmarked_document_and_leaves_a_marked_one_alone() {
 #[test]
 fn an_older_document_is_accepted_until_there_is_something_to_migrate() {
     assert_eq!(
-        SCHEMA_VERSION, 4,
-        "v4 added the root-only File kind; no migration of older content"
+        SCHEMA_VERSION, 5,
+        "v4 added the root-only File kind and v5 the Callout kind; \
+         neither migrates older content"
     );
     assert_eq!(Compatibility::of(Some(1)), Compatibility::Writable);
     assert_eq!(Compatibility::of(Some(0)), Compatibility::Writable);

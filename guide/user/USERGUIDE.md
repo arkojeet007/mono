@@ -4311,6 +4311,43 @@ ignores ChatGPT's changing CSS classes, and keeps consecutive quoted paragraphs
 under one continuous rule. If a source supplies only plain text rather than an
 HTML clipboard flavor, its `>` characters remain ordinary pasted text.
 
+### Callouts
+
+A callout is a tinted box with an icon — the shape a tip, a warning or an
+aside takes. Three ways to make one:
+
+| | |
+| --- | --- |
+| typing `/` | choose `/callout` from the block menu; the current line goes into a new box |
+| a selection, then `Ctrl+Shift+6` | select several lines and press `Ctrl+Shift+6`, or choose **Callout** in the selection bubble's list menu; the lines go into one box, in order. The same key on a line inside a box takes the box away |
+| paste | copy a rendered callout from a rich source and paste normally |
+
+The box holds ordinary lines — paragraphs, headings, lists — and the icon
+sits beside the first of them. Enter inside the box stays inside: the next
+line is another line of the same box. Press Enter on an empty last line to
+step out below it. Backspace at the start of the first line takes the box
+away and leaves its lines in place as ordinary text. `Ctrl+Shift+↑` / `↓` on
+the first line, or dragging its grip, moves the whole box.
+
+Lists work inside a callout as anywhere else: type `- `, `1. ` or `[]` then
+Space on a line inside the box. Bold, italic, links, pills and tags all work
+inside it too.
+
+Click the icon to change the look. The picker offers an emoji and one of the
+same nine colors the rest of Koru uses; a callout without a chosen icon shows
+💡. The keyboard does the same in one go: `/callout red ⚠️` makes the box with
+that color and that icon.
+
+Copying a callout preserves it as a box for rich destinations. Markdown export
+writes it as a blockquote whose first line starts with the icon — `> 💡 First
+line`, then `> ` before each further line — and Markdown import reads such a blockquote
+back as a callout, so a file round-trips. A quote whose first line does not
+start with an emoji stays a quote.
+
+A document that holds a callout needs a Koru that knows the block: an older
+Koru opens it read-only rather than showing the text without its box, the same
+rule as for dividers and quotes.
+
 ### Tables
 
 Create a table by typing `/table`, then type GFM pipe-table source and press

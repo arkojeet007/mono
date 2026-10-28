@@ -509,7 +509,7 @@ fn pruning_empty_list_blocks_does_not_reach_into_the_trash() {
         .unwrap();
     ws.trash(d, T0, None).unwrap();
 
-    ws.prune_empty_list_blocks().unwrap();
+    ws.prune_empty_containers().unwrap();
     assert!(ws.read(empty).is_ok(), "left exactly as it was binned");
 }
 

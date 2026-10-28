@@ -95,6 +95,9 @@ pub enum Anchor {
     RenameImage(NodeId),
     /// A page node's metadata icon, selected by the Unicode picker.
     PageIcon(NodeId),
+    /// A callout box whose icon was pressed. Committing sets the box's
+    /// icon; the look lives on the container and nowhere else.
+    CalloutIcon(NodeId),
     /// An attribute chip that was clicked. Nothing in the document stands in
     /// for the picker — the chip is presentation of node state, not text — so
     /// committing replaces nothing, exactly like [`Insert`](Self::Insert).
@@ -489,6 +492,7 @@ pub fn for_command(engine: &mut TextEngine, trigger: Trigger, cmd: Command) -> O
         | Command::Table
         | Command::Divider
         | Command::Quote
+        | Command::Callout
         | Command::Tasks
         | Command::List(_)
         | Command::Attr

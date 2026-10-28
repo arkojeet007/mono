@@ -86,6 +86,7 @@ impl Policy {
             | Action::SetHeading(_)
             | Action::SetListStyle(_)
             | Action::CodeBlock
+            | Action::ToggleCallout
             | Action::InsertDivider
             | Action::ClearFormatting
             | Action::OpenLinkPrompt

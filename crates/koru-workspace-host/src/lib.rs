@@ -315,6 +315,17 @@ pub enum RichBlock {
     Table(RichTableBlock),
     /// A decoded image, bytes already stored under `hash`.
     Image(PastedImage),
+    /// A callout box opens: `icon` an emoji, `tint` an `AccentColor` token,
+    /// `None` the default for either. The blocks after it, up to the
+    /// [`RichBlock::CalloutEnd`], are inside the box. HTML carries a box as
+    /// an `<aside>`; Markdown as the `<aside>` an export writes or as a
+    /// blockquote led by the icon.
+    CalloutStart {
+        icon: Option<String>,
+        tint: Option<String>,
+    },
+    /// The box closes: the blocks since its start are its children.
+    CalloutEnd,
 }
 
 /// Whether a view already has a document open as a tab.

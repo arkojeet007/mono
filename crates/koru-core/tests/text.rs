@@ -613,3 +613,71 @@ fn a_page_icon_replicates_as_node_metadata() {
     a.import(&b.export_all_updates().unwrap()).unwrap();
     assert_eq!(a.read(page).unwrap().meta.icon.as_deref(), Some("🔥"));
 }
+
+/// A callout is a box: a container with no text of its own whose children
+/// are the lines inside it. Wrapping two lines puts the box in their slot
+/// with the lines under it; splitting a line inside stays inside; the look
+/// lives on the box; dissolving the box leaves the lines where it was.
+#[test]
+fn a_callout_box_wraps_lines_and_dissolves_back_into_them() {
+    let mut ws = ws();
+    let before = ws
+        .insert(Parent::Root, Node::paragraph("before").unwrap())
+        .unwrap();
+    let one = ws
+        .insert(Parent::Root, Node::paragraph("Book tickets").unwrap())
+        .unwrap();
+    let two = ws
+        .insert(Parent::Root, Node::paragraph("early").unwrap())
+        .unwrap();
+    let after = ws
+        .insert(Parent::Root, Node::paragraph("after").unwrap())
+        .unwrap();
+
+    let callout = ws.wrap_in_callout_many(&[one, two]).unwrap();
+    assert_eq!(
+        ws.children(Parent::Root).unwrap(),
+        vec![before, callout, after]
+    );
+    assert_eq!(ws.children(Parent::Node(callout)).unwrap(), vec![one, two]);
+    let node = ws.read(callout).unwrap();
+    assert_eq!(node.kind, koru_core::Kind::Callout);
+    assert_eq!(node.content.as_text(), Some(""));
+    assert!(ws.effective_schema_version() >= 5);
+
+    ws.set_icon(callout, Some("⚠️")).unwrap();
+    ws.set_color(callout, Some("red")).unwrap();
+    let node = ws.read(callout).unwrap();
+    assert_eq!(koru_core::callout::icon(&node.meta), "⚠️");
+    assert_eq!(
+        koru_core::callout::tint(&node.meta),
+        Some(koru_core::AccentColor::Red)
+    );
+
+    let tail = ws.split(one, 4).unwrap();
+    assert_eq!(
+        ws.children(Parent::Node(callout)).unwrap(),
+        vec![one, tail, two]
+    );
+
+    assert!(
+        Node::new(
+            koru_core::Kind::Callout,
+            koru_core::node::Content::text("prose")
+        )
+        .is_err(),
+        "a box carries no text of its own"
+    );
+    assert!(
+        ws.wrap_in_callout_many(&[before, after]).is_err(),
+        "rows with a gap between them are not one box"
+    );
+
+    let lines = ws.dissolve_callout(callout).unwrap();
+    assert_eq!(lines, vec![one, tail, two]);
+    assert_eq!(
+        ws.children(Parent::Root).unwrap(),
+        vec![before, one, tail, two, after]
+    );
+    assert!(ws.read(callout).is_err() || ws.kind_of(callout).is_none());
+}
