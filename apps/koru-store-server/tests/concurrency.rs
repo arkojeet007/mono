@@ -327,7 +327,7 @@ fn work_done_while_disconnected_arrives_on_reconnect() {
     let ws = workspace(&store);
     let mut a = Peer::join(&store, ws);
 
-    a.connection.close();
+    a.connection.close(std::time::Duration::from_secs(1));
     for title in ["Offline one", "Offline two"] {
         a.edit(|m| {
             m.add_document(DocumentId::new(), title, "page", None)

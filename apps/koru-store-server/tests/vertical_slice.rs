@@ -286,8 +286,8 @@ fn two_clients_converge_and_every_acknowledged_edit_survives_an_abrupt_kill() {
     );
 
     // 6.
-    a.connection.close();
-    b.connection.close();
+    a.connection.close(std::time::Duration::from_secs(1));
+    b.connection.close(std::time::Duration::from_secs(1));
     drop(a);
     drop(b);
 
@@ -394,7 +394,7 @@ fn the_store_can_be_stopped_and_started_without_losing_anything() {
     let mut a = Peer::join(&store, document);
     a.write("Graceful");
     assert_eq!(a.settle(Duration::from_secs(5)).len(), 1);
-    a.connection.close();
+    a.connection.close(std::time::Duration::from_secs(1));
     drop(a);
 
     store.client().shutdown().expect("stop standalone Store");

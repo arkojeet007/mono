@@ -421,10 +421,42 @@ impl Connection {
             .map_err(|e| Error::new(Code::StorageFailed, format!("could not send: {e}")))
     }
 
-    /// Close politely. A dropped connection is also fine — the store leaves
-    /// every room a socket was in when it goes, however it goes.
-    pub fn close(&mut self) {
-        let _ = self.socket.close(None);
+    /// Close politely. A dropped connection is also fine for the store, which
+    /// leaves every room a socket was in when it goes, however it goes — but
+    /// it is not fine for the connection: a socket dropped with the store's
+    /// replies still unread is reset on Windows, and the gateway logs
+    /// *forcibly closed* for it. This sends the Close frame and then reads
+    /// what the store still has to say until it answers in kind, for at most
+    /// `budget`, so the socket is empty when it goes.
+    ///
+    /// `true` when the store's Close came back, or the socket was already
+    /// gone; `false` when the budget ran out first.
+    pub fn close(&mut self, budget: Duration) -> bool {
+        let deadline = std::time::Instant::now() + budget;
+        // Short reads, so the budget is honoured whatever the store is doing.
+        let _ = self.set_read_timeout(Some(Duration::from_millis(20)));
+        if self.socket.close(None).is_err() {
+            return true;
+        }
+        loop {
+            match self.socket.read() {
+                // The store's own Close, or the socket already closed: done.
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    return true;
+                }
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => return true,
+                // A frame still in flight: read and let go.
+                Ok(_) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+        }
     }
 }
 

@@ -13,7 +13,9 @@ use koru_mcp_server::{
 };
 use rmcp::ServiceExt;
 
-const LOG_FILTER: &str = "warn,koru_mcp=info,koru_mcp_server=info";
+// `koru_workspace::sync` is the store link's own account of how a connection
+// ended, which a gateway's reset warning is read against.
+const LOG_FILTER: &str = "warn,koru_mcp=info,koru_mcp_server=info,koru_workspace::sync=info";
 
 fn main() {
     if let Err(error) = run() {

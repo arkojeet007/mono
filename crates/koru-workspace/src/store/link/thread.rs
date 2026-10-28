@@ -107,6 +107,10 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 /// thing somebody typed. The thread flushes and exits within one
 /// [`SOCKET_READ`], so this is a backstop rather than a wait anybody pays.
 const FLUSH_ON_CLOSE: Duration = Duration::from_millis(250);
+/// How long the thread waits for the store's Close after sending its own. Well
+/// inside [`FLUSH_ON_CLOSE`], so a slow store costs a reset, not a forced
+/// shutdown of the stream.
+const CLOSE_HANDSHAKE: Duration = Duration::from_millis(120);
 
 enum Command {
     Join(String, loro::VersionVector),
@@ -345,6 +349,13 @@ impl Drop for ThreadLink {
             .lock()
             .is_ok_and(|f| f.recv_timeout(FLUSH_ON_CLOSE).is_ok());
         if !flushed && let Some(stream) = &self.abort {
+            // A reset on the gateway's side if the thread had not answered:
+            // said, so it can be told from the thread simply ending.
+            tracing::warn!(
+                target: "koru_workspace::sync",
+                waited_ms = FLUSH_ON_CLOSE.as_millis() as u64,
+                "sync link did not finish in time; socket shut down by force"
+            );
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
         if let Some(thread) = self.thread.take() {
@@ -430,6 +441,25 @@ impl Worker {
 /// in a read would otherwise end the thread with bytes still in the channel, and
 /// those bytes are the last thing somebody typed before closing the window.
 fn run(mut w: Worker) {
+    let started = Instant::now();
+    let why = run_loop(&mut w);
+    // The connection ends with a Close frame and the store's answer read, not
+    // dropped: a socket dropped with the store's replies unread is reset on
+    // Windows, which the gateway logged as *forcibly closed* once per session —
+    // a read joined a room and the socket was gone a millisecond later. The
+    // budget sits inside `FLUSH_ON_CLOSE`, which is what a closing window waits.
+    let polite = w.connection.close(CLOSE_HANDSHAKE);
+    tracing::info!(
+        target: "koru_workspace::sync",
+        why,
+        lived_ms = started.elapsed().as_millis() as u64,
+        closed_politely = polite,
+        "sync link thread ended"
+    );
+}
+
+/// The loop of [`run`], returning why it ended.
+fn run_loop(w: &mut Worker) -> &'static str {
     // Bytes queued before the session was told the connection died are deltas
     // against a position it is about to rewind past. Dropped until it says
     // `Join`, which is how it announces that it has rewound.
@@ -440,17 +470,17 @@ fn run(mut w: Worker) {
 
         match write_queued(&mut w.connection, &w.commands, &mut stale) {
             Wrote::Everything => {}
-            Wrote::LinkGone => return,
+            Wrote::LinkGone => return "the session dropped its link",
             Wrote::SocketDied(why) => {
-                if !reconnect(&mut w, why) {
-                    return;
+                if !reconnect(w, why) {
+                    return "reconnect gave up after a write failed";
                 }
                 stale = true;
                 continue;
             }
         }
         if stopping {
-            return;
+            return "shutdown requested, queue flushed";
         }
 
         // Full inbox: keep writing, stop reading. See `INBOX`.
@@ -464,12 +494,12 @@ fn run(mut w: Worker) {
             Ok(Some(event)) => {
                 w.report_stable();
                 if !w.report(Inbound::Event(event)) {
-                    return;
+                    return "nobody is listening to events";
                 }
             }
             Err(e) => {
-                if !reconnect(&mut w, e.to_string()) {
-                    return;
+                if !reconnect(w, e.to_string()) {
+                    return "reconnect gave up after a read failed";
                 }
                 stale = true;
             }

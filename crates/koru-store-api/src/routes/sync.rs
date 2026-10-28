@@ -99,14 +99,47 @@ async fn serve(socket: WebSocket, state: Arc<AppState>, caller: Caller) {
     let mut joined: Vec<Room> = Vec::new();
     let mut fragments: Option<IncomingFragments> = None;
 
+    // What a connection did before it ended, so a reset can be read against
+    // it: a client that sent `Leave` and then vanished is a different story
+    // from one that vanished mid-edit, and a Windows reset ("forcibly closed")
+    // is what a socket dropped with unread data looks like.
+    let opened = std::time::Instant::now();
+    let mut seen = Seen::default();
+    let mut ended = "the loop ran out";
+
     loop {
         let message = match stream.next().await {
             Some(Ok(message)) => message,
             Some(Err(error)) => {
-                tracing::warn!(connection = who.0, %error, "sync socket read failed");
+                ended = "read failed";
+                // The whole chain, and the OS error kind when one is in it:
+                // `%error` alone said only *forcibly closed*.
+                let mut kind = None;
+                let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+                while let Some(cause) = source {
+                    if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                        kind = Some(io.kind());
+                        break;
+                    }
+                    source = cause.source();
+                }
+                tracing::warn!(
+                    connection = who.0,
+                    %error,
+                    io_kind = ?kind,
+                    age_ms = opened.elapsed().as_millis() as u64,
+                    frames = seen.frames,
+                    last_frame = seen.last,
+                    since_last_ms = seen.at.elapsed().as_millis() as u64,
+                    sent_leave = seen.leave,
+                    sent_close = seen.close,
+                    rooms = joined.len(),
+                    "sync socket read failed"
+                );
                 break;
             }
             None => {
+                ended = "client closed the socket";
                 tracing::debug!(connection = who.0, "sync client closed the socket");
                 break;
             }
@@ -120,6 +153,8 @@ async fn serve(socket: WebSocket, state: Arc<AppState>, caller: Caller) {
                 break;
             }
             Message::Close(_) => {
+                seen.close = true;
+                ended = "client requested close";
                 tracing::debug!(connection = who.0, "sync client requested close");
                 break;
             }
@@ -140,7 +175,10 @@ async fn serve(socket: WebSocket, state: Arc<AppState>, caller: Caller) {
 
         let decoded = match accept_fragment(decoded, &mut fragments) {
             Ok(Some(message)) => message,
-            Ok(None) => continue,
+            Ok(None) => {
+                seen.note("fragment");
+                continue;
+            }
             Err(problem) => {
                 if send(&outgoing, &problem).is_err() {
                     break;
@@ -148,6 +186,7 @@ async fn serve(socket: WebSocket, state: Arc<AppState>, caller: Caller) {
                 continue;
             }
         };
+        seen.note(frame_kind(&decoded));
 
         let outcome = {
             // The lock is held for exactly one message — which includes its
@@ -251,8 +290,55 @@ async fn serve(socket: WebSocket, state: Arc<AppState>, caller: Caller) {
     tracing::debug!(
         connection = who.0,
         rooms = joined.len(),
+        ended,
+        age_ms = opened.elapsed().as_millis() as u64,
+        frames = seen.frames,
+        last_frame = seen.last,
+        sent_leave = seen.leave,
+        sent_close = seen.close,
         "sync connection closed"
     );
+}
+
+/// What a connection has sent: how many frames, the kind of the last, when,
+/// and whether it said goodbye.
+struct Seen {
+    frames: u64,
+    last: &'static str,
+    at: std::time::Instant,
+    leave: bool,
+    close: bool,
+}
+
+impl Default for Seen {
+    fn default() -> Self {
+        Self {
+            frames: 0,
+            last: "none",
+            at: std::time::Instant::now(),
+            leave: false,
+            close: false,
+        }
+    }
+}
+
+impl Seen {
+    fn note(&mut self, kind: &'static str) {
+        self.frames += 1;
+        self.last = kind;
+        self.at = std::time::Instant::now();
+        self.leave |= kind == "leave";
+    }
+}
+
+/// The kind of a decoded frame, by name and without formatting its payload.
+fn frame_kind(message: &ProtocolMessage) -> &'static str {
+    match message {
+        ProtocolMessage::JoinRequest { .. } => "join",
+        ProtocolMessage::Leave { .. } => "leave",
+        ProtocolMessage::DocUpdate { .. } => "update",
+        _ => "other",
+    }
 }
 
 fn crdt_of(message: &ProtocolMessage) -> loro_protocol::protocol::CrdtType {
