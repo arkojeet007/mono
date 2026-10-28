@@ -1,3 +1,16 @@
+diff --git a/src/environment.rs b/src/environment.rs
+index 65eac5b..dbf7275 100644
+--- a/src/environment.rs
++++ b/src/environment.rs
+@@ -582,7 +582,7 @@ impl TextMeasurementRecorder {
+         outcome: TextMeasurementRouteOutcome,
+     ) {
+         let counter = &self.counts[Self::slot(phase, operation, outcome)];
+-        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
++        let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+             Some(count.saturating_add(1))
+         });
+     }
 diff --git a/src/model.rs b/src/model.rs
 index 64a1a12..a6e3ae7 100644
 --- a/src/model.rs

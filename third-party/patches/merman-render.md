@@ -105,6 +105,15 @@ the title is missing.
 | `boxes[]` | One per `box … end`, in source order. `fill` is the model's: the color written in the source, or `transparent`. `title` is the box's name centred at `x`, `y` the vertical centre of its first line; absent without a name. |
 | `title` | `title …` from the source, or the front-matter title: the `x` and `y` attributes of the `<text>` Mermaid emits. |
 
+## One line that is not about layout
+
+`src/environment.rs` counts text-measurement routes with
+`AtomicU64::fetch_update`, which Rust 1.99 deprecates in favour of
+`try_update` — the same method under its new name. The patch renames the
+call, because a path dependency is not lint-capped the way a registry
+dependency is, and the warning sat in every build of the workspace. It goes
+with the rest of the patch when a release carries it.
+
 ## Updating
 
 Edit `third-party/crates/merman-render/`, then run

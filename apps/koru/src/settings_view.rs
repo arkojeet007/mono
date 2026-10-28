@@ -180,7 +180,9 @@ impl SettingsView {
         self.surface.focus_search();
     }
 
-    /// Whether the search box has the keyboard.
+    /// Whether the search box has the keyboard — what the container's test
+    /// of the chord reads.
+    #[cfg(test)]
     pub fn search_focused(&self) -> bool {
         self.surface.search_focused()
     }
