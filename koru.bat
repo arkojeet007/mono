@@ -528,43 +528,71 @@ if /i "!MCPPASS:~0,7!"==" --root" (
 cargo run -p koru-mcp --!PASS!%ROOTONLY%
 exit /b %ERRORLEVEL%
 
-REM Register this checkout's bridge with Claude Code under a name - "koru"
-REM unless one is given - so testing an agent against a dev build is one verb
-REM rather than a path to type. The debug bridge beside the other binaries,
-REM with the channel root every other verb here uses, so the agent reaches
-REM the store the window shows. Built first: `claude mcp add` records a path
-REM and says nothing when nothing is there yet. `mcp-remove` undoes it.
+REM Register this checkout's bridge with the agent CLIs on PATH - Claude Code,
+REM Codex and Gemini - under a name, "koru" unless one is given, so testing an
+REM agent against a dev build is one verb rather than a path to type into
+REM each. The debug bridge beside the other binaries, with the channel root
+REM every other verb here uses, so the agent reaches the store the window
+REM shows. A CLI that is not installed is skipped and said so; the verb fails
+REM only when none of the three is there. `mcp-remove` undoes it.
 REM
 REM The build is the point: the registered path is this checkout's bridge, so
 REM running the verb again after a change ships the change. A bridge an MCP
 REM host still has running holds the exe lock, so it is stopped first, as the
-REM `mcp` verb does; a Claude session already open keeps its old child until
-REM it is restarted or told to reconnect.
+REM `mcp` verb does; a session already open keeps its old child until it is
+REM restarted or told to reconnect.
 REM
-REM **User scope, not the default local one.** A local entry is keyed to the
-REM directory `claude mcp add` ran in, so a Claude started anywhere else - a
-REM terminal inside Koru, another worktree - does not see it. The bridge is
-REM for this person's every session, whatever directory it starts in.
+REM **User scope where the CLI has one.** Claude's and Gemini's default scope
+REM is the directory the command ran in, so a session started anywhere else -
+REM a terminal inside Koru, another worktree - would not see the entry. Codex
+REM keeps one global config. Grok, Kimi, Copilot and Muse are left alone: no
+REM registration command of theirs is verified here, and each has its own MCP
+REM settings to paste the Welcome page's command into.
+REM
+REM `call`, because the npm CLIs are .cmd shims and cmd.exe would otherwise
+REM hand them this script's remaining lines.
 :do_mcp_add
 call :mcp_name || exit /b 1
 call :stop_exact_exe "%CD%\target\debug\koru-mcp.exe" || exit /b 1
 cargo build -p koru-mcp || exit /b 1
-claude mcp add --scope user %MCP_NAME% -- "%CD%\target\debug\koru-mcp.exe" serve --stdio%ROOTONLY%
-exit /b %ERRORLEVEL%
+set "MCP_BRIDGE=%CD%\target\debug\koru-mcp.exe"
+set "MCP_ANY="
+where claude >nul 2>&1
+if errorlevel 1 (
+  echo [Koru] claude is not on PATH; skipped
+) else (
+  call claude mcp add --scope user %MCP_NAME% -- "%MCP_BRIDGE%" serve --stdio%ROOTONLY% && set "MCP_ANY=1"
+)
+where codex >nul 2>&1
+if errorlevel 1 (
+  echo [Koru] codex is not on PATH; skipped
+) else (
+  call codex mcp add %MCP_NAME% -- "%MCP_BRIDGE%" serve --stdio%ROOTONLY% && set "MCP_ANY=1"
+)
+where gemini >nul 2>&1
+if errorlevel 1 (
+  echo [Koru] gemini is not on PATH; skipped
+) else (
+  call gemini mcp add --scope user %MCP_NAME% "%MCP_BRIDGE%" -- serve --stdio%ROOTONLY% && set "MCP_ANY=1"
+)
+if not defined MCP_ANY (
+  echo koru: none of claude, codex or gemini is on PATH; nothing was registered.
+  exit /b 1
+)
+exit /b 0
 
 :do_mcp_remove
 call :mcp_name || exit /b 1
-claude mcp remove --scope user %MCP_NAME%
-exit /b %ERRORLEVEL%
+where claude >nul 2>&1
+if not errorlevel 1 call claude mcp remove --scope user %MCP_NAME%
+where codex >nul 2>&1
+if not errorlevel 1 call codex mcp remove %MCP_NAME%
+where gemini >nul 2>&1
+if not errorlevel 1 call gemini mcp remove --scope user %MCP_NAME%
+exit /b 0
 
 REM The server name for the two verbs above: the first argument, or "koru".
-REM Needs the `claude` CLI, and says so rather than failing in its voice.
 :mcp_name
-where claude >nul 2>&1
-if errorlevel 1 (
-  echo koru: claude is not on PATH; this verb registers the bridge with Claude Code.
-  exit /b 1
-)
 set "MCP_NAME=koru"
 for /f "tokens=1" %%A in ("%ARGS%") do set "MCP_NAME=%%A"
 exit /b 0
@@ -846,8 +874,9 @@ echo   run-root-signed    launch the latest signed rooted Windows notification t
 echo   stop       stop every Koru process on this machine
 echo   release    launch an optimised build
 echo   mcp        check MCP discovery; --console serves stdio in this console
-echo   mcp-add    register this checkout's bridge with Claude Code: mcp-add [name]
-echo   mcp-remove unregister it: mcp-remove [name]; the name defaults to koru
+echo   mcp-add    register this checkout's bridge with the agent CLIs on PATH
+echo              (Claude Code, Codex, Gemini): mcp-add [name]; absent ones are skipped
+echo   mcp-remove unregister it from the same: mcp-remove [name]; the name defaults to koru
 echo   voice      run or inspect the voice worker (status ^| stop)
 echo   agent      run the Koru Agent in this console; IPC tracing is opt-in
 echo   document   launch the built-in document on its own

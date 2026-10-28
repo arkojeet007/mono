@@ -327,8 +327,9 @@ usage: ./koru.sh <command> [cargo args...]
   voice-models fetch, repackage and publish the speech models (dry run by default)
   voice-test  launch an isolated stack with both locally served speech models
   mcp        check MCP discovery; --console serves stdio in this terminal
-  mcp-add    register this checkout's bridge with Claude Code: mcp-add [name]
-  mcp-remove unregister it: mcp-remove [name]; the name defaults to koru
+  mcp-add    register this checkout's bridge with the agent CLIs on PATH
+             (Claude Code, Codex, Gemini): mcp-add [name]; absent ones are skipped
+  mcp-remove unregister it from the same: mcp-remove [name]; the name defaults to koru
   voice      run or inspect the voice worker (status | stop)
   document   launch the built-in document on its own
   dist-local package the whole bundle into dist/cloud/ — local signing, no upload
@@ -679,38 +680,60 @@ mcp_verb() {
   exec cargo run -p koru-mcp -- "${command[@]}"
 }
 
-# Register this checkout's bridge with Claude Code under a name — "koru" unless
-# one is given — so testing an agent against a dev build is one verb rather
-# than a path to type: the debug bridge beside the other binaries, with the
-# channel root every other verb uses, so the agent reaches the store the
-# window shows. Built first: `claude mcp add` records a path and says nothing
-# when nothing is there yet. `mcp-remove` undoes it.
+# Register this checkout's bridge with the agent CLIs on PATH — Claude Code,
+# Codex and Gemini — under a name, "koru" unless one is given, so testing an
+# agent against a dev build is one verb rather than a path to type into each:
+# the debug bridge beside the other binaries, with the channel root every
+# other verb uses, so the agent reaches the store the window shows. A CLI that
+# is not installed is skipped and said so; the verb fails only when none of
+# the three is there. Built first: a registration records a path and says
+# nothing when nothing is there yet. `mcp-remove` undoes it.
 #
-# User scope, not the default local one: a local entry is keyed to the
-# directory `claude mcp add` ran in, so a Claude started anywhere else — a
-# terminal inside Koru, another worktree — does not see it. The bridge is for
-# this person's every session, whatever directory it starts in.
+# User scope where the CLI has one: Claude's and Gemini's default scope is the
+# directory the command ran in, so a session started anywhere else — a
+# terminal inside Koru, another worktree — would not see the entry. Codex
+# keeps one global config. Grok, Kimi, Copilot and Muse are left alone: no
+# registration command of theirs is verified here.
 mcp_name() {
-  if ! command -v claude >/dev/null 2>&1; then
-    echo "koru: claude is not on PATH; this verb registers the bridge with Claude Code." >&2
-    return 1
-  fi
   MCP_NAME="${1:-koru}"
 }
 
 mcp_add_verb() {
-  mcp_name "$@" || exit 1
+  mcp_name "$@"
   cargo build -p koru-mcp || exit 1
-  local -a command=("$PWD/target/debug/koru-mcp" serve --stdio)
+  local bridge="$PWD/target/debug/koru-mcp"
+  local -a tail=(serve --stdio)
   if [ -n "${KORU_ROOT:-}" ]; then
-    command+=(--root "$KORU_ROOT")
+    tail+=(--root "$KORU_ROOT")
   fi
-  exec claude mcp add --scope user "$MCP_NAME" -- "${command[@]}"
+  local any=0
+  if command -v claude >/dev/null 2>&1; then
+    claude mcp add --scope user "$MCP_NAME" -- "$bridge" "${tail[@]}" && any=1
+  else
+    echo "[Koru] claude is not on PATH; skipped"
+  fi
+  if command -v codex >/dev/null 2>&1; then
+    codex mcp add "$MCP_NAME" -- "$bridge" "${tail[@]}" && any=1
+  else
+    echo "[Koru] codex is not on PATH; skipped"
+  fi
+  if command -v gemini >/dev/null 2>&1; then
+    gemini mcp add --scope user "$MCP_NAME" "$bridge" -- "${tail[@]}" && any=1
+  else
+    echo "[Koru] gemini is not on PATH; skipped"
+  fi
+  if [ "$any" = 0 ]; then
+    echo "koru: none of claude, codex or gemini is on PATH; nothing was registered." >&2
+    exit 1
+  fi
 }
 
 mcp_remove_verb() {
-  mcp_name "$@" || exit 1
-  exec claude mcp remove --scope user "$MCP_NAME"
+  mcp_name "$@"
+  command -v claude >/dev/null 2>&1 && claude mcp remove --scope user "$MCP_NAME"
+  command -v codex >/dev/null 2>&1 && codex mcp remove "$MCP_NAME"
+  command -v gemini >/dev/null 2>&1 && gemini mcp remove --scope user "$MCP_NAME"
+  return 0
 }
 
 # Which Cloud a launch talks to is a file, not a flag you can forget —

@@ -14,21 +14,26 @@ koru.bat run-all --mcp
 Leave Koru Store running. `run-all --mcp` builds and checks the bridge; it does
 not keep an MCP stdio process running. Claude must own that child process.
 
-## Claude Code
+## Claude Code, Codex and Gemini
 
-The command-line Claude registers the bridge in one step, from the repository
+The command-line agents register the bridge in one step, from the repository
 root:
 
 ```bat
 koru.bat mcp-add
 ```
 
-(`./koru.sh mcp-add` on macOS and Linux.) It builds `koru-mcp`, then runs
-`claude mcp add --scope user koru -- <repo>\target\debug\koru-mcp.exe serve --stdio`,
-with `--root` added when `KORU_ROOT` is set, so the bridge serves the same
-store the window shows. User scope is deliberate: Claude's default, local
-scope, ties a server to the directory the command ran in, and a Claude
-started anywhere else — a terminal inside Koru, say — does not list it. Give a name to register it as something else —
+(`./koru.sh mcp-add` on macOS and Linux.) It builds `koru-mcp`, then
+registers `<repo>\target\debug\koru-mcp.exe serve --stdio` — with `--root`
+added when `KORU_ROOT` is set, so the bridge serves the same store the
+window shows — with every one of Claude Code, Codex and Gemini that is on
+PATH (`claude mcp add`, `codex mcp add`, `gemini mcp add`), and skips the
+ones that are not. User scope is deliberate where the CLI has one: Claude's
+and Gemini's default scope ties a server to the directory the command ran
+in, and a session started anywhere else — a terminal inside Koru, say — does
+not list it. Grok, Kimi, Copilot and Muse are not touched: each has its own
+MCP settings, and the command to paste there is the one the Welcome page's
+*Manage documents over MCP* row copies. Give a name to register it as something else —
 `koru.bat mcp-add mcp_test` — and take it away again with
 `koru.bat mcp-remove [name]`. Koru Store has to be running for the tools to
 answer; `claude mcp list` shows what is registered.
