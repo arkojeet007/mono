@@ -181,7 +181,9 @@ add` into `.agents/skills/`, which `.claude/skills` links to; none of it is
 committed. `setup --agent-skills` installs them and sets the Git hook that
 installs them in every `git worktree add` after it. It needs Node.js for `npx`,
 and nothing else needs the skills: without Node the build is unaffected. To take
-a newer set, run `sh scripts/setup/setup-skills.sh --update`.
+a newer set, run `sh scripts/setup/setup-skills.sh --update`;
+`sh .agents/check-skills.sh` (or `.agents\check-skills.bat`) says whether there
+is one, and the agents run it at the start of a session and ask.
 
 **Koru Cloud is off in a build from source, and that is expected.** With no
 `.env.production` at the repository root, `run` starts with Koru Cloud not

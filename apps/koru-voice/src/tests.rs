@@ -13,7 +13,7 @@ use crate::engine::Script;
 use crate::fixtures;
 use crate::worker::{Command, Shutdown, spawn};
 use koru_voice::control::Outgoing;
-use koru_voice::status::{CaptureInfo, DeviceCategory, DeviceKind, InterfaceKind};
+use koru_voice::status::{CaptureInfo, DeviceKind, InterfaceKind};
 use koru_voice::status::{ModelSummary, StageTiming, StatusReport};
 
 /// The transcript the redaction test hunts for. Nonsense on purpose: a grep for
@@ -181,7 +181,7 @@ fn nothing_this_worker_can_print_reveals_content() {
         .device_type(cpal::DeviceType::Headset)
         .interface_type(cpal::InterfaceType::Bluetooth)
         .build();
-    let category = DeviceCategory::of(&description);
+    let category = crate::capture::category_of(&description);
     assert_eq!(category.device_type, DeviceKind::Headset);
     assert_eq!(category.interface_type, InterfaceKind::Bluetooth);
 

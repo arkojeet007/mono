@@ -131,7 +131,8 @@ impl PairingInvitationV1 {
         ))
     }
 
-    /// A clickable HTTPS form suitable for QR codes, chat, and the clipboard.
+    /// A clickable HTTPS form for QR codes. The apps copy only the part after
+    /// `#` to the clipboard; `decode_link` accepts either.
     /// The fragment keeps the one-use secret out of ordinary web-server logs.
     pub fn encode_link_url(&self) -> Result<String, PairingError> {
         Ok(format!("{PAIRING_LINK_PREFIX}{}", self.encode_qr()?))

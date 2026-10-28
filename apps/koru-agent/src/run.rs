@@ -1028,6 +1028,13 @@ impl koru_window::WindowApp for Host {
                 self.tray_root.as_deref(),
                 self.tray_waker.clone(),
             );
+            // **The windows learn whether there is an icon to hide behind**,
+            // which only this process can say. Windows that connected before
+            // the loop began are told now; later ones on `Hello`.
+            let present = self.tray.as_ref().is_some_and(crate::tray::Tray::present);
+            if let Ok(mut agent) = self.agent.lock() {
+                agent.set_notification_area(present);
+            }
             if let Some(tray) = &mut self.tray
                 && let Ok(agent) = self.agent.lock()
             {
@@ -1041,7 +1048,7 @@ impl koru_window::WindowApp for Host {
                 tray.set_dictation_shortcut(agent.dictation_shortcut());
                 tray.set_ai_shortcut(agent.ai_shortcut());
             }
-            if self.tray.is_none() {
+            if !present {
                 // Not fatal. An agent that refused to run because it could not
                 // draw a picture would be a worse outcome than the one it was
                 // avoiding — but somebody whose only way to quit has just

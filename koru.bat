@@ -971,6 +971,8 @@ if not defined KORU_SKILLS (
     exit /b 0
   )
   echo [Koru] agent skills installed in .agents\skills
+  rem Record the published commit, for the session-start check to compare against.
+  call ".agents\check-skills.bat" --record
 )
 rem The link: present as a link (a reparse point), and showing the skills.
 set "KORU_LINK="

@@ -55,9 +55,10 @@
 //! `ksni`, which needs no gtk. Its menu is a pure function of the tray's
 //! state, [`linux_menu`], built from the same text helpers `imp` uses, so the
 //! platforms cannot tell different stories. With no notification-area host on
-//! the session bus — GNOME without the AppIndicator extension — `show`
-//! answers `None` and the agent runs headless, as it does wherever there is
-//! no tray. Linux leaves out the same two rows macOS does, for reasons of its
+//! the session bus — GNOME without the AppIndicator extension — the icon
+//! waits for one: `show` still answers `Some`, `Tray::present` says `false`,
+//! and the windows are told, so none hides behind an icon nobody can see.
+//! Linux leaves out the same two rows macOS does, for reasons of its
 //! own (see [`linux_menu`]), and keeps the Windows left click.
 //!
 //! Two rows are Windows-only and are **left out** of the macOS menu rather
@@ -866,6 +867,13 @@ mod imp {
             })
         }
 
+        /// Whether the icon is on screen — always, here. `show` answers `Some`
+        /// only once the icon is built, and nothing takes it away while this
+        /// process runs; it is Linux's host that can come and go.
+        pub fn present(&self) -> bool {
+            true
+        }
+
         /// Replace the submenu only when the open-workspace projection changes.
         /// Agent events can be frequent; a native menu rebuild is not maintenance
         /// work that belongs on every one of them.
@@ -1148,10 +1156,16 @@ pub(crate) const ICON_PNG: &[u8] = include_bytes!("../../../assets/logo.png");
 /// why. The setters keep that state and push it to the service only when it
 /// moved; the host asks for the layout when it opens the menu.
 ///
-/// `None` when no notification-area host is listening — vanilla GNOME without
-/// the AppIndicator extension. `ksni` asks the StatusNotifierWatcher at spawn
-/// and fails when there is none, so the Agent then runs as it did before, with
-/// the console line telling the person how to stop it.
+/// **Shown even when no host is listening yet**, and [`Tray::present`] says
+/// whether one is. Vanilla GNOME has no StatusNotifierWatcher until the
+/// AppIndicator extension is turned on, and a watcher can also restart (GNOME
+/// on Xorg) or be switched off. So the service is spawned with
+/// `assume_sni_available`, which turns *no watcher* from a spawn failure into
+/// a `watcher_offline` call, and `ksni` registers the icon whenever a watcher
+/// appears. `watcher_online` and `watcher_offline` keep [`Tray::present`]
+/// true to the screen and raise [`AgentEvent::NotificationArea`], so the
+/// windows — which may hide behind the icon only while there is one — follow.
+/// `None` is left for a session with no D-Bus at all.
 ///
 /// ## Three things that differ from `tray-icon`
 ///
@@ -1178,6 +1192,8 @@ mod linux {
     use crate::event::{AgentEvent, TrayAsk, Waker};
     use crate::registry::OpenWorkspace;
     use ksni::blocking::TrayMethods;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// What the service thread owns: the state the menu is derived from, and
     /// what a click needs to raise its ask.
@@ -1186,6 +1202,20 @@ mod linux {
         tooltip: String,
         icon: Option<ksni::Icon>,
         waker: Waker,
+        /// Whether a watcher has the icon. Written on the service thread,
+        /// read by [`Tray::present`] on the loop's.
+        present: Arc<AtomicBool>,
+    }
+
+    impl Item {
+        /// Record what the watcher just did and tell the loop, which tells the
+        /// windows. Only on a change: `ksni` calls `watcher_offline` again for
+        /// a registration that fails after the watcher came back.
+        fn watcher(&self, present: bool) {
+            if self.present.swap(present, Ordering::AcqRel) != present {
+                self.waker.wake(AgentEvent::NotificationArea { present });
+            }
+        }
     }
 
     impl ksni::Tray for Item {
@@ -1206,6 +1236,18 @@ mod linux {
         }
         fn activate(&mut self, _x: i32, _y: i32) {
             self.waker.wake(AgentEvent::Tray(TrayAsk::IconClick));
+        }
+        /// A watcher appeared — the AppIndicator extension was switched on, or
+        /// GNOME restarted. `ksni` registers the icon with it next.
+        fn watcher_online(&self) {
+            self.watcher(true);
+        }
+        /// No watcher, or it would not take the icon. **`true` keeps the
+        /// service running**, so the icon comes back with the next watcher.
+        fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
+            tracing::info!(?reason, "the notification-area host went away");
+            self.watcher(false);
+            true
         }
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             super::linux_menu(&self.state)
@@ -1308,6 +1350,8 @@ mod linux {
         /// should cost a D-Bus conversation when nothing changed — `imp`'s
         /// rule for native calls.
         state: MenuState,
+        /// Shared with the service's [`Item`]; see [`Tray::present`].
+        present: Arc<AtomicBool>,
     }
 
     impl Tray {
@@ -1336,19 +1380,34 @@ mod linux {
                 about: super::about_line(info.version, info.build_number, info.build_label()),
                 about_enabled: super::release_notes_url().is_some(),
             };
+            // Until a watcher says otherwise: with one listening at spawn
+            // `ksni` registers and calls nothing, and with none it calls
+            // `watcher_offline` before `spawn` returns.
+            let present = Arc::new(AtomicBool::new(true));
             let item = Item {
                 state: state.clone(),
                 tooltip: super::tooltip(info.version, segment, root, super::branch()),
                 icon: icon(),
                 waker,
+                present: Arc::clone(&present),
             };
-            match item.spawn() {
-                Ok(handle) => Some(Self { handle, state }),
+            match item.assume_sni_available(true).spawn() {
+                Ok(handle) => Some(Self {
+                    handle,
+                    state,
+                    present,
+                }),
                 Err(error) => {
-                    tracing::info!(%error, "no notification-area host; running without an icon");
+                    tracing::info!(%error, "no session bus; running without an icon");
                     None
                 }
             }
+        }
+
+        /// Whether a notification-area host has the icon right now — false on
+        /// GNOME until the AppIndicator extension is on.
+        pub fn present(&self) -> bool {
+            self.present.load(Ordering::Acquire)
         }
 
         /// Hand the service the current state. Called only after a setter has
@@ -1468,6 +1527,9 @@ mod stub {
             None
         }
 
+        pub fn present(&self) -> bool {
+            false
+        }
         pub fn set_workspaces(&mut self, _rows: &[OpenWorkspace]) {}
         pub fn set_agent_sessions(&mut self, _catalog: &crate::agents_menu::AgentsCatalog) {}
         pub fn set_store_running(&mut self, _running: bool) {}

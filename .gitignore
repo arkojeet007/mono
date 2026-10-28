@@ -82,6 +82,9 @@ voice-models-work/
 .agents/skills/
 .claude/skills
 skills-lock.json
+# The commit the installed skills came from, and the last answer from the
+# remote, written by .agents/check-skills.sh.
+.agents/skills.source
 
 # A maintainer's private notes beside AGENTS.md (AGENTS.md, "Maintainers'
 # private notes"). Never part of this repository.

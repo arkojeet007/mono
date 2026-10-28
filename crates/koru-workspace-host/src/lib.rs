@@ -3271,6 +3271,13 @@ pub trait Host {
         false
     }
 
+    /// Whether the agent has a notification-area icon to bring a hidden window
+    /// back from, as the agent last said. Implies [`Self::agent_available`].
+    /// The close button hides to the tray only while this is true.
+    fn agent_has_notification_area(&self) -> bool {
+        false
+    }
+
     /// This window came to the front. Carries no time — see
     /// `koru_agent_wire::Request::Active`.
     fn agent_active(&self) {}

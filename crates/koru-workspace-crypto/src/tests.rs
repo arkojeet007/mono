@@ -83,7 +83,7 @@ fn the_only_thing_that_crosses_the_boundary_is_a_workspace_encryption_key() {
     use crate::suites::{AuthorType, GrantSuite, RecipientType};
     use koru_device::DeviceSigningKey;
     use koru_store_core::ids::WorkspaceId;
-    use rand_core::RngCore as _;
+    use rand_core::Rng as _;
     use uuid::Uuid;
 
     let mut rng = VectorRng::new(b"boundary");
@@ -162,7 +162,7 @@ fn changing_the_grant_suite_does_not_change_one_stored_byte() {
     use crate::suites::{AuthorType, GrantSuite, RecipientType};
     use koru_device::DeviceSigningKey;
     use koru_store_core::ids::WorkspaceId;
-    use rand_core::RngCore as _;
+    use rand_core::Rng as _;
     use uuid::Uuid;
 
     let mut rng = VectorRng::new(b"suite-change");

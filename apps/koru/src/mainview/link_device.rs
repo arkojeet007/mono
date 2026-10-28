@@ -338,8 +338,10 @@ impl LinkDevice {
             Some(Hit::Copy) => self
                 .pairing
                 .qr_payload
-                .clone()
-                .map_or(Outcome::Keep, Outcome::Copy),
+                .as_deref()
+                .map_or(Outcome::Keep, |payload| {
+                    Outcome::Copy(link_code(payload).to_owned())
+                }),
             Some(Hit::Generate) => Outcome::Generate,
             Some(Hit::Accept) => {
                 let code = self.input.value();
@@ -794,6 +796,13 @@ fn idle_pairing() -> koru_agent_wire::PairingView {
         peer_name: None,
         error_code: None,
     }
+}
+
+/// The code alone, without the `https://koru.do/link-device#` it travels in.
+/// The QR keeps the link so a phone's camera opens Koru; a pasted code is
+/// accepted either way.
+fn link_code(payload: &str) -> &str {
+    payload.split_once('#').map_or(payload, |(_, code)| code)
 }
 
 fn qr_matrix(value: &str) -> Option<(usize, Vec<bool>)> {

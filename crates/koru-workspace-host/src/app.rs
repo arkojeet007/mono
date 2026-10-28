@@ -392,14 +392,6 @@ fn hide_application(hidden: bool) {
 #[cfg(not(target_os = "macos"))]
 fn hide_application(_hidden: bool) {}
 
-/// Whether the Agent has a notification-area icon to come back from.
-///
-/// Linux has none yet (the Agent's tray is Windows and macOS only), and a
-/// window hidden there is a process nobody can reach — the case
-/// `WindowRequest::HideToTray` already says must fall back to closing. So on
-/// Linux every "go to the tray" is a close.
-const HAS_NOTIFICATION_AREA: bool = cfg!(any(windows, target_os = "macos"));
-
 /// Has macOS brought the application back without asking us?
 ///
 /// A Dock click, ⌘-Tab or the app switcher all unhide directly — none of them
@@ -13347,7 +13339,12 @@ Nothing was written. The store starts on demand, so this usually means it could 
     /// machine can be shut down from, and "I put it in the tray last night" must
     /// not be how a day's work is lost.
     fn hide_to_tray(&mut self) -> bool {
-        if !HAS_NOTIFICATION_AREA || self.panes.is_empty() || !self.host.agent_available() {
+        // **The Agent says whether it has an icon**, rather than this build
+        // assuming one from its platform: Linux's comes and goes with its
+        // StatusNotifierItem host, and an icon can fail to appear anywhere. A
+        // window hidden with no icon is a process nobody can reach — the case
+        // `WindowRequest::HideToTray` already says must fall back to closing.
+        if self.panes.is_empty() || !self.host.agent_has_notification_area() {
             return false;
         }
         self.capture_geometry();
@@ -13599,7 +13596,7 @@ Nothing was written. The store starts on demand, so this usually means it could 
                     return;
                 }
                 // With no tray, "keep running in the background" is a quit too.
-                if !background || !HAS_NOTIFICATION_AREA {
+                if !background || !self.host.agent_has_notification_area() {
                     self.host.last_window_closing();
                 }
             }

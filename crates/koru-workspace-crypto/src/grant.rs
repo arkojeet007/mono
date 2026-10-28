@@ -398,11 +398,10 @@ impl WekGrantV1 {
             RecipientPublicKey::X25519(bytes) => {
                 let pk = <X25519HkdfSha256 as KemTrait>::PublicKey::from_bytes(bytes)
                     .map_err(|_| CryptoError::InvalidKey)?;
-                let (enc, ct) = hpke::single_shot_seal::<
+                let (enc, ct) = hpke::single_shot_seal_with_rng::<
                     ChaCha20Poly1305,
                     HkdfSha256,
                     X25519HkdfSha256,
-                    _,
                 >(
                     &OpModeS::Base, &pk, &info, wek.as_bytes(), b"", rng
                 )
@@ -412,11 +411,10 @@ impl WekGrantV1 {
             RecipientPublicKey::P256(bytes) => {
                 let pk = <DhP256HkdfSha256 as KemTrait>::PublicKey::from_bytes(bytes.as_slice())
                     .map_err(|_| CryptoError::InvalidKey)?;
-                let (enc, ct) = hpke::single_shot_seal::<
+                let (enc, ct) = hpke::single_shot_seal_with_rng::<
                     ChaCha20Poly1305,
                     HkdfSha256,
                     DhP256HkdfSha256,
-                    _,
                 >(
                     &OpModeS::Base, &pk, &info, wek.as_bytes(), b"", rng
                 )

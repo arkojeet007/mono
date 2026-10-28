@@ -392,8 +392,10 @@ private fun LinkDeviceScreen(
                             // The clip's *label* is a debugging aid the system
                             // shows in the clipboard editor, not a sentence
                             // anybody reads in Koru — it stays English on
-                            // purpose, like a log line.
-                            (context.getSystemService(ClipboardManager::class.java)).setPrimaryClip(ClipData.newPlainText("Koru device link", current.payload))
+                            // purpose, like a log line. The QR keeps the
+                            // https://koru.do/link-device# link so a camera
+                            // opens Koru; the clipboard gets the code alone.
+                            (context.getSystemService(ClipboardManager::class.java)).setPrimaryClip(ClipData.newPlainText("Koru device link", current.payload.substringAfter('#')))
                             Toast.makeText(context, R.string.code_copied, Toast.LENGTH_SHORT).show()
                         }) { Text(stringResource(R.string.copy_link_code)) }
                         // The count goes through the resource rather than a

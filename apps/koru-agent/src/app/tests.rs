@@ -3245,3 +3245,101 @@ fn a_build_that_hides_koru_ai_opens_no_chat_from_any_door() {
         }
     });
 }
+
+/// Every frame queued for one window, without waiting for more.
+fn drained(queue: &std::sync::mpsc::Receiver<FromAgent>) -> Vec<FromAgent> {
+    std::iter::from_fn(|| queue.try_recv().ok()).collect()
+}
+
+/// **The tray's *Quit* tells every window it is a quit, before it stops.**
+/// Without the notice a window takes the ended link for a crash and starts a
+/// new Agent, which is how *Quit* used to bring back what it had just stopped.
+#[test]
+fn tray_quit_tells_every_window_not_to_start_another_agent() {
+    let mut agent = agent();
+    let first = ConnectionId(90);
+    let second = ConnectionId(91);
+    let (first_connection, first_queue) = Connection::for_test(first);
+    let (second_connection, second_queue) = Connection::for_test(second);
+    agent.connections.push(first_connection);
+    agent.connections.push(second_connection);
+
+    agent.wake(AgentEvent::Tray(TrayAsk::Quit));
+
+    for queue in [&first_queue, &second_queue] {
+        assert_eq!(
+            drained(queue),
+            vec![FromAgent::Push {
+                body: Push::Quitting
+            }]
+        );
+    }
+    assert!(agent.should_exit(), "and the Agent still quits");
+}
+
+/// `koru-agent stop` is a person asking too, and says the same.
+#[test]
+fn a_shutdown_over_the_socket_tells_the_other_windows_it_is_a_quit() {
+    let mut agent = agent();
+    let window = ConnectionId(92);
+    let cli = ConnectionId(93);
+    let (window_connection, window_queue) = Connection::for_test(window);
+    let (cli_connection, _cli_queue) = Connection::for_test(cli);
+    agent.connections.push(window_connection);
+    agent.connections.push(cli_connection);
+
+    agent.said(cli, 1, Request::Shutdown, std::time::Duration::ZERO);
+
+    assert_eq!(
+        drained(&window_queue),
+        vec![FromAgent::Push {
+            body: Push::Quitting
+        }]
+    );
+    assert!(agent.should_exit());
+}
+
+/// **The windows follow the icon.** A change is told to every window, once; a
+/// window that says `Hello` while there is an icon learns it; and nothing is
+/// sent while there is none, because a window assumes none until told.
+#[test]
+fn the_windows_are_told_whether_there_is_an_icon_to_hide_behind() {
+    let mut agent = agent();
+    let early = ConnectionId(94);
+    let (early_connection, early_queue) = Connection::for_test(early);
+    agent.connections.push(early_connection);
+    workspace_hello(&mut agent, early, &early_queue);
+    assert!(drained(&early_queue).is_empty(), "no icon, nothing said");
+
+    agent.wake(AgentEvent::NotificationArea { present: true });
+    agent.wake(AgentEvent::NotificationArea { present: true });
+    assert_eq!(
+        drained(&early_queue),
+        vec![FromAgent::Push {
+            body: Push::NotificationArea { present: true }
+        }],
+        "told once, on the change"
+    );
+
+    let late = ConnectionId(95);
+    let (late_connection, late_queue) = Connection::for_test(late);
+    agent.connections.push(late_connection);
+    workspace_hello(&mut agent, late, &late_queue);
+    assert!(
+        drained(&late_queue).contains(&FromAgent::Push {
+            body: Push::NotificationArea { present: true }
+        }),
+        "a window that arrives later learns it on Hello"
+    );
+
+    // The StatusNotifierItem host went away under a running Agent.
+    agent.wake(AgentEvent::NotificationArea { present: false });
+    for queue in [&early_queue, &late_queue] {
+        assert_eq!(
+            drained(queue),
+            vec![FromAgent::Push {
+                body: Push::NotificationArea { present: false }
+            }]
+        );
+    }
+}

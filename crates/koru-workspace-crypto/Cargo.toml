@@ -14,13 +14,17 @@ description = "Koru Cloud workspace cryptography: key-grant envelopes, content e
 # constructions goes through this crate's API, which is what keeps one answer to
 # "what does Koru ciphertext look like".
 [dependencies]
-# RFC 9180 HPKE, pure Rust. **0.13 rather than 0.14** — 0.14 moved to the
-# RustCrypto pre-1.0 generation (sha2 0.11, aead 0.6, rand_core 0.10), which
-# would put a second SHA-2 implementation in a build that already carries
-# sha2 0.10 through `koru-device`. 0.13 is on the same generation as the rest of
-# the tree and has been in the wild since February 2025. Default features are
-# `alloc + x25519 + p256`, which is exactly the two KEMs D88 needs.
-hpke = "0.13"
+# RFC 9180 HPKE, pure Rust. **0.14, although it is on the RustCrypto pre-1.0
+# generation** (sha2 0.11, aead 0.6, rand_core 0.10) and so puts a second SHA-2
+# implementation beside the sha2 0.10 `koru-device` carries. 0.13 was chosen to
+# avoid that, until RUSTSEC-2026-0387: its P-256 runs on crypto-bigint 0.5,
+# whose constant-time arithmetic leaks timing and is fixed only in 0.7.6, which
+# 0.14 brings. A duplicate hash is a build-size cost; a timing leak in a KEM is
+# not one to carry. HPKE's output is fixed by the RFC, so the golden vectors
+# are unchanged. 0.14 drops P-256 from the defaults: `nistp` brings it back
+# (with P-384 and P-521, which nothing here uses), and the defaults' ML-KEM is
+# left out, so the features are exactly the two KEMs D88 needs and its AEAD.
+hpke = { version = "0.14.1", default-features = false, features = ["alloc", "x25519", "nistp", "chacha"] }
 # The AEAD of `ContentCipherSuiteV1` (Cobblestone-256). Hardware-accelerated on
 # every platform Koru targets: AES-NI on x86-64, the ARMv8 crypto extensions on
 # Apple silicon and on every Android device we support.
@@ -38,9 +42,9 @@ blake3 = { workspace = true }
 # Constant-time equality for commitments, tags and key ids.
 subtle = "2.6"
 # The RNG that HPKE encapsulation and the chunked scheme's salt need.
-# **0.9 because that is what `hpke` 0.13 takes**; the workspace's `rand_core`
+# **0.10 because that is what `hpke` 0.14 takes**; the workspace's `rand_core`
 # 0.6 belongs to `ed25519-dalek` 2 and the two never meet.
-rand_core = { version = "0.9", features = ["os_rng"] }
+rand_core = "0.10"
 # The device's existing Ed25519 identity key signs the grant envelope (D87).
 # No second signing identity is invented here.
 koru-device = { path = "../koru-device" }

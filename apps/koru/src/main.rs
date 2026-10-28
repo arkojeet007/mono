@@ -483,6 +483,10 @@ impl Host for Manager {
         self.agent.connected()
     }
 
+    fn agent_has_notification_area(&self) -> bool {
+        self.agent.has_notification_area()
+    }
+
     fn agent_active(&self) {
         self.agent.active();
     }

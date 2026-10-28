@@ -436,6 +436,13 @@ if ($skillsIn -and $linked -and $linkType -eq "SymbolicLink") {
 } else {
     Note "Optional coding-agent skills and Git hooks: koru.bat setup --agent-skills (requires Node.js)."
 }
+# Behind koruworks/skills? .agents\check-skills.ps1 keeps the record and the
+# agents ask at session start; here its one line, when it has one, joins the
+# report.
+$checkSkills = Join-Path $repo ".agents\check-skills.ps1"
+if ($skillsIn -and (Test-Path -LiteralPath $checkSkills)) {
+    foreach ($line in (& $checkSkills -Mode --now)) { if ($line) { Note $line } }
+}
 # docs\ is the team's private koru-docs submodule. Nothing builds from it, so
 # not having it is a note, not a warning: an outside contributor never will.
 if (Test-Path (Join-Path $repo "docs\README.md")) {

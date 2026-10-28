@@ -5,6 +5,8 @@
 # (https://skills.sh) into .agents/skills/, which Codex reads, and link
 # .claude/skills to it for Claude Code, as one link for the whole directory.
 # Neither is committed; skills-lock.json, which the CLI writes, is not either.
+# After an install this records the published commit in .agents/skills.source,
+# which .agents/check-skills.sh compares with koruworks/skills at session start.
 #
 #   sh scripts/setup/setup-skills.sh            install or repair what is missing
 #   sh scripts/setup/setup-skills.sh --update   install again, taking the latest
@@ -56,6 +58,7 @@ if [ "${1:-}" = "--update" ] || ! ls .agents/skills/*/SKILL.md >/dev/null 2>&1; 
   if npx -y "$CLI" add "$SOURCE" --agent codex --yes >"$log" 2>&1; then
     rm -f "$log"
     changed=1
+    sh .agents/check-skills.sh --record || true
   else
     echo "[skills] the install failed; the CLI said:" >&2
     tail -n 20 "$log" >&2

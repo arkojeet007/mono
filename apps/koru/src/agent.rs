@@ -392,6 +392,16 @@ pub struct AgentLink {
     reconnecting: Arc<AtomicBool>,
     reconnect_root: Option<PathBuf>,
     reconnect_enabled: bool,
+    /// The Agent said it is stopping because a person asked it to
+    /// ([`Push::Quitting`]). Read when the link ends: a quit is not a crash,
+    /// and starting a replacement would undo the person's *Quit*. Cleared by
+    /// the next connection, whoever started its Agent.
+    quit_announced: Arc<AtomicBool>,
+    /// Whether the Agent last said it has a notification-area icon
+    /// ([`Push::NotificationArea`]). `false` until it says so and again
+    /// whenever the link ends: hiding behind an icon is safe only while there
+    /// is an Agent to show it.
+    notification_area: Arc<AtomicBool>,
     /// In-pane reports produced by the reader thread, drained one at a time by
     /// the shell. A queue preserves two rapid gestures instead of letting the
     /// latter overwrite the first before the event loop wakes.
@@ -487,6 +497,8 @@ impl AgentLink {
             reconnecting: Arc::new(AtomicBool::new(false)),
             reconnect_root: None,
             reconnect_enabled: false,
+            quit_announced: Arc::new(AtomicBool::new(false)),
+            notification_area: Arc::new(AtomicBool::new(false)),
             notices: Arc::new(Mutex::new(VecDeque::new())),
             update: Arc::new(Mutex::new(None)),
             update_dirty: Arc::new(AtomicBool::new(false)),
@@ -852,6 +864,12 @@ impl AgentLink {
     /// Whether there is an agent on the other end.
     pub fn connected(&self) -> bool {
         self.live.load(Ordering::Acquire)
+    }
+
+    /// Whether that agent has a notification-area icon a hidden window can be
+    /// brought back from. Implies [`Self::connected`].
+    pub fn has_notification_area(&self) -> bool {
+        self.connected() && self.notification_area.load(Ordering::Acquire)
     }
 
     /// The identity of the live Agent connection. A caller can bind a
@@ -1914,6 +1932,22 @@ impl AgentLink {
                             device_history_dirty.store(true, Ordering::Release);
                             let _ = wake_the_loop(&wake);
                         }
+                        // Remembered for the end of the stream, which is
+                        // where it matters: see `connection_ended`.
+                        // State, like the chord: what `hide_to_tray` asks.
+                        FromAgent::Push {
+                            body: Push::NotificationArea { present },
+                        } => {
+                            reconnect_link
+                                .notification_area
+                                .store(present, Ordering::Release);
+                        }
+                        FromAgent::Push {
+                            body: Push::Quitting,
+                        } => {
+                            koru_ipc::ipc_debug!("agent: quitting because a person asked");
+                            reconnect_link.quit_announced.store(true, Ordering::Release);
+                        }
                         // Stored like the pairing view, not queued: a chord is
                         // something the taskbar draws from, not an instruction.
                         FromAgent::Push {
@@ -2086,6 +2120,7 @@ impl AgentLink {
         if admissions.replace(generation) {
             self.account_dirty.store(true, Ordering::Release);
         }
+        self.quit_announced.store(false, Ordering::Release);
         *self
             .writer
             .lock()
@@ -2131,6 +2166,7 @@ impl AgentLink {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
         self.live.store(false, Ordering::Release);
+        self.notification_area.store(false, Ordering::Release);
         drop(admissions);
         let pending_removals = self
             .pending_profile_removals
@@ -2209,7 +2245,24 @@ impl AgentLink {
             koru_ipc::ipc_debug!("agent: stopped for an identity reset; relaunching");
             return;
         }
+        if !self.recovers_from_link_end() {
+            koru_ipc::ipc_debug!("agent: quit by request; not starting another");
+            return;
+        }
         self.schedule_reconnect();
+    }
+
+    /// Whether an ended link is a crash to recover from, by dialling and — when
+    /// nothing answers — starting a new Agent.
+    ///
+    /// **Not after [`Push::Quitting`].** The tray's *Quit* used to be undone by
+    /// exactly this: every open window took the ended link for a crash, found
+    /// nothing listening and started the Agent again, which started the Store
+    /// again. A window left open after a quit stays without an Agent, as one
+    /// started with none does; a hidden one closes itself, because its way
+    /// back has gone (`koru_workspace_host`'s tray rule).
+    fn recovers_from_link_end(&self) -> bool {
+        !self.quit_announced.load(Ordering::Acquire)
     }
 
     /// Recover one broken link without putting connection work or retries on
@@ -2837,6 +2890,11 @@ fn translate(push: Push) -> Option<FromTheAgent> {
         // Stored by the reader (like `Pairing`), not queued — the chord is
         // something the taskbar draws from, never an instruction to act on.
         Push::Shortcut { .. } => None,
+        // Remembered by the reader for the end of the stream; nothing for the
+        // window to do until then.
+        Push::Quitting => None,
+        // Stored by the reader; a window reads it when somebody closes one.
+        Push::NotificationArea { .. } => None,
         // The tray's Agents rows (Q-E8 P9). `None` is the menu's New; a named
         // session whose id will not parse is refused rather than guessed at —
         // the same rule `Open` follows below.

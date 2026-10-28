@@ -15,7 +15,9 @@
 //! from a fixed seed — which is a fine PRF and a terrible source of secrets,
 //! because the seed is in the source file.
 
-use rand_core::{CryptoRng, RngCore};
+use core::convert::Infallible;
+
+use rand_core::{TryCryptoRng, TryRng};
 
 pub struct VectorRng {
     reader: blake3::OutputReader,
@@ -32,25 +34,30 @@ impl VectorRng {
     }
 }
 
-impl RngCore for VectorRng {
-    fn next_u32(&mut self) -> u32 {
+// `rand_core` 0.10 derives `Rng` and `CryptoRng` from the infallible `Try*`
+// traits, so the reader is implemented once, there.
+impl TryRng for VectorRng {
+    type Error = Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Infallible> {
         let mut bytes = [0u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Infallible> {
         let mut bytes = [0u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
     }
 
-    fn fill_bytes(&mut self, dst: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible> {
         self.reader.fill(dst);
+        Ok(())
     }
 }
 
-impl CryptoRng for VectorRng {}
+impl TryCryptoRng for VectorRng {}
 
 pub fn unhex(s: &str) -> Vec<u8> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();

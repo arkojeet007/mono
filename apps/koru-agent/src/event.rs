@@ -181,6 +181,11 @@ pub enum AgentEvent {
     },
     /// Whether Ctrl+Shift+I was successfully reserved for Koru AI.
     AiHotkeyRegistered { available: bool },
+    /// The notification-area icon became visible or stopped being. Raised by
+    /// Linux's StatusNotifierItem service when a watcher (KDE's panel, GNOME's
+    /// AppIndicator extension) comes or goes; the windows are told, because a
+    /// window may hide behind the icon only while there is one.
+    NotificationArea { present: bool },
     /// Something was chosen from the notification area.
     Tray(TrayAsk),
     /// A worker thread finished asking the voice worker what it is doing.
@@ -482,6 +487,7 @@ impl AgentEvent {
             Self::DictationHotkeyPrepared { .. } => "DictationHotkeyPrepared",
             Self::DictationHotkeySettled { .. } => "DictationHotkeySettled",
             Self::AiHotkeyRegistered { .. } => "AiHotkeyRegistered",
+            Self::NotificationArea { .. } => "NotificationArea",
             Self::Tray(_) => "Tray",
             Self::VoiceWorkerRead { .. } => "VoiceWorkerRead",
             Self::Dictation => "Dictation",

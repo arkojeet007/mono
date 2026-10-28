@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.agents/check-skills.sh\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

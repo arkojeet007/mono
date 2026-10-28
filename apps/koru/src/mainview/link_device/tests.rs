@@ -51,18 +51,23 @@ fn a_tab_is_chosen_where_it_is_drawn() {
 }
 
 #[test]
-fn qr_and_clipboard_use_the_same_payload() {
+fn the_qr_carries_the_link_and_the_clipboard_only_the_code() {
     let mut engine = TextEngine::new();
     let mut modal = LinkDevice::new(&mut engine);
-    let payload = "koru-pair-v1:example".to_string();
-    modal.set_pairing(&mut engine, displaying(&payload));
-    assert!(modal.qr.is_some());
+    let payload = "https://koru.do/link-device#koru-pair:v1c:example";
+    modal.set_pairing(&mut engine, displaying(payload));
+    assert_eq!(modal.qr, qr_matrix(payload));
     let panel = LinkDevice::panel((900.0, 700.0));
     let (x, y) = LinkDevice::action_rect(panel, true).centre();
     match modal.mouse_down(&mut engine, (900.0, 700.0), x, y) {
-        Outcome::Copy(value) => assert_eq!(value, payload),
+        Outcome::Copy(value) => assert_eq!(value, "koru-pair:v1c:example"),
         _ => panic!("copy action was not returned"),
     }
+}
+
+#[test]
+fn a_payload_without_the_link_is_copied_as_it_is() {
+    assert_eq!(link_code("koru-pair:v1c:example"), "koru-pair:v1c:example");
 }
 
 #[test]

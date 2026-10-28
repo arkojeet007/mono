@@ -288,6 +288,12 @@ Rust source cites docs by path in hundreds of places. Then
   `.agents/skills/` (which `.claude/skills` links to), and `.githooks/post-checkout`
   runs it in every new worktree. A change to a skill is made there, not by
   editing the installed copy, which the next `--update` replaces.
+- **At the start of a session, make sure the skills are current.** Run
+  `sh .agents/check-skills.sh` (`.agents\check-skills.bat` from cmd or
+  PowerShell) unless your harness already ran it for you (Claude Code does,
+  through `.claude/settings.json`). It prints one line when
+  `.agents/skills` is behind koruworks/skills, and nothing otherwise. Tell the
+  user and ask before updating; on a yes, `sh .agents/check-skills.sh --update`.
 
 ## Maintainers' private notes
 

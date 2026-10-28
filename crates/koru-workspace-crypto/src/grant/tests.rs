@@ -4,7 +4,7 @@
 
 use koru_device::DeviceSigningKey;
 use koru_store_core::ids::WorkspaceId;
-use rand_core::RngCore as _;
+use rand_core::Rng as _;
 use uuid::Uuid;
 
 use super::*;

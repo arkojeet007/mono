@@ -608,6 +608,10 @@ pub struct Agent {
     /// window loop does.
     shortcut: crate::tray::Shortcut,
     dictation_shortcut: crate::tray::Shortcut,
+    /// Whether the notification-area icon is up, as the windows were last told
+    /// ([`Push::NotificationArea`]). Set by the host once the tray exists and
+    /// by the tray's own service when its host comes or goes.
+    notification_area: bool,
     hotkey_control: Option<crate::hotkey::Control>,
     /// True for ordinary Agents and for a rooted interactive `--tray` launch.
     /// False for headless roots so automated gates claim no OS singleton.
@@ -1008,6 +1012,7 @@ impl Agent {
             startup_gate_retry_at: None,
             shortcut: crate::tray::Shortcut::Unknown,
             dictation_shortcut: crate::tray::Shortcut::Unknown,
+            notification_area: false,
             hotkey_control: None,
             machine_input_enabled: false,
             hotkey_generation: 0,
@@ -3927,6 +3932,9 @@ impl Agent {
                 // learns it, exactly as it learns the update report.
                 self.push_shortcut_to(connection);
                 self.push_reminder_diagnostics_to(connection);
+                // And whether there is an icon to hide behind — the window's
+                // close button keeps it in the background only if there is.
+                self.push_notification_area_to(connection);
                 // **And, once, what the last install produced.**
                 //
                 // Read off disk rather than held in memory because the process
@@ -4535,7 +4543,7 @@ impl Agent {
                 // second step finds a store already stopped, and
                 // `stop_store` treats that as the outcome it wanted.
                 koru_ipc::ipc_debug!("shutdown: asked over the socket");
-                self.stop_sessions_then_quit();
+                self.quit_because_asked();
             }
         }
     }
@@ -4608,6 +4616,8 @@ impl Agent {
             Push::Shortcut { shortcut } => {
                 format!("shortcut {}", shortcut.as_deref().unwrap_or("none"))
             }
+            Push::Quitting => "quitting".to_string(),
+            Push::NotificationArea { present } => format!("notification_area present={present}"),
         };
         let alive = self
             .connection(connection)
@@ -4834,11 +4844,11 @@ impl Agent {
             return;
         }
         let Some(lifecycle) = self.session_lifecycle.clone() else {
-            self.stop_sessions_then_quit();
+            self.quit_because_asked();
             return;
         };
         let Some(waker) = self.event_waker.clone() else {
-            self.stop_sessions_then_quit();
+            self.quit_because_asked();
             return;
         };
         self.quit_confirmation_pending = true;
@@ -4861,6 +4871,29 @@ impl Agent {
             .is_err()
         {
             self.quit_confirmation_pending = false;
+        }
+    }
+
+    /// **A person asked this Agent to stop**: tell every window so, then stop.
+    ///
+    /// The tray's *Quit* and `koru-agent stop` both end here; an identity reset
+    /// does not, because its windows are meant to relaunch onto the new
+    /// identity. Without the notice a window cannot tell this ending from a
+    /// crash, and its recovery for a crash is to start a new Agent — which is
+    /// how *Quit* used to bring back the process it had just stopped.
+    ///
+    /// **Queued before the stop begins**, so each window's writer has the whole
+    /// session and gateway stop to deliver it ahead of the end of the stream.
+    fn quit_because_asked(&mut self) {
+        self.announce_quit();
+        self.stop_sessions_then_quit();
+    }
+
+    /// Queue [`Push::Quitting`] for every live window.
+    fn announce_quit(&mut self) {
+        let ids: Vec<ConnectionId> = self.connections.iter().map(Connection::id).collect();
+        for id in ids {
+            self.push(id, Push::Quitting);
         }
     }
 
@@ -5139,6 +5172,29 @@ impl Agent {
 
     pub(crate) fn ai_shortcut(&self) -> bool {
         self.ai_shortcut
+    }
+
+    /// **Tell every window whether there is an icon to come back from**, when
+    /// that has changed. A window hides behind the icon only while this says
+    /// so; on Linux the icon's host can come and go under a running Agent.
+    pub(crate) fn set_notification_area(&mut self, present: bool) {
+        if self.notification_area == present {
+            return;
+        }
+        self.notification_area = present;
+        koru_ipc::ipc_debug!("tray: notification area present={present}");
+        let ids: Vec<ConnectionId> = self.connections.iter().map(Connection::id).collect();
+        for id in ids {
+            self.push(id, Push::NotificationArea { present });
+        }
+    }
+
+    /// The window that just said `Hello` learns there is an icon. Nothing is
+    /// sent when there is none: a window assumes none until told.
+    fn push_notification_area_to(&mut self, connection: ConnectionId) {
+        if self.notification_area {
+            self.push(connection, Push::NotificationArea { present: true });
+        }
     }
 
     /// What the tray's dictation submenu should say.
@@ -7179,6 +7235,10 @@ impl WindowApp for Agent {
                 self.ai_shortcut = available;
                 false
             }
+            AgentEvent::NotificationArea { present } => {
+                self.set_notification_area(present);
+                false
+            }
             AgentEvent::StoreAvailability { warning, running } => {
                 self.store_running = Some(running);
                 if running {
@@ -7428,7 +7488,7 @@ impl WindowApp for Agent {
                     self.session_catalog = catalog;
                 }
                 if confirmed {
-                    self.stop_sessions_then_quit();
+                    self.quit_because_asked();
                 }
                 false
             }
@@ -7680,8 +7740,7 @@ impl WindowApp for Agent {
                     true
                 }
             }
-            // **Quitting the Agent takes the Store with it, when nothing is
-            // using it.**
+            // **Quitting the Agent takes the Store with it.**
             //
             // The tray icon is the only handle a person has on this stack. The
             // Store draws nothing, has no window and no icon of its own, so an
@@ -7689,13 +7748,15 @@ impl WindowApp for Agent {
             // the person had no way to see and no reason to expect — after
             // using the one control that says *Quit*.
             //
-            // **Unless a window is still open**, and that is not a hedge. A
-            // shell talks to the Store directly; the Agent is not in that path
-            // and never was. Stopping it here would knock every open window
-            // offline as a side effect of quitting something else — which is a
-            // far worse surprise than the one being fixed, and this time to
-            // work the person can see. A Store kept alive for windows that are
-            // on screen is not a hidden process.
+            // **Even with a window open**, since the Gateway became a
+            // supervised child: it cannot outlive this process, so the only
+            // choice left was whether it is asked to stop or killed
+            // ([ADR-319](../../../docs/decisions/ADR-301-325.md)).
+            //
+            // **And no window brings the Agent back.** Every window is told
+            // this is a quit rather than a crash (`Push::Quitting`), because a
+            // window's answer to an ended link is otherwise to start a new
+            // Agent — which made *Quit* restart the stack it had just stopped.
             AgentEvent::Tray(TrayAsk::Quit) => {
                 self.request_agent_quit();
                 false
