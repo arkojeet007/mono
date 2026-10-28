@@ -697,11 +697,16 @@ pub fn drop_line_rect(
 ) -> Option<Rect> {
     let dst = rows.get(drag.to)?;
     let chip = row_selection_rect(dst, layout_w, dst.y - scroll);
-    let y = if drag.to <= drag.from {
-        chip.y
+    // A code block's edges are its panel's, which reach past the chip: a
+    // line at the chip's edge sat inside the panel, cutting the block rather
+    // than landing beside it.
+    let (top, bottom) = if dst.kind == Kind::Code {
+        let panel = code_panel_rect(dst, layout_w, dst.y - scroll);
+        (panel.y, panel.y + panel.h)
     } else {
-        chip.y + chip.h
+        (chip.y, chip.y + chip.h)
     };
+    let y = if drag.to <= drag.from { top } else { bottom };
     Some(Rect::new(chip.x, y - 1.0, chip.w, 2.0))
 }
 
@@ -772,6 +777,10 @@ fn image_row_height(image: &crate::paragraph::ImageRef, viewport_w: f32) -> f32 
 
 /// Air between a diagram's text (or its reason line) and the drawing under it.
 pub const DIAGRAM_GAP: f32 = 8.0;
+/// Air above a drawing shown in place of its text, inside the panel and on
+/// top of `CODE_PAD`: the controls' bar sits in the panel's top corner, and
+/// the drawing's top edge ran straight under it. The bottom keeps `CODE_PAD`.
+pub const DIAGRAM_TOP_INSET: f32 = 8.0;
 /// Air between a diagram's text and the reason line under it — the table's
 /// error line keeps the same four pixels.
 pub const DIAGRAM_LINE_GAP: f32 = 4.0;
@@ -867,11 +876,10 @@ pub fn diagram_layout(
 ) -> DiagramLayout {
     let line = theme::role::hint().metrics.line_height;
     if state.shows_picture() {
-        let drawing = state
-            .drawing
-            .as_ref()
-            .map(|prepared| drawing_box(row, prepared.natural_size(), 0.0, viewport_w));
-        let height = drawing.map_or(text_h, |drawing| drawing.h);
+        let drawing = state.drawing.as_ref().map(|prepared| {
+            drawing_box(row, prepared.natural_size(), DIAGRAM_TOP_INSET, viewport_w)
+        });
+        let height = drawing.map_or(text_h, |drawing| DIAGRAM_TOP_INSET + drawing.h);
         return DiagramLayout {
             reason_y: None,
             label_y: None,
@@ -2703,6 +2711,22 @@ mod tests {
             )
             .is_none()
         );
+        // A code block's line sits at its panel's edge, above the block,
+        // not at the chip's, inside it.
+        rows[0].kind = Kind::Code;
+        let panel = code_panel_rect(&rows[0], 800.0, rows[0].y);
+        let up = drop_line_rect(
+            &rows,
+            crate::view_state::DragRow { from: 1, to: 0 },
+            800.0,
+            0.0,
+        )
+        .unwrap();
+        assert!(
+            (up.y + 1.0 - panel.y).abs() < 0.01,
+            "at the panel's top edge"
+        );
+        assert!(panel.y < top.y, "which is above the chip's");
     }
 
     /// The trailing action sits inside the chip, inset from its right edge.

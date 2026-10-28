@@ -1158,7 +1158,8 @@ fn diagram_status_text(status: &koru_diagram::Status) -> String {
 /// one — with no corner handles, since a diagram is never resized by hand.
 /// What a drawn diagram's block wears besides its drawing this frame.
 struct DiagramBlockFurniture {
-    /// The block is the focused row of an active view: the focus ring.
+    /// The block is the focused row of an active view: the panel's border
+    /// in the focus colour.
     selected: bool,
     /// The controls clock's opacity for this block; nothing is drawn at 0.
     controls_alpha: f32,
@@ -1197,6 +1198,7 @@ const DONE_CHIP: koru_ui::icon_button::Metrics = koru_ui::icon_button::Metrics {
     radius: 3.0,
 };
 
+#[allow(clippy::too_many_arguments)]
 fn draw_diagram_block(
     scene: &mut Scene,
     root: Affine,
@@ -1211,21 +1213,17 @@ fn draw_diagram_block(
     let r = rowlayout::code_panel_rect(row, vw, oy);
     let panel = rrect(r.x, r.y, r.w, r.h, 6.0);
     fill(scene, root, theme::p().code_bg, &panel);
-    stroke(scene, root, theme::p().panel_border, 1.0, &panel);
-    let ring = match layout.drawing {
-        Some(drawing) => rect(drawing.x, oy + drawing.y, drawing.w, drawing.h),
-        None => rect(
-            row.text_x(),
-            oy,
-            rowlayout::diagram_column_width(row, vw),
-            row.height,
-        ),
+    // Selected, the panel's own border takes the focus colour. It wore a
+    // second box around the drawing inside the panel, which read as a
+    // selection within the selection.
+    let border = if furniture.selected {
+        theme::p().focus_ring
+    } else {
+        theme::p().panel_border
     };
+    stroke(scene, root, border, 1.0, &panel);
     if let (Some(prepared), Some(drawing)) = (&state.drawing, layout.drawing) {
         paint_diagram(scene, root, prepared, drawing, oy);
-    }
-    if furniture.selected {
-        stroke(scene, root, theme::p().focus_ring, 2.0, &ring);
     }
     if furniture.controls_alpha > 0.0 {
         // The controls' rects are in document y; the screen row is at `oy`.

@@ -299,14 +299,20 @@ fn a_drawn_row_takes_the_natural_height_scaled_to_the_column() {
         column(&e) > natural_w,
         "the fixture's column is wider than the drawing"
     );
-    assert_eq!(row(&e, node).height, natural_h, "natural height, scale 1");
+    assert_eq!(
+        row(&e, node).height,
+        natural_h + rowlayout::DIAGRAM_TOP_INSET,
+        "natural height, scale 1, under the inset"
+    );
 
     // Narrow the column below the drawing's width: it scales down.
     e.set_viewport(300.0, 560.0);
     let narrow = column(&e);
     assert!(narrow < natural_w);
     let scale = narrow / natural_w;
-    assert!((row(&e, node).height - natural_h * scale).abs() < 0.01);
+    assert!(
+        (row(&e, node).height - (natural_h * scale + rowlayout::DIAGRAM_TOP_INSET)).abs() < 0.01
+    );
     assert!(
         e.take_diagram_requests().is_empty(),
         "a resize is a re-scale, never a new request"
@@ -314,7 +320,10 @@ fn a_drawn_row_takes_the_natural_height_scaled_to_the_column() {
 
     // Widen far past it: never above natural.
     e.set_viewport(2000.0, 560.0);
-    assert_eq!(row(&e, node).height, natural_h);
+    assert_eq!(
+        row(&e, node).height,
+        natural_h + rowlayout::DIAGRAM_TOP_INSET
+    );
     assert!(e.take_diagram_requests().is_empty());
 }
 
@@ -357,7 +366,11 @@ fn a_result_landing_reshapes_nothing() {
     let before = stamps(&e);
     assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
     e.reflow();
-    assert_eq!(row(&e, node).height, 300.0, "the height changed");
+    assert_eq!(
+        row(&e, node).height,
+        300.0 + rowlayout::DIAGRAM_TOP_INSET,
+        "the height changed"
+    );
     e.reflow();
     assert_eq!(stamps(&e), before, "and no row of this editor was reshaped");
 }
@@ -412,7 +425,7 @@ fn enter_opens_the_text_and_esc_closes_it() {
     assert_eq!(e.view.diagram_text_open, None, "closed");
     assert!(row(&e, node).diagram_shows_picture(), "a picture again");
     assert_eq!(e.body.focused_id(), Some(node), "still selected");
-    assert_eq!(row(&e, node).height, 300.0);
+    assert_eq!(row(&e, node).height, 300.0 + rowlayout::DIAGRAM_TOP_INSET);
 }
 
 /// The *Done* check at the block's corner closes the open text the way
@@ -454,7 +467,7 @@ fn the_done_check_closes_the_text_like_escape() {
     assert_eq!(e.view.diagram_text_open, None, "closed");
     assert!(row(&e, node).diagram_shows_picture(), "a picture again");
     assert_eq!(e.body.focused_id(), Some(node), "still selected");
-    assert_eq!(row(&e, node).height, 300.0);
+    assert_eq!(row(&e, node).height, 300.0 + rowlayout::DIAGRAM_TOP_INSET);
 }
 
 /// Ctrl+Enter leaves to a paragraph below and closes the text; so does the
