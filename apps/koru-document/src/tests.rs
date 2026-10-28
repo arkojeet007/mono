@@ -3933,7 +3933,7 @@ fn attribute_rows(view: &BuiltInDocument) -> (Vec<bool>, Vec<menu::Trailing>) {
     let shape = view.menu_shape();
     let mut enabled = Vec::new();
     let mut notes = Vec::new();
-    for i in [10, 11, 12, 13] {
+    for i in [11, 12, 13, 14] {
         match shape[i] {
             menu::Row::Item {
                 enabled: on,
@@ -4378,7 +4378,7 @@ fn a_childless_tasks_box_completes_it_and_a_rich_tasks_box_only_ticks() {
 
 /// The index the Complete row sits at, asserted here rather than hard-coded
 /// twice: the menu is mapped by index and a shifted map is silent.
-const COMPLETE_ROW: usize = 9;
+const COMPLETE_ROW: usize = 10;
 
 /// **Completing from the menu is the explicit action, and it cascades.**
 ///
@@ -4480,7 +4480,7 @@ fn the_menu_row_says_reopen_on_a_completed_task_and_dims_on_a_plain_row() {
 
 /// The index the Remove from Tasks row sits at — the design's red last row,
 /// under the hairline at 13. Named once, for `COMPLETE_ROW`'s reason.
-const REMOVE_ROW: usize = 17;
+const REMOVE_ROW: usize = 18;
 
 /// A task with a due date on it, its row rebuilt so the due chip is there to
 /// be read. `spec.md` is the document, which is what the warning names.

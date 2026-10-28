@@ -2405,14 +2405,22 @@ pub enum Key {
     // menu's other rows (*Cut*, *Paste*, …) are still English literals and
     // come here as they are touched.
     MenuCopy,
+    /// *Delete* — the row menu's delete, beside Cut, Copy and Paste: the
+    /// block or the selection, what `Ctrl+D` does.
+    MenuDelete,
     MenuSaveAs,
+    /// *Copy image* — a picture of a drawn diagram to the clipboard, beside
+    /// the ordinary *Copy*, which takes the block's text.
+    MenuCopyImage,
 
     // ------------------------------------------------------------ diagrams
     // A `mermaid` code block drawn in place. The control that opens its text,
-    // the chip's display name for that one token, the label over a retained
-    // drawing while the text is being edited, the four reasons a block is not
-    // drawn (Koru's words, never the engine's), and the hint in an empty block.
+    // the one that opens the drawing in its own view, the chip's display name
+    // for that one token, the label over a retained drawing while the text is
+    // being edited, the four reasons a block is not drawn (Koru's words, never
+    // the engine's), and the hint in an empty block.
     DiagramEditText,
+    DiagramOpen,
     DiagramChipMermaid,
     DiagramLastGood,
     DiagramLineUnreadable,
@@ -2440,7 +2448,7 @@ impl Key {
     /// Every key, in table order. Written out rather than derived, because it
     /// is what the completeness tests compare the table against — a list
     /// generated from the same source it is checking would prove nothing.
-    pub const ALL: [Key; 1646] = [
+    pub const ALL: [Key; 1649] = [
         Key::Language,
         Key::Back,
         Key::TryAgain,
@@ -4071,8 +4079,11 @@ impl Key {
         Key::TelemetryConsentAccept,
         Key::TelemetryConsentDecline,
         Key::MenuCopy,
+        Key::MenuDelete,
         Key::MenuSaveAs,
+        Key::MenuCopyImage,
         Key::DiagramEditText,
+        Key::DiagramOpen,
         Key::DiagramChipMermaid,
         Key::DiagramLastGood,
         Key::DiagramLineUnreadable,
@@ -12499,9 +12510,12 @@ Row { key: Key::AccountCreationExpiredBody, en: "This sign-in expired. A Koru ac
     Row { key: Key::TelemetryConsentDecline, en: "Don't share", es: "No compartir", pt_br: "Não compartilhar", de: "Nicht teilen", fr: "Ne pas partager", ar: "عدم المشاركة", zh_hans: "不共享", ja: "共有しない" },
     // ------------------------------------------ the document's context menu
     Row { key: Key::MenuCopy, en: "Copy", es: "Copiar", pt_br: "Copiar", de: "Kopieren", fr: "Copier", ar: "نسخ", zh_hans: "复制", ja: "コピー" },
+    Row { key: Key::MenuDelete, en: "Delete", es: "Eliminar", pt_br: "Excluir", de: "Löschen", fr: "Supprimer", ar: "حذف", zh_hans: "删除", ja: "削除" },
     Row { key: Key::MenuSaveAs, en: "Save as…", es: "Guardar como…", pt_br: "Salvar como…", de: "Speichern unter…", fr: "Enregistrer sous…", ar: "حفظ باسم…", zh_hans: "另存为…", ja: "名前を付けて保存…" },
+    Row { key: Key::MenuCopyImage, en: "Copy image", es: "Copiar imagen", pt_br: "Copiar imagem", de: "Bild kopieren", fr: "Copier l’image", ar: "نسخ الصورة", zh_hans: "复制图片", ja: "画像をコピー" },
     // ------------------------------------------------------------ diagrams
     Row { key: Key::DiagramEditText, en: "Edit text", es: "Editar texto", pt_br: "Editar texto", de: "Text bearbeiten", fr: "Modifier le texte", ar: "تحرير النص", zh_hans: "编辑文本", ja: "テキストを編集" },
+    Row { key: Key::DiagramOpen, en: "Open", es: "Abrir", pt_br: "Abrir", de: "Öffnen", fr: "Ouvrir", ar: "فتح", zh_hans: "打开", ja: "開く" },
     // The notation's own name, kept as it is written everywhere.
     Row { key: Key::DiagramChipMermaid, en: "Mermaid", es: "Mermaid", pt_br: "Mermaid", de: "Mermaid", fr: "Mermaid", ar: "Mermaid", zh_hans: "Mermaid", ja: "Mermaid" },
     Row { key: Key::DiagramLastGood, en: "Showing the last drawing that worked", es: "Se muestra el último dibujo que funcionó", pt_br: "Mostrando o último desenho que funcionou", de: "Zeigt die letzte Zeichnung, die funktioniert hat", fr: "Affichage du dernier dessin qui a fonctionné", ar: "يعرض آخر رسم نجح", zh_hans: "显示上一次成功的绘图", ja: "最後に描けた図を表示しています" },

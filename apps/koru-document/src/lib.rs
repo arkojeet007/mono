@@ -2521,6 +2521,7 @@ impl BuiltInDocument {
                     Some(context_menu::Choice::Copy) => Some(Action::Copy),
                     Some(context_menu::Choice::Paste) => Some(Action::Paste),
                     Some(context_menu::Choice::PastePlain) => Some(Action::PastePlain),
+                    Some(context_menu::Choice::Delete) => Some(Action::DeleteRows),
                     Some(context_menu::Choice::MoveToDocument) => {
                         self.editor.open_move_selection_picker(ws);
                         None

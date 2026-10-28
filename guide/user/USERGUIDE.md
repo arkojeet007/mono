@@ -1723,7 +1723,8 @@ press takes the next one. Pressing the opposite way shrinks the selection rather
 than starting a new one.
 
 `Ctrl+D` deletes them all, and so do `Delete` and `Backspace` — the same
-behaviour, whichever is nearest. A selected sub-task is deleted outright; a
+behaviour, whichever is nearest — and so does **Delete** in the right-click
+menu, beside Cut, Copy and Paste. A selected sub-task is deleted outright; a
 sub-task that only came along because its parent was selected outdents instead
 of being deleted. `Tab` and `Shift+Tab` indent them, and
 `Ctrl+Shift+↑` / `↓` move the block as one. A sub-task travels with its parent
