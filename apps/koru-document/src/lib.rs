@@ -24,6 +24,16 @@ pub mod blockmenu;
 pub mod bubble;
 pub mod caption;
 pub mod context_menu;
+pub mod diagram_viewer;
+
+/// Where a container lifts the diagram viewer to: the window. `origin` is
+/// the hosting pane's top-left in window coordinates, `size` the window's,
+/// both in the pane's own units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewerLift {
+    pub origin: (f32, f32),
+    pub size: (f32, f32),
+}
 pub mod diagrams;
 pub mod docview;
 pub mod draw;
@@ -184,6 +194,21 @@ pub struct BuiltInDocument {
     /// one question it can ask, and a second would need a subject enum before
     /// it needed a stack (the container's `ConfirmSubject` is that shape).
     confirm: Option<(koru_ui::Confirm, Confirming)>,
+    /// A drawn diagram shown in its own view over the page, if one is. A
+    /// modal like the confirm — every key and press is its own while it is
+    /// up — and below the confirm, which is a question and outranks a
+    /// picture. Holds the drawing it opened on, so a keystroke in the text
+    /// meanwhile cannot change the picture under the person looking at it.
+    viewer: Option<diagram_viewer::DiagramViewer>,
+    /// Where the viewer lives when a container lifts it over its own chrome:
+    /// the whole window, not this view's pane. `None` in a window of the
+    /// document's own, where the pane is the window.
+    viewer_lift: Option<ViewerLift>,
+    /// *Copy image* asked on a drawn diagram: the drawing to put on the
+    /// clipboard. The shell owns the clipboard and the raster, so the view
+    /// only hands the drawing over — drained by `View::take_wants_copy_diagram`
+    /// on the next maintenance pass, the way *Save as…* is.
+    wants_copy_diagram: Option<std::sync::Arc<koru_draw::diagram::PreparedDiagram>>,
     /// **Where a live dictation is going, decided once.**
     ///
     /// Recorded when the composition opened and never re-derived. Re-running
@@ -391,6 +416,9 @@ impl BuiltInDocument {
                     tag_table: Vec::new(),
                     list_table: Vec::new(),
                     confirm: None,
+                    viewer: None,
+                    viewer_lift: None,
+                    wants_copy_diagram: None,
                     dictation: None,
                     spelling: spelling::SpellCheck::new(),
                     context_spelling: None,
@@ -465,6 +493,9 @@ impl BuiltInDocument {
             tag_table: Vec::new(),
             list_table: Vec::new(),
             confirm: None,
+            viewer: None,
+            viewer_lift: None,
+            wants_copy_diagram: None,
             dictation: None,
             spelling: spelling::SpellCheck::new(),
             context_spelling: None,
@@ -508,6 +539,9 @@ impl BuiltInDocument {
             tag_table: Vec::new(),
             list_table: Vec::new(),
             confirm: None,
+            viewer: None,
+            viewer_lift: None,
+            wants_copy_diagram: None,
             dictation: None,
             spelling: spelling::SpellCheck::new(),
             context_spelling: None,
@@ -992,9 +1026,134 @@ impl BuiltInDocument {
     pub fn blockers(&self) -> Blockers {
         if self.menu.is_some() {
             Blockers::Modal(ModalKind::ContextMenu)
+        } else if self.viewer.is_some() {
+            Blockers::Modal(ModalKind::DiagramViewer)
         } else {
             Blockers::None
         }
+    }
+
+    // ------------------------------------------------------- the viewer
+    //
+    // A drawn diagram in its own view (`diagram_viewer`). The editor asks
+    // for it — its magnifier control, a double click on the drawing — and the
+    // menu's *Open* row asks the same way; this view owns the modal, routes
+    // every input to it while it is up, and hands its copy and save requests
+    // on to the shell by the routes the block's own rows already take.
+
+    /// Show `node`'s drawing in the viewer. `false` when the block holds no
+    /// drawing right now — a placeholder, a block that does not draw — so
+    /// the gesture that asked does nothing rather than open an empty view.
+    pub fn open_diagram_viewer(&mut self, node: NodeId) -> bool {
+        let Some(prepared) = self.drawn_diagram(node) else {
+            return false;
+        };
+        self.menu = None;
+        self.bubble = None;
+        self.bubble_pinned = None;
+        let viewport = self.viewer_viewport();
+        self.viewer = Some(diagram_viewer::DiagramViewer::open(
+            node, prepared, viewport,
+        ));
+        true
+    }
+
+    /// Whether the viewer is up.
+    pub fn diagram_viewer_open(&self) -> bool {
+        self.viewer.is_some()
+    }
+
+    /// The viewer, for a host or a test to read its zoom and pan.
+    pub fn diagram_viewer(&self) -> Option<&diagram_viewer::DiagramViewer> {
+        self.viewer.as_ref()
+    }
+
+    /// **Lift the viewer to the window.** A container hosting this view in a
+    /// pane says where the pane sits in its window and how big the window
+    /// is; the viewer then takes the window — its scrim over the sidebar,
+    /// its drawing free to grow past the pane's edges — and draws through
+    /// [`draw_lifted_viewer`](Self::draw_lifted_viewer) rather than in this
+    /// view's own `draw`, which is clipped to the pane. Input still arrives
+    /// in the pane's coordinates and is translated here. `None` takes the
+    /// viewer back to the pane. Cheap to call every frame.
+    pub fn set_viewer_lift(&mut self, lift: Option<ViewerLift>) {
+        if self.viewer_lift == lift {
+            return;
+        }
+        self.viewer_lift = lift;
+        let (w, h) = self.viewer_viewport();
+        if let Some(viewer) = &mut self.viewer {
+            viewer.set_viewport(w, h);
+        }
+    }
+
+    /// The viewer's viewport: the window it is lifted to, or this view's.
+    fn viewer_viewport(&self) -> (f32, f32) {
+        self.viewer_lift
+            .map_or(self.editor.view.viewport, |lift| lift.size)
+    }
+
+    /// A point in this view's coordinates, in the viewer's: the same point
+    /// unless the viewer is lifted, when the pane's origin is added back.
+    fn viewer_point(&self, x: f32, y: f32) -> (f32, f32) {
+        match self.viewer_lift {
+            Some(lift) => (x + lift.origin.0, y + lift.origin.1),
+            None => (x, y),
+        }
+    }
+
+    /// Paint the lifted viewer at the window's root. The container calls
+    /// this after its chrome; nothing is drawn unless the viewer is up and
+    /// lifted.
+    pub fn draw_lifted_viewer(&mut self, scene: &mut vello::Scene, root: vello::kurbo::Affine) {
+        if let (Some(viewer), Some(_)) = (&self.viewer, &self.viewer_lift) {
+            viewer.draw(scene, root, &mut self.editor.view.engine);
+        }
+    }
+
+    /// **Act on what the editor's controls asked for**, if a press did. The
+    /// editor owns no modal and no raster, so its magnifier (and a double
+    /// click on a drawing) set `wants_open_diagram` and its *Copy image*
+    /// control sets `wants_copy_diagram`; both are drained here after the
+    /// press, the way the due chip's `×` is drained into its confirmation.
+    /// The viewer opens over the page with the drawing from `diagrams`; a
+    /// copy's drawing waits for `View::take_wants_copy_diagram` and the
+    /// shell's clipboard.
+    fn drain_diagram_requests(&mut self) {
+        if let Some(node) = self.editor.view.wants_open_diagram.take() {
+            self.open_diagram_viewer(node);
+        }
+        if let Some(node) = self.editor.view.wants_copy_diagram.take() {
+            self.wants_copy_diagram = self.drawn_diagram(node);
+        }
+    }
+
+    /// Act on what the viewer left behind after an input it handled.
+    /// Copy and save are the shell's: the drawing goes on the same two
+    /// routes the block's rows use, and a copy raises the toast every copy
+    /// in Koru raises. `true` always — the viewer is modal and the input
+    /// was its own.
+    fn settle_viewer(&mut self, outcome: diagram_viewer::Outcome) -> bool {
+        match outcome {
+            diagram_viewer::Outcome::Handled => {}
+            diagram_viewer::Outcome::Copy => {
+                if let Some(viewer) = &self.viewer {
+                    self.wants_copy_diagram = Some(viewer.prepared().clone());
+                    self.editor.view.wants_toast = Some(koru_ui::CopyAffordance::TOAST.to_string());
+                }
+            }
+            diagram_viewer::Outcome::SaveAs => {
+                if let Some(viewer) = &self.viewer {
+                    self.editor.view.wants_save_diagram_as = Some(koru_editor::SaveDiagramAs {
+                        node: viewer.node(),
+                    });
+                }
+            }
+            diagram_viewer::Outcome::Close => {
+                self.viewer = None;
+            }
+        }
+        true
     }
 
     /// Where a typed character would land in this document.
@@ -1201,6 +1360,16 @@ impl BuiltInDocument {
         if let Some(out) = self.confirm.as_mut().map(|(c, _)| c.key(key)) {
             self.settle_confirm(ws, out);
             return true;
+        }
+        // The diagram viewer is the other modal, under the confirm: every
+        // key is its own while it is up, and the ones it does not understand
+        // are swallowed rather than typed into the page it covers.
+        if let Some(out) = self
+            .viewer
+            .as_mut()
+            .map(|viewer| viewer.key(key, text, mods))
+        {
+            return self.settle_viewer(out);
         }
         self.search.set_standalone_title(
             self.window_chrome
@@ -2495,6 +2664,21 @@ impl BuiltInDocument {
                         }
                         None
                     }
+                    // The same thing the drawing's magnifier does.
+                    Some(context_menu::Choice::DiagramOpen) => {
+                        if let Some(diagram) = self.focused_diagram_context().filter(|d| d.drawn) {
+                            self.open_diagram_viewer(diagram.node);
+                        }
+                        None
+                    }
+                    // The view only asks: the clipboard and the raster are
+                    // the shell's. Drained by `View::take_wants_copy_diagram`.
+                    Some(context_menu::Choice::CopyDiagram) => {
+                        if let Some(diagram) = self.focused_diagram_context().filter(|d| d.drawn) {
+                            self.wants_copy_diagram = self.drawn_diagram(diagram.node);
+                        }
+                        None
+                    }
                     // The view only asks: the save dialog, the raster and the
                     // file are the shell's. Drained by
                     // `View::take_wants_save_diagram_as` on the next
@@ -2689,6 +2873,11 @@ impl BuiltInDocument {
 
     pub fn context_menu(&mut self, ws: &mut WorkspaceDoc, x: f32, y: f32) -> bool {
         self.editor.view.pointer = (x, y);
+        // The viewer's actions are on its toolbar; a right-click on it
+        // raises nothing and reaches nothing underneath.
+        if self.viewer.is_some() {
+            return false;
+        }
         if self.editor.view.overlay.is_open() || y < self.chrome_h() {
             let changed = self.menu.take().is_some();
             self.bubble_hover = None;
@@ -2914,6 +3103,7 @@ impl BuiltInDocument {
     pub fn mouse_down(&mut self, ws: &mut WorkspaceDoc, x: f32, y: f32, ctrl: bool) -> bool {
         let handled = self.mouse_down_inner(ws, x, y, ctrl);
         self.drain_remove_from_tasks_request(ws);
+        self.drain_diagram_requests();
         self.refresh_title(ws);
         handled
     }
@@ -2955,6 +3145,10 @@ impl BuiltInDocument {
         if let Some(out) = answered {
             self.settle_confirm(ws, out);
             return true;
+        }
+        let (vx, vy) = self.viewer_point(x, y);
+        if let Some(out) = self.viewer.as_mut().map(|viewer| viewer.mouse_down(vx, vy)) {
+            return self.settle_viewer(out);
         }
         let search_was_open = self.search.is_open();
         if self.search.mouse_down(ws, &mut self.editor, x, y) {
@@ -3244,6 +3438,10 @@ impl BuiltInDocument {
         if let Some((confirm, _)) = &mut self.confirm {
             return confirm.mouse_move(&mut self.editor.view.engine, viewport, x, y);
         }
+        let (vx, vy) = self.viewer_point(x, y);
+        if let Some(viewer) = &mut self.viewer {
+            return viewer.mouse_move(vx, vy);
+        }
         if self.search.is_open() {
             self.search.mouse_move(&mut self.editor, x, y);
             return true;
@@ -3318,6 +3516,9 @@ impl BuiltInDocument {
         // it would move the caret out from under the question.
         if self.confirm.is_some() {
             return true;
+        }
+        if let Some(out) = self.viewer.as_mut().map(|viewer| viewer.double_click(x, y)) {
+            return self.settle_viewer(out);
         }
         if self.search.double_click(&mut self.editor, x, y) {
             return true;

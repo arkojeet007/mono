@@ -236,6 +236,7 @@ fn modal_keyword(kind: koru_workspace_host::routing::ModalKind) -> &'static str 
         K::ReminderManagement => "reminder-management",
         K::Recording => "recording",
         K::ContextMenu => "menu",
+        K::DiagramViewer => "diagram-viewer",
     }
 }
 

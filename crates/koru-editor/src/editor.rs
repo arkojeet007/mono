@@ -2555,6 +2555,72 @@ pub trait Editing {
         true
     }
 
+    /// Ask the document app to show `node`'s drawing in its viewer — the
+    /// magnifier control, a double click on the drawing and the menu's
+    /// *Open* row all come here. The block is selected first, the way a
+    /// click on the drawing selects it, so what the viewer closes back onto
+    /// is the block it opened from. `false` when `node` is not a diagram
+    /// row showing its picture: there is nothing to open, and the gesture
+    /// falls through unclaimed. The editor owns no modal, so this only sets
+    /// `wants_open_diagram`; the app drains it after the press.
+    fn ask_open_diagram(&mut self, node: NodeId) -> bool {
+        if !self.select_drawing(node) {
+            return false;
+        }
+        self.view_mut().wants_open_diagram = Some(node);
+        true
+    }
+
+    /// Ask the document app to put `node`'s drawing on the clipboard — the
+    /// *Copy image* control. The block is selected the way *Open* selects
+    /// it, the shared copy glyph confirms at once (the shell writes the
+    /// clipboard on its next pass, and a person is owed the check now, not
+    /// then), and the toast every copy raises is asked for. `false` when
+    /// `node` is not a diagram row showing its picture.
+    fn ask_copy_diagram(&mut self, node: NodeId) -> bool {
+        if !self.select_drawing(node) {
+            return false;
+        }
+        let view = self.view_mut();
+        view.copy.confirm(Instant::now());
+        view.wants_copy_diagram = Some(node);
+        view.wants_toast = Some(koru_ui::CopyAffordance::TOAST.to_string());
+        true
+    }
+
+    /// Ask the document app to raise *Save as…* on `node`'s drawing — the
+    /// control beside *Copy image*, on the route the menu row and the chord
+    /// already take. `false` when `node` is not a diagram row showing its
+    /// picture.
+    fn ask_save_diagram(&mut self, node: NodeId) -> bool {
+        if !self.select_drawing(node) {
+            return false;
+        }
+        self.view_mut().wants_save_diagram_as = Some(SaveDiagramAs { node });
+        true
+    }
+
+    /// Select the drawing a control was pressed on, the way a click on the
+    /// drawing selects it: focus on the block, no selection, no overlay, no
+    /// drag. `false` when `node` is not a diagram row showing its picture,
+    /// so the gesture falls through unclaimed.
+    fn select_drawing(&mut self, node: NodeId) -> bool {
+        if !self
+            .body()
+            .row(node)
+            .is_some_and(Paragraph::diagram_shows_picture)
+        {
+            return false;
+        }
+        self.body_mut().clear_selection();
+        self.body_mut().focus_on(node);
+        let view = self.view_mut();
+        view.active = true;
+        view.overlay = Overlay::None;
+        view.drag_row = None;
+        true
+    }
+
     /// Close the open diagram text, if any, so the block shows its picture
     /// again (or its text and reason, when the text does not draw). The
     /// drawing of the last text that worked stays in the entry for the next
@@ -7870,15 +7936,17 @@ pub trait Editing {
             // wears the grab hand rather than an I-beam (reuses `Hover::Image`).
             return Some(Hover::Image(i));
         }
-        // A drawn diagram is a picture too — except for its *Edit text*
-        // control, once the clock has revealed it. Asked before the code
-        // block's chips, which a picture does not wear.
+        // A drawn diagram is a picture too — except for its controls at the
+        // panel's corner, once the clock has revealed them. Asked before the
+        // code block's chips, which a picture does not wear.
         if row.diagram_shows_picture() {
             let layout_w = self.view().view_mode.effective_w(self.view().viewport.0);
             if self.table_controls_alpha(row.id, Instant::now()) > 0.0
-                && rowlayout::diagram_control_rect(row, layout_w).contains(x, doc_y)
+                && let Some(control) = crate::diagram::Control::ALL.into_iter().find(|&control| {
+                    rowlayout::diagram_control_rect(row, layout_w, control).contains(x, doc_y)
+                })
             {
-                return Some(Hover::DiagramEdit(i));
+                return Some(Hover::DiagramControl { row: i, control });
             }
             return Some(Hover::Image(i));
         }
@@ -7911,6 +7979,13 @@ pub trait Editing {
         let layout_w = self.view().view_mode.effective_w(self.view().viewport.0);
         if row.kind == Kind::Code && rowlayout::copy_chip_rect(row, layout_w).contains(x, doc_y) {
             return Some(Hover::Copy(i));
+        }
+        // The *Done* check, left of the copy icon, only while a diagram's text
+        // is open: it is the way back to the picture for a hand on the mouse.
+        if row.diagram.as_ref().is_some_and(|state| state.open)
+            && rowlayout::diagram_done_rect(row, layout_w).contains(x, doc_y)
+        {
+            return Some(Hover::DiagramDone(i));
         }
         if row.kind == Kind::Code && rowlayout::lang_chip_rect(row, layout_w).contains(x, doc_y) {
             return Some(Hover::Lang(i));
@@ -8213,16 +8288,24 @@ pub trait Editing {
         let layout_w = self.view().view_mode.effective_w(self.view().viewport.0);
         // A diagram showing its picture is selected, not edited — the image
         // pattern: focus it, arm a drag from the drawing, place no caret. Its
-        // one control opens the text; its chips are not drawn, so they are
-        // not asked. The caret the picture hid is collapsed, so a Copy takes
-        // the whole block rather than a range nobody can see.
+        // controls open the viewer, copy and save the picture, and open the
+        // text; its chips are not drawn, so they are not asked. The caret
+        // the picture hid is collapsed, so a Copy takes the whole block
+        // rather than a range nobody can see.
         if self.body().rows[i].diagram_shows_picture() {
             let row = &self.body().rows[i];
             let id = row.id;
             if self.table_controls_alpha(id, Instant::now()) > 0.0
-                && rowlayout::diagram_control_rect(row, layout_w).contains(cx, doc_y)
+                && let Some(control) = crate::diagram::Control::ALL.into_iter().find(|&control| {
+                    rowlayout::diagram_control_rect(row, layout_w, control).contains(cx, doc_y)
+                })
             {
-                return self.open_diagram_text(id);
+                return match control {
+                    crate::diagram::Control::Open => self.ask_open_diagram(id),
+                    crate::diagram::Control::Copy => self.ask_copy_diagram(id),
+                    crate::diagram::Control::Save => self.ask_save_diagram(id),
+                    crate::diagram::Control::Edit => self.open_diagram_text(id),
+                };
             }
             if self.grip_rect(i).is_some_and(|r| r.contains(cx, doc_y)) {
                 self.view_mut().drag_row = Some(DragRow { from: i, to: i });
@@ -8255,6 +8338,22 @@ pub trait Editing {
             let now = Instant::now();
             self.view_mut().copy.click(&text, now);
             self.view_mut().wants_toast = Some(koru_ui::CopyAffordance::TOAST.to_string());
+            return true;
+        }
+        // *Done* closes the open diagram text, as Escape does: the block is
+        // its picture again, still the selected row.
+        if self.body().rows[i]
+            .diagram
+            .as_ref()
+            .is_some_and(|state| state.open)
+            && rowlayout::diagram_done_rect(&self.body().rows[i], layout_w).contains(cx, doc_y)
+        {
+            let node = self.body().rows[i].id;
+            self.close_diagram_text();
+            self.body_mut().clear_selection();
+            self.body_mut().focus_on(node);
+            self.view_mut().active = true;
+            self.reflow();
             return true;
         }
         if self.body().rows[i].kind == Kind::Code
@@ -8688,6 +8787,34 @@ pub trait Editing {
             if Rect::new(ix, row.y - self.view().scroll, iw, ih).contains(cx, y) {
                 let id = row.id;
                 return self.start_image_rename(ws, id);
+            }
+            return false;
+        }
+        // A double click on a drawing opens it in the viewer — the picture's
+        // counterpart to an image's rename, and the same gesture every
+        // image viewer answers. On the panel beside the drawing it is two
+        // selecting clicks, which the first already was.
+        if self.body().rows[i].diagram_shows_picture() {
+            let row = &self.body().rows[i];
+            let on_drawing = row
+                .diagram
+                .as_ref()
+                .and_then(|state| {
+                    rowlayout::diagram_layout(
+                        row,
+                        state,
+                        row.height,
+                        self.view().view_mode.effective_w(self.view().viewport.0),
+                    )
+                    .drawing
+                })
+                .is_some_and(|drawing| {
+                    Rect::new(drawing.x, row.y + drawing.y, drawing.w, drawing.h)
+                        .contains(cx, doc_y)
+                });
+            if on_drawing {
+                let id = row.id;
+                return self.ask_open_diagram(id);
             }
             return false;
         }

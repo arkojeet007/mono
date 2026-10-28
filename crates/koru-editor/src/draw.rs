@@ -82,6 +82,15 @@ pub fn draw_document(
         let row = &outline.rows[i];
         let oy = row.y - scroll;
         let ox = row.text_x();
+        // A diagram row is one thing to a person — they hover a drawing, not
+        // a fill and a button — and one record to the inspector: everything
+        // painted for it below, in either of its states, nests under this
+        // scope, which lives to the end of the row's turn. Nothing while the
+        // inspector is closed.
+        let _diagram_scope = row
+            .diagram
+            .as_ref()
+            .map(|state| diagram_block_scope(root, row, state, vw, oy));
         // An image row is a picture (or a placeholder), not text: it has no
         // caret or text-selection rect. It is still a movable block, so its
         // grip follows the same hover and selection rules as every other row.
@@ -93,6 +102,10 @@ pub fn draw_document(
             if selected || on_row {
                 let grip_active = matches!(hover, Some(Hover::Grip(h)) if h == i);
                 draw_grip(scene, root, row, oy, grip_active);
+                if insert_button {
+                    let plus_hovered = matches!(hover, Some(Hover::Plus(h)) if h == i);
+                    draw_plus(scene, root, row, oy, plus_hovered);
+                }
             }
             continue;
         }
@@ -110,6 +123,10 @@ pub fn draw_document(
             if selected || on_row {
                 let grip_active = matches!(hover, Some(Hover::Grip(h)) if h == i);
                 draw_grip(scene, root, row, oy, grip_active);
+                if insert_button {
+                    let plus_hovered = matches!(hover, Some(Hover::Plus(h)) if h == i);
+                    draw_plus(scene, root, row, oy, plus_hovered);
+                }
             }
             continue;
         }
@@ -160,45 +177,42 @@ pub fn draw_document(
         // A diagram showing its picture: the drawing in place of the code
         // text, or the tinted panel alone while the first layout of this text
         // is in flight. Like an image it has no caret and no text selection;
-        // like a code block it keeps the panel; its one control — *Edit text*
-        // — rides the table controls' clock. The text, its chips and its
-        // reason line are the ordinary code path below, taken when the text
-        // is open or the text does not draw.
+        // like a code block it keeps the panel; its two controls — *Open*
+        // and *Edit text* — ride the table controls' clock. The text, its
+        // chips and its reason line are the ordinary code path below, taken
+        // when the text is open or the text does not draw.
         if let Some(state) = row.diagram.as_ref().filter(|s| s.shows_picture()) {
             let selected = i == outline.focus && active;
             let on_row = hover.and_then(Hover::row) == Some(i);
             if row.selected {
                 draw_row_selection(scene, root, row, vw, oy);
             }
-            let r = rowlayout::code_panel_rect(row, vw, oy);
-            let panel = rrect(r.x, r.y, r.w, r.h, 6.0);
-            fill(scene, root, theme::p().code_bg, &panel);
-            stroke(scene, root, theme::p().panel_border, 1.0, &panel);
-            draw_diagram_picture(scene, root, row, state, vw, oy, selected);
             let alpha = table_controls
                 .filter(|(id, _)| *id == row.id)
                 .map_or(0.0, |(_, alpha)| alpha);
-            if alpha > 0.0 {
-                let control = rowlayout::diagram_control_rect(row, vw);
-                crate::table::draw_control(
-                    scene,
-                    root,
-                    engine,
-                    koru_draw::geometry::Rect::new(
-                        control.x,
-                        oy + (control.y - row.y),
-                        control.w,
-                        control.h,
-                    ),
-                    icons::PENCIL,
-                    matches!(hover, Some(Hover::DiagramEdit(h)) if h == i),
-                    alpha,
-                );
-            }
-            if selected || on_row {
-                let grip_active = matches!(hover, Some(Hover::Grip(h)) if h == i);
-                draw_grip(scene, root, row, oy, grip_active);
-            }
+            draw_diagram_block(
+                scene,
+                root,
+                engine,
+                row,
+                state,
+                vw,
+                oy,
+                DiagramBlockFurniture {
+                    selected,
+                    controls_alpha: alpha,
+                    hovered: match hover {
+                        Some(Hover::DiagramControl { row: h, control }) if h == i => Some(control),
+                        _ => None,
+                    },
+                    copy_glyph: copy_icon.glyph(),
+                    copy_active: copy_icon.confirming(),
+                    grip: (selected || on_row)
+                        .then_some(matches!(hover, Some(Hover::Grip(h)) if h == i)),
+                    plus: (insert_button && (selected || on_row))
+                        .then_some(matches!(hover, Some(Hover::Plus(h)) if h == i)),
+                },
+            );
             continue;
         }
         let focused = i == outline.focus;
@@ -440,6 +454,26 @@ pub fn draw_document(
                 koru_draw::geometry::Rect::new(cx, cy, copy.w, copy.h),
                 matches!(hover, Some(Hover::Copy(h)) if h == i),
             );
+            // *Done*, left of the copy icon, while a diagram's text is open:
+            // the same chip as the copy icon, wearing the check.
+            if row.diagram.as_ref().is_some_and(|state| state.open) {
+                let done = rowlayout::diagram_done_rect(row, vw);
+                let slot =
+                    koru_draw::geometry::Rect::new(done.x, oy + (done.y - row.y), done.w, done.h);
+                koru_ui::icon_button::draw_with(
+                    scene,
+                    root,
+                    engine,
+                    slot,
+                    icons::CHECK,
+                    koru_ui::icon_button::State {
+                        hovered: matches!(hover, Some(Hover::DiagramDone(h)) if h == i),
+                        active: false,
+                        disabled: false,
+                    },
+                    DONE_CHIP,
+                );
+            }
             let chip = rowlayout::lang_chip_rect(row, vw);
             let (cx, cy, cw, ch) = (chip.x, oy + (chip.y - row.y), chip.w, chip.h);
             let label = crate::diagram::chip_label(row.language.as_deref());
@@ -977,6 +1011,33 @@ fn paint_diagram(
     koru_draw::diagram::paint(prepared, theme::p(), transform, drawing.scale as f64, scene);
 }
 
+/// The inspector's one record for a diagram row: *Diagram block*, spanning
+/// the code panel whatever the block shows — the picture, or the text with
+/// its reason and the drawing under it — so the panel, the glyphs, the
+/// drawing, the controls and the grip all nest under it. `draw_document`
+/// opens it at the top of the row's turn and drops it at the end; drawn
+/// in parts before, the panel and the text landed beside the record as
+/// loose primitives in the tree. Records nothing while the inspector is
+/// closed: the closure is never evaluated then.
+fn diagram_block_scope(
+    root: Affine,
+    row: &Paragraph,
+    state: &crate::diagram::DiagramRowState,
+    vw: f32,
+    oy: f32,
+) -> koru_draw::inspect::Scope {
+    let r = rowlayout::code_panel_rect(row, vw, oy);
+    koru_draw::inspect::scope(
+        "Diagram block",
+        "unregistered",
+        root,
+        rect(r.x, r.y, r.w, r.h),
+        |record| {
+            diagram_inspection(record, "koru_editor::draw::diagram_block_scope", state);
+        },
+    )
+}
+
 /// What the F12 inspector sees on a diagram row, recorded inside the block's
 /// scope and nowhere else — so it costs nothing while the inspector is closed,
 /// because `inspect::scope` never evaluates its closure then.
@@ -1095,16 +1156,62 @@ fn diagram_status_text(status: &koru_diagram::Status) -> String {
 /// over the tinted panel while the layout is pending. `selected` wears the
 /// image's focus ring — a drawing is picked like a picture, so it reads like
 /// one — with no corner handles, since a diagram is never resized by hand.
-fn draw_diagram_picture(
+/// What a drawn diagram's block wears besides its drawing this frame.
+struct DiagramBlockFurniture {
+    /// The block is the focused row of an active view: the focus ring.
+    selected: bool,
+    /// The controls clock's opacity for this block; nothing is drawn at 0.
+    controls_alpha: f32,
+    /// The control under the pointer, if any.
+    hovered: Option<crate::diagram::Control>,
+    /// What the *Copy image* control shows: the shared copy affordance's
+    /// glyph, so a press turns it to the check the way a code block's does.
+    copy_glyph: char,
+    /// …and whether that glyph is the check right now: the control is lit
+    /// while a copy is confirmed, as the viewer's button is.
+    copy_active: bool,
+    /// `Some(hovered)` to draw the drag grip, `None` to leave it out.
+    grip: Option<bool>,
+    /// The insert `+` beside the grip, when the view offers one: `Some`
+    /// with its hover. A drawn block is a block like any other, so a row can
+    /// be added above or below it from the margin; it had the grip alone.
+    plus: Option<bool>,
+}
+
+/// A diagram showing its picture, whole: the code panel, the drawing (or
+/// the empty panel while the first layout is in flight), the focus ring,
+/// the controls and the grip. Painted inside the row's *Diagram block*
+/// record (`diagram_block_scope`), which the caller holds open.
+#[allow(clippy::too_many_arguments)]
+/// The controls' bar corner: a popover's.
+const DIAGRAM_BAR_RADIUS: f32 = 6.0;
+
+/// The *Done* chip's metrics: the copy icon's size in the chip band, with
+/// the chip's own corner.
+const DONE_CHIP: koru_ui::icon_button::Metrics = koru_ui::icon_button::Metrics {
+    icon_size: 12.0,
+    padding_x: 0.0,
+    padding_y: 0.0,
+    inset_top: 0.0,
+    inset_bottom: 0.0,
+    radius: 3.0,
+};
+
+fn draw_diagram_block(
     scene: &mut Scene,
     root: Affine,
+    engine: &mut TextEngine,
     row: &Paragraph,
     state: &crate::diagram::DiagramRowState,
     vw: f32,
     oy: f32,
-    selected: bool,
+    furniture: DiagramBlockFurniture,
 ) {
     let layout = rowlayout::diagram_layout(row, state, row.height, vw);
+    let r = rowlayout::code_panel_rect(row, vw, oy);
+    let panel = rrect(r.x, r.y, r.w, r.h, 6.0);
+    fill(scene, root, theme::p().code_bg, &panel);
+    stroke(scene, root, theme::p().panel_border, 1.0, &panel);
     let ring = match layout.drawing {
         Some(drawing) => rect(drawing.x, oy + drawing.y, drawing.w, drawing.h),
         None => rect(
@@ -1114,21 +1221,78 @@ fn draw_diagram_picture(
             row.height,
         ),
     };
-    // The block's own record, which the painter's *Diagram* record nests
-    // under when there is a drawing to paint.
-    let _inspection =
-        koru_draw::inspect::scope("Diagram block", "unregistered", root, ring, |record| {
-            diagram_inspection(record, "koru_editor::draw::draw_diagram_picture", state);
-        });
     if let (Some(prepared), Some(drawing)) = (&state.drawing, layout.drawing) {
         paint_diagram(scene, root, prepared, drawing, oy);
     }
-    if selected {
+    if furniture.selected {
         stroke(scene, root, theme::p().focus_ring, 2.0, &ring);
+    }
+    if furniture.controls_alpha > 0.0 {
+        // The controls' rects are in document y; the screen row is at `oy`.
+        let on_screen = |control: koru_draw::geometry::Rect| {
+            koru_draw::geometry::Rect::new(
+                control.x,
+                oy + (control.y - row.y),
+                control.w,
+                control.h,
+            )
+        };
+        // The bar and its buttons fade as one group, the way a tooltip
+        // does: an alpha on each paint would show the panel's shadow through
+        // it and let a glyph arrive ahead of the bar it sits on.
+        let bar = on_screen(rowlayout::diagram_controls_bar(row, vw));
+        let panel = koru_draw::scene::Panel::popover(DIAGRAM_BAR_RADIUS);
+        let fading = furniture.controls_alpha < 1.0;
+        if fading {
+            let b = koru_draw::scene::panel_bounds(bar.x, bar.y, bar.w, bar.h, panel.elevation);
+            koru_draw::scene::fade_layer(
+                scene,
+                root,
+                furniture.controls_alpha,
+                &rect(b.x, b.y, b.w, b.h),
+            );
+        }
+        {
+            let _bar = koru_draw::scene::floating_panel_scope(
+                scene, root, bar.x, bar.y, bar.w, bar.h, &panel,
+            );
+            for control in crate::diagram::Control::ALL {
+                let glyph = match control {
+                    crate::diagram::Control::Open => icons::MAGNIFYING_GLASS_PLUS,
+                    crate::diagram::Control::Copy => furniture.copy_glyph,
+                    crate::diagram::Control::Save => icons::DOWNLOAD,
+                    crate::diagram::Control::Edit => icons::PENCIL,
+                };
+                koru_ui::icon_button::draw_with(
+                    scene,
+                    root,
+                    engine,
+                    on_screen(rowlayout::diagram_control_rect(row, vw, control)),
+                    glyph,
+                    koru_ui::icon_button::State {
+                        hovered: furniture.hovered == Some(control),
+                        active: control == crate::diagram::Control::Copy && furniture.copy_active,
+                        disabled: false,
+                    },
+                    koru_ui::icon_button::Metrics::COMPACT,
+                );
+            }
+        }
+        if fading {
+            scene.pop_layer();
+        }
+    }
+    if let Some(grip_active) = furniture.grip {
+        draw_grip(scene, root, row, oy, grip_active);
+    }
+    if let Some(plus_hovered) = furniture.plus {
+        draw_plus(scene, root, row, oy, plus_hovered);
     }
 }
 
-/// What a diagram shows under — or in place of — its visible text.
+/// What a diagram shows under — or in place of — its visible text, painted
+/// inside the row's *Diagram block* record (`diagram_block_scope`), which
+/// the caller holds open.
 ///
 /// The hint stands in for the text of an emptied block, set the way the
 /// body's own placeholder is set (the row's family, step and weight) so it
@@ -1150,21 +1314,6 @@ fn draw_diagram_under_text(
 ) {
     let lang = koru_i18n::current();
     let layout = rowlayout::diagram_layout(row, state, row.layout.height(), vw);
-    // The block's record spans the text and everything drawn under it.
-    let _inspection = koru_draw::inspect::scope(
-        "Diagram block",
-        "unregistered",
-        root,
-        rect(
-            ox,
-            oy,
-            rowlayout::diagram_column_width(row, vw),
-            layout.height,
-        ),
-        |record| {
-            diagram_inspection(record, "koru_editor::draw::draw_diagram_under_text", state);
-        },
-    );
     if state.empty && row.text.is_empty() {
         let hint = engine.placeholder_layout(
             koru_i18n::t(lang, koru_i18n::Key::DiagramEmptyHint),
@@ -1925,40 +2074,22 @@ pub struct Frame<'a> {
     pub status: (&'a str, &'a str),
 }
 
-/// While a row is being dragged: dim where it came from, and draw a line where
-/// it would land.
+/// While a row is being dragged: a line where it would land, the width of
+/// the target row's selection chip ([`rowlayout::drop_line_rect`]). Nothing
+/// marks where it came from — a grey band across the whole window used to,
+/// which read as a selection the press had made rather than a drag it had
+/// started.
 pub fn draw_drag_feedback(scene: &mut Scene, root: Affine, body: &Body, view: &ViewState) {
     let Some(drag) = view.drag_row else {
         return;
     };
-    let vw = view.viewport.0;
-
-    if let Some(src) = body.rows.get(drag.from) {
-        fill(
-            scene,
-            root,
-            theme::p().hover_tint,
-            &rect(0.0, src.y - view.scroll, vw, src.height),
-        );
-    }
-    if let Some(dst) = body.rows.get(drag.to) {
-        // Above the target row when moving up, below it when moving down.
-        let y = if drag.to <= drag.from {
-            dst.y
-        } else {
-            dst.y + dst.height
-        };
+    let layout_w = view.view_mode.effective_w(view.viewport.0);
+    if let Some(line) = rowlayout::drop_line_rect(&body.rows, drag, layout_w, view.scroll) {
         fill(
             scene,
             root,
             theme::p().drop_indicator,
-            &rrect(
-                theme::MARGIN_X * 0.5,
-                y - view.scroll - 1.0,
-                vw - theme::MARGIN_X,
-                2.0,
-                1.0,
-            ),
+            &rrect(line.x, line.y, line.w, line.h, 1.0),
         );
     }
 }
@@ -2286,8 +2417,16 @@ pub fn draw_list_marker(
 /// that already has the grip's dots, and at 20px it closes up into a blob. Its
 /// rect comes from [`rowlayout::gutter_affordances`], the one function the
 /// hit-test reads too.
+/// The insert `+` in the left margin: two bars of this painter's own, drawn
+/// as one icon — see [`margin_icon`] — on the hover tint while the pointer
+/// is over it.
+///
+/// Phosphor's `+` and six-dot glyphs were tried here and for the grip: at
+/// this size the regular weight is a faint speckle and the Fill weight a
+/// blob. These stay drawn, at the weight the margin has always had.
 pub fn draw_plus(scene: &mut Scene, root: Affine, row: &Paragraph, oy: f32, hovered: bool) {
     let (r, _) = rowlayout::gutter_affordances(row, oy);
+    let _icon = margin_icon("Plus icon", root, r, hovered);
     if hovered {
         fill(
             scene,
@@ -2317,15 +2456,13 @@ pub fn draw_plus(scene: &mut Scene, root: Affine, row: &Paragraph, oy: f32, hove
     );
 }
 
-/// The drag handle in the left margin: six dots, the usual "grab me" idiom.
-///
-/// Its rect comes from [`rowlayout::gutter_affordances`], the one function the
-/// hit-test reads too.
+/// The row's drag handle in the left margin: six dots, the usual "grab me"
+/// idiom, drawn as one icon — see [`margin_icon`]. Its rect comes from
+/// [`rowlayout::gutter_affordances`], the one function the hit-test reads
+/// too.
 pub fn draw_grip(scene: &mut Scene, root: Affine, row: &Paragraph, oy: f32, active: bool) {
-    let (x, y) = {
-        let (_, grip) = crate::rowlayout::gutter_affordances(row, oy);
-        (grip.x, grip.y)
-    };
+    let (_, grip) = crate::rowlayout::gutter_affordances(row, oy);
+    let _icon = margin_icon("Grip icon", root, grip, active);
     let color = if active {
         theme::p().grip_active
     } else {
@@ -2333,11 +2470,34 @@ pub fn draw_grip(scene: &mut Scene, root: Affine, row: &Paragraph, oy: f32, acti
     };
     for row in 0..3 {
         for col in 0..2 {
-            let cx = (x + 3.0 + col as f32 * 5.0) as f64;
-            let cy = (y + 3.0 + row as f32 * 4.5) as f64;
+            let cx = (grip.x + 3.0 + col as f32 * 5.0) as f64;
+            let cy = (grip.y + 3.0 + row as f32 * 4.5) as f64;
             fill(scene, root, color, &Circle::new((cx, cy), 1.4));
         }
     }
+}
+
+/// What a margin icon drawn from geometry leaves in the inspector: one
+/// named part, with the fills under it suspended — the way a panel's shadow
+/// is one record and not its sixteen rings. The grip was six anonymous
+/// fills and the `+` two; an icon is one thing to point at.
+fn margin_icon(
+    name: &'static str,
+    root: Affine,
+    slot: koru_draw::geometry::Rect,
+    lit: bool,
+) -> (koru_draw::inspect::Scope, koru_draw::inspect::Suspension) {
+    let scope = koru_draw::inspect::scope(
+        name,
+        "part",
+        root,
+        rect(slot.x, slot.y, slot.w, slot.h),
+        |r| {
+            r.property("drawn", "geometry, not a font glyph", "koru_editor::draw");
+            r.property("lit", lit, "view state: hovered or active");
+        },
+    );
+    (scope, koru_draw::inspect::suspend())
 }
 
 #[cfg(test)]
@@ -2646,15 +2806,26 @@ mod tests {
         let mut scene = Scene::new();
         let root = Affine::IDENTITY;
         let capture = koru_draw::inspect::Frame::begin(1, root, rect(0.0, 0.0, 600.0, 400.0));
-        draw_diagram_picture(
+        let scope = diagram_block_scope(root, &row, row.diagram.as_ref().unwrap(), 600.0, 0.0);
+        draw_diagram_block(
             &mut scene,
             root,
+            &mut engine,
             &row,
             row.diagram.as_ref().unwrap(),
             600.0,
             0.0,
-            true,
+            DiagramBlockFurniture {
+                selected: true,
+                controls_alpha: 0.0,
+                hovered: None,
+                copy_glyph: icons::COPY,
+                copy_active: false,
+                grip: None,
+                plus: None,
+            },
         );
+        drop(scope);
         let records = capture.finish().records;
         let block = block(&records);
         assert_eq!(property(block, "state"), "pending");
@@ -2702,6 +2873,7 @@ mod tests {
         let mut scene = Scene::new();
         let root = Affine::IDENTITY;
         let capture = koru_draw::inspect::Frame::begin(1, root, rect(0.0, 0.0, 600.0, 400.0));
+        let scope = diagram_block_scope(root, &row, row.diagram.as_ref().unwrap(), 600.0, 0.0);
         draw_diagram_under_text(
             &mut scene,
             root,
@@ -2712,6 +2884,7 @@ mod tests {
             0.0,
             600.0,
         );
+        drop(scope);
         let records = capture.finish().records;
         let block = block(&records);
         assert_eq!(property(block, "state"), "failed");
@@ -2728,6 +2901,142 @@ mod tests {
                 .any(|record| record.parent.is_some() && record.name == "text line"),
             "the reason line is captured under the block"
         );
+    }
+
+    /// **Everything painted for a diagram row nests under its one record** —
+    /// in both states. The picture state: the panel, the ring, the four
+    /// controls and the grip; the text state: the panel, the text, the
+    /// reason line. Each record in the frame other than the block itself
+    /// has the block as an ancestor, so the inspector's tree shows one
+    /// *Diagram block* and nothing of the row beside it.
+    #[test]
+    fn every_primitive_of_a_diagram_row_nests_under_its_block() {
+        fn ancestors_reach(
+            records: &[koru_draw::inspect::Record],
+            mut at: usize,
+            block: usize,
+        ) -> bool {
+            while let Some(parent) = records[at].parent {
+                if parent == block {
+                    return true;
+                }
+                at = parent;
+            }
+            false
+        }
+        let mut engine = TextEngine::new();
+        let root = Affine::IDENTITY;
+
+        // The picture state, every piece of furniture on.
+        let row = diagram_row(
+            &mut engine,
+            crate::diagram::DiagramRowState {
+                open: false,
+                pending: true,
+                empty: false,
+                reason: None,
+                drawing: None,
+                last_good: false,
+                shown: 1,
+            },
+        );
+        let mut scene = Scene::new();
+        let capture = koru_draw::inspect::Frame::begin(1, root, rect(0.0, 0.0, 600.0, 400.0));
+        let scope = diagram_block_scope(root, &row, row.diagram.as_ref().unwrap(), 600.0, 0.0);
+        draw_diagram_block(
+            &mut scene,
+            root,
+            &mut engine,
+            &row,
+            row.diagram.as_ref().unwrap(),
+            600.0,
+            0.0,
+            DiagramBlockFurniture {
+                selected: true,
+                controls_alpha: 1.0,
+                hovered: Some(crate::diagram::Control::Copy),
+                copy_glyph: icons::CHECK,
+                copy_active: false,
+                grip: Some(true),
+                plus: None,
+            },
+        );
+        drop(scope);
+        let records = capture.finish().records;
+        let block = records
+            .iter()
+            .position(|record| record.name == "Diagram block")
+            .expect("the block is captured");
+        assert!(
+            records.len() > 8,
+            "panel, ring, controls, grip: {}",
+            records.len()
+        );
+        for (index, record) in records.iter().enumerate() {
+            assert!(
+                index == block || ancestors_reach(&records, index, block),
+                "{} ({}) is loose beside the block",
+                record.name,
+                record.kind
+            );
+        }
+
+        // The text state: the reason line and the panel the caller paints.
+        let row = diagram_row(
+            &mut engine,
+            crate::diagram::DiagramRowState {
+                open: true,
+                pending: false,
+                empty: false,
+                reason: Some(koru_diagram::Status::NotParsed {
+                    line: 1,
+                    message: "unexpected token".into(),
+                    code: "merman.parse.diagram_parse".into(),
+                }),
+                drawing: None,
+                last_good: false,
+                shown: 2,
+            },
+        );
+        let mut scene = Scene::new();
+        let capture = koru_draw::inspect::Frame::begin(2, root, rect(0.0, 0.0, 600.0, 400.0));
+        let scope = diagram_block_scope(root, &row, row.diagram.as_ref().unwrap(), 600.0, 0.0);
+        let r = rowlayout::code_panel_rect(&row, 600.0, 0.0);
+        fill(
+            &mut scene,
+            root,
+            theme::p().code_bg,
+            &rrect(r.x, r.y, r.w, r.h, 6.0),
+        );
+        draw_diagram_under_text(
+            &mut scene,
+            root,
+            &row,
+            row.diagram.as_ref().unwrap(),
+            &mut engine,
+            0.0,
+            0.0,
+            600.0,
+        );
+        drop(scope);
+        let records = capture.finish().records;
+        let block = records
+            .iter()
+            .position(|record| record.name == "Diagram block")
+            .expect("the block is captured");
+        assert!(
+            records.len() > 2,
+            "panel and reason line: {}",
+            records.len()
+        );
+        for (index, record) in records.iter().enumerate() {
+            assert!(
+                index == block || ancestors_reach(&records, index, block),
+                "{} ({}) is loose beside the block",
+                record.name,
+                record.kind
+            );
+        }
     }
 
     /// With no inspector frame armed, the scope never evaluates its closure:
@@ -2749,15 +3058,32 @@ mod tests {
             },
         );
         let mut scene = Scene::new();
-        draw_diagram_picture(
-            &mut scene,
+        let scope = diagram_block_scope(
             Affine::IDENTITY,
             &row,
             row.diagram.as_ref().unwrap(),
             600.0,
             0.0,
-            false,
         );
+        draw_diagram_block(
+            &mut scene,
+            Affine::IDENTITY,
+            &mut engine,
+            &row,
+            row.diagram.as_ref().unwrap(),
+            600.0,
+            0.0,
+            DiagramBlockFurniture {
+                selected: false,
+                controls_alpha: 0.0,
+                hovered: None,
+                copy_glyph: icons::COPY,
+                copy_active: false,
+                grip: None,
+                plus: None,
+            },
+        );
+        drop(scope);
         assert!(!koru_draw::inspect::enabled());
     }
 }

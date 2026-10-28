@@ -5286,3 +5286,247 @@ fn save_diagram_as_is_handed_over_only_with_a_drawing() {
     );
     assert_eq!(view.page_name(&ws), "Release plan");
 }
+
+// ------------------------------------------------------- the diagram viewer
+
+/// A prepared drawing of a given natural size with nothing in it: the view
+/// never looks inside one, only at its size.
+fn prepared_drawing(
+    width: f64,
+    height: f64,
+) -> std::sync::Arc<koru_draw::diagram::PreparedDiagram> {
+    use koru_diagram::{Counts, DiagramScene, FlowchartScene, Kind as DiagramKind, SceneBody};
+    std::sync::Arc::new(koru_draw::diagram::PreparedDiagram::new(
+        std::sync::Arc::new(DiagramScene {
+            kind: DiagramKind::Flowchart,
+            bounds: vello::kurbo::Rect::new(0.0, 0.0, width, height),
+            counts: Counts::Flowchart {
+                nodes: 0,
+                edges: 0,
+                groups: 0,
+            },
+            acc_title: None,
+            acc_descr: None,
+            body: SceneBody::Flowchart(FlowchartScene {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                clusters: Vec::new(),
+            }),
+        }),
+    ))
+}
+
+/// The diagram document with its block drawn, the way the worker's answer
+/// lands: the request taken, the result delivered.
+fn drawn_diagram_document() -> (WorkspaceDoc, BuiltInDocument, koru_core::NodeId) {
+    let (ws, mut view, node) = diagram_document();
+    let asked = view.take_diagram_requests();
+    assert_eq!(asked.len(), 1);
+    assert!(view.diagram_result(node, asked[0].text_hash, Ok(prepared_drawing(400.0, 300.0))));
+    assert!(view.drawn_diagram(node).is_some());
+    (ws, view, node)
+}
+
+/// The viewer opens only on a drawing: a placeholder has no picture to
+/// show, so the ask does nothing and the page is not covered.
+#[test]
+fn the_viewer_opens_only_on_a_drawing() {
+    let (_ws, mut view, node) = diagram_document();
+    assert!(!view.open_diagram_viewer(node));
+    assert!(!view.diagram_viewer_open());
+    assert_eq!(view.blockers(), Blockers::None);
+
+    let (_ws, mut view, node) = drawn_diagram_document();
+    assert!(view.open_diagram_viewer(node));
+    assert!(view.diagram_viewer_open());
+    assert_eq!(view.blockers(), Blockers::Modal(ModalKind::DiagramViewer));
+    let viewer = view.diagram_viewer().expect("open");
+    assert_eq!(viewer.node(), node);
+    assert_eq!(viewer.zoom(), 1.0, "400 × 300 fits a 900 × 560 window");
+}
+
+/// The editor's ask — its magnifier, a double click — is drained after the
+/// press that set it, and opens the viewer on that block.
+#[test]
+fn the_editors_ask_opens_the_viewer_after_the_press() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    view.editor.view.wants_open_diagram = Some(node);
+    // Any press drains it; this one lands on the page's air.
+    view.mouse_down(&mut ws, 880.0, 540.0, false);
+    assert!(view.diagram_viewer_open());
+    assert_eq!(view.editor.view.wants_open_diagram, None, "spent");
+}
+
+/// The editor's *Copy image* control asks the same way, and the drawing it
+/// names goes on to the shell after the press — with no viewer opened.
+#[test]
+fn the_editors_copy_control_hands_the_drawing_to_the_shell() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    assert!(View::take_wants_copy_diagram(&mut view).is_none());
+    view.editor.view.wants_copy_diagram = Some(node);
+    view.mouse_down(&mut ws, 880.0, 540.0, false);
+    assert_eq!(view.editor.view.wants_copy_diagram, None, "spent");
+    let copy = View::take_wants_copy_diagram(&mut view).expect("the drawing to copy");
+    assert_eq!(copy.prepared.natural_size().width, 400.0);
+    assert!(!view.diagram_viewer_open(), "a copy opens nothing");
+}
+
+/// While the viewer is up every key is its own: `Esc` closes it and
+/// nothing reaches the page; a letter that means nothing to it is
+/// swallowed rather than typed into the block underneath.
+#[test]
+fn the_viewer_owns_the_keyboard_until_escape() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    assert!(view.open_diagram_viewer(node));
+    let text_before = ws.read(node).unwrap().content.as_text().unwrap().to_owned();
+    assert!(view.key(&mut ws, &ch("q"), Some("q"), NONE));
+    assert_eq!(
+        ws.read(node).unwrap().content.as_text().unwrap(),
+        text_before,
+        "nothing was typed into the block"
+    );
+    assert!(view.diagram_viewer_open());
+    assert!(view.key(&mut ws, &named(NamedKey::Escape), None, NONE));
+    assert!(!view.diagram_viewer_open());
+    assert_eq!(view.blockers(), Blockers::None);
+}
+
+/// `Ctrl+C` in the viewer hands the drawing to the shell for the clipboard,
+/// once; the save chord raises the block's own *Save as…*, which the shell
+/// drains with the drawing and the page's name as it does from the menu.
+#[test]
+fn the_viewer_asks_the_shell_to_copy_and_to_save() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    assert!(view.open_diagram_viewer(node));
+    assert!(
+        View::take_wants_copy_diagram(&mut view).is_none(),
+        "nothing asked yet"
+    );
+    assert!(view.key(&mut ws, &ch("c"), Some("c"), koru_keys::PRIMARY));
+    let copy = View::take_wants_copy_diagram(&mut view).expect("the drawing to copy");
+    assert_eq!(copy.prepared.natural_size().width, 400.0);
+    assert!(View::take_wants_copy_diagram(&mut view).is_none(), "spent");
+    assert_eq!(
+        view.editor.view.wants_toast.as_deref(),
+        Some(koru_ui::CopyAffordance::TOAST),
+        "a copy raises the toast every copy raises"
+    );
+    assert_eq!(
+        view.diagram_viewer().unwrap().copy_glyph(),
+        koru_draw::icons::CHECK,
+        "and confirms on the button"
+    );
+
+    assert!(view.key(
+        &mut ws,
+        &ch("x"),
+        Some("x"),
+        koru_keys::PRIMARY | ModifiersState::SHIFT
+    ));
+    let save = View::take_wants_save_diagram_as(&mut view, &ws).expect("the drawing to save");
+    assert_eq!(save.title, "Release plan");
+    assert!(view.diagram_viewer_open(), "asking does not close the view");
+}
+
+/// The zoom gestures the shell offers a view go to the drawing while the
+/// viewer is up, and are declined — the app's to zoom — when it is not.
+#[test]
+fn zoom_gestures_are_the_viewers_while_it_is_up() {
+    let (_ws, mut view, node) = drawn_diagram_document();
+    assert!(!View::zoom_key(
+        &mut view,
+        koru_workspace_host::ZoomIntent::In
+    ));
+    assert!(view.open_diagram_viewer(node));
+    assert!(View::zoom_key(
+        &mut view,
+        koru_workspace_host::ZoomIntent::In
+    ));
+    assert_eq!(
+        view.diagram_viewer().unwrap().zoom(),
+        crate::diagram_viewer::ZOOM_STEP
+    );
+    assert!(View::zoom_wheel(
+        &mut view,
+        winit::event::MouseScrollDelta::LineDelta(0.0, -1.0),
+        450.0,
+        280.0
+    ));
+    assert!((view.diagram_viewer().unwrap().zoom() - 1.0).abs() < 1e-9);
+    // The plain wheel is the drawing's scroll, not a zoom — and the page
+    // under the modal does not scroll.
+    let scroll_before = view.editor.view.scroll;
+    View::scroll_by(
+        &mut view,
+        winit::event::MouseScrollDelta::LineDelta(0.0, 1.0),
+    );
+    assert_eq!(view.editor.view.scroll, scroll_before);
+    assert!((view.diagram_viewer().unwrap().zoom() - 1.0).abs() < 1e-9);
+}
+
+/// Lifted by a container, the viewer takes the window: its viewport is the
+/// window's, and a press in the pane's coordinates is read in the window's.
+/// A press that lands on the toolbar only because the window is taller
+/// than the pane reaches the toolbar; in the pane's own window it would
+/// have been the scrim and closed the viewer.
+#[test]
+fn a_lifted_viewer_takes_the_window_and_reads_presses_in_it() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    assert!(view.open_diagram_viewer(node));
+    assert_eq!(view.diagram_viewer().unwrap().viewport(), (900.0, 560.0));
+    view.set_viewer_lift(Some(crate::ViewerLift {
+        origin: (100.0, 50.0),
+        size: (1200.0, 700.0),
+    }));
+    let viewer = view.diagram_viewer().unwrap();
+    assert_eq!(viewer.viewport(), (1200.0, 700.0));
+    assert_eq!(viewer.zoom(), 1.0);
+    // The zoom-out button, first on the toolbar, in window coordinates —
+    // below the pane's own 560 pixels.
+    let bar = viewer.toolbar_rect();
+    let (wx, wy) = (bar.x + 10.0, bar.y + bar.h * 0.5);
+    assert!(wy > 560.0 + 50.0, "the toolbar sits past the pane: {wy}");
+    let (lx, ly) = (wx - 100.0, wy - 50.0);
+    assert!(view.mouse_down(&mut ws, lx, ly, false));
+    assert!(View::mouse_up(&mut view, &mut ws));
+    let viewer = view
+        .diagram_viewer()
+        .expect("still open: the toolbar was pressed");
+    assert!(viewer.zoom() < 1.0, "zoomed out: {}", viewer.zoom());
+    // The pane resizing does not touch a lifted viewer; lifting back down does.
+    View::set_viewport(&mut view, 800.0, 500.0);
+    assert_eq!(view.diagram_viewer().unwrap().viewport(), (1200.0, 700.0));
+    view.set_viewer_lift(None);
+    assert_eq!(view.diagram_viewer().unwrap().viewport(), (800.0, 500.0));
+}
+
+/// A click on the dimmed page closes the viewer on release; a press that
+/// starts on the drawing does not, and the page underneath hears none of
+/// it — the caret stays where it was.
+#[test]
+fn a_click_on_the_dimmed_page_closes_the_viewer() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    assert!(view.open_diagram_viewer(node));
+    let focus_before = view.editor.body.focused_id();
+    assert!(view.mouse_down(&mut ws, 5.0, 5.0, false));
+    assert!(View::mouse_up(&mut view, &mut ws));
+    assert!(!view.diagram_viewer_open());
+    assert_eq!(view.editor.body.focused_id(), focus_before);
+}
+
+/// The menu on a drawn block offers *Open* and *Copy image*; *Open* raises
+/// the viewer and *Copy image* asks the shell, from the row's own drawing.
+#[test]
+fn the_menu_opens_the_viewer_and_copies_the_image() {
+    let (mut ws, mut view, node) = drawn_diagram_document();
+    view.editor.body.focus_on(node);
+    view.editor.view.active = true;
+    let context = view.focused_diagram_context().expect("a diagram row");
+    assert!(context.drawn);
+    assert!(view.open_diagram_viewer(context.node));
+    assert!(view.diagram_viewer_open());
+    assert!(view.key(&mut ws, &named(NamedKey::Escape), None, NONE));
+    assert!(!view.diagram_viewer_open());
+    view.wants_copy_diagram = view.drawn_diagram(context.node);
+    assert!(View::take_wants_copy_diagram(&mut view).is_some());
+}

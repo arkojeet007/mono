@@ -6297,6 +6297,19 @@ Nothing was written. The store starts on demand, so this usually means it could 
         for (id, request) in diagram_saves {
             self.save_diagram(id, request);
         }
+        // *Copy image* on a drawn diagram, the same way.
+        let diagram_copies: Vec<(WindowId, crate::CopyDiagram)> = self
+            .panes
+            .iter_mut()
+            .filter_map(|(id, pane)| {
+                pane.view
+                    .take_wants_copy_diagram()
+                    .map(|request| (*id, request))
+            })
+            .collect();
+        for (id, request) in diagram_copies {
+            self.copy_diagram(id, &request);
+        }
         // /attach and /image both open a native picker on the main thread,
         // matching each other: no parent window (a parented rfd dialog from
         // about_to_wait has failed silently on Windows), and only while no
@@ -8921,6 +8934,7 @@ Nothing was written. The store starts on demand, so this usually means it could 
             }
             PaneRequest::SaveFiles(ids) => self.save_files(ids),
             PaneRequest::SaveDiagram(request) => self.save_diagram(source, request),
+            PaneRequest::CopyDiagram(request) => self.copy_diagram(source, &request),
             PaneRequest::OpenFile(id) => {
                 crate::attach_debug!("shell drain PaneRequest::OpenFile id={}", id.to_storage());
                 self.open_file(id);
@@ -10129,6 +10143,27 @@ Nothing was written. The store starts on demand, so this usually means it could 
                 ErrorReport::new("Couldn't start saving the file", "Nothing was written.")
                     .with_details(error),
             );
+        }
+    }
+
+    /// Put a picture of a drawn diagram on the system clipboard: the same
+    /// 2× raster a saved PNG is, as a bitmap, so it pastes into a slide or a
+    /// chat as crisply as the file would. No dialog and no notice — a copy
+    /// is silent, as an image block's is; a raster that fails is logged and
+    /// leaves the clipboard as it was.
+    fn copy_diagram(&mut self, source: WindowId, request: &crate::CopyDiagram) {
+        match self.raster_diagram(source, &request.prepared) {
+            Ok(rgba) => {
+                let image = koru_clipboard::RgbaBitmap {
+                    width: rgba.width as usize,
+                    height: rgba.height as usize,
+                    bytes: rgba.bytes,
+                };
+                if let Err(error) = koru_clipboard::system().set_bitmap(&image) {
+                    eprintln!("[Koru][diagram] copy failed: {error}");
+                }
+            }
+            Err(error) => eprintln!("[Koru][diagram] copy failed: {error}"),
         }
     }
 

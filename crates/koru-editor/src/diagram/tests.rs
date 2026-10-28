@@ -14,7 +14,7 @@ use super::*;
 use crate::editor::{Editing, Editor};
 use crate::input::action::Action;
 use crate::rowlayout;
-use crate::view_state::SaveDiagramAs;
+use crate::view_state::{Hover, SaveDiagramAs};
 
 const TEXT: &str = "flowchart LR\n  A --> B\n  B --> C";
 
@@ -318,6 +318,33 @@ fn a_drawn_row_takes_the_natural_height_scaled_to_the_column() {
     assert!(e.take_diagram_requests().is_empty());
 }
 
+/// A diagram block keeps a figure's air from the rows around it — above
+/// and below alike — outside the panel's own padding. It had a code block's
+/// two pixels, which put a bordered picture against the descenders of the
+/// paragraph above it.
+#[test]
+fn a_diagram_block_keeps_a_figures_air_from_its_neighbours() {
+    let (_ws, mut e, node) = diagram_doc(TEXT);
+    e.take_diagram_requests();
+    assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
+    e.reflow();
+    let index = e.body.index_of(node).unwrap();
+    let (before, shown, after) = (
+        &e.body.rows[index - 1],
+        &e.body.rows[index],
+        &e.body.rows[index + 1],
+    );
+    let panel = rowlayout::code_panel_rect(shown, 900.0, shown.y);
+    let above = panel.y - (before.y + before.height);
+    let below = after.y - (panel.y + panel.h);
+    assert!(
+        (above - (theme::TASK_GAP + theme::DIAGRAM_AIR)).abs() < 0.01,
+        "above: {above}"
+    );
+    assert!((below - above).abs() < 0.01, "the same below: {below}");
+    assert!(above > theme::TASK_GAP, "more than a code block's");
+}
+
 /// A result landing changes the row's height and nothing else: no row is
 /// reshaped, this one included — the heights come from the entry.
 #[test]
@@ -382,6 +409,48 @@ fn enter_opens_the_text_and_esc_closes_it() {
     assert!(layout.reason_y.is_none() && layout.label_y.is_none());
 
     assert!(press(&mut e, &mut ws, NamedKey::Escape));
+    assert_eq!(e.view.diagram_text_open, None, "closed");
+    assert!(row(&e, node).diagram_shows_picture(), "a picture again");
+    assert_eq!(e.body.focused_id(), Some(node), "still selected");
+    assert_eq!(row(&e, node).height, 300.0);
+}
+
+/// The *Done* check at the block's corner closes the open text the way
+/// Escape does — for a hand on the mouse. It is there only while the text
+/// is open: a drawn block's corner has the four controls instead.
+#[test]
+fn the_done_check_closes_the_text_like_escape() {
+    let (mut ws, mut e, node) = diagram_doc(TEXT);
+    e.take_diagram_requests();
+    assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
+    focus(&mut e, node);
+    e.reflow();
+    let index = e.body.index_of(node).unwrap();
+    let content_x = e.view.content_x;
+    let centre = |e: &Editor| {
+        let rect = rowlayout::diagram_done_rect(row(e, node), 900.0);
+        (
+            content_x + rect.x + rect.w * 0.5,
+            rect.y + rect.h * 0.5 - e.view.scroll,
+        )
+    };
+    // Closed, the corner is the controls', not Done's.
+    let (x, y) = centre(&e);
+    e.mouse_move(x, y);
+    assert_ne!(e.view.hover, Some(Hover::DiagramDone(index)));
+
+    assert!(press(&mut e, &mut ws, NamedKey::Enter));
+    assert_eq!(e.view.diagram_text_open, Some(node));
+    let (x, y) = centre(&e);
+    e.mouse_move(x, y);
+    assert_eq!(e.view.hover, Some(Hover::DiagramDone(index)));
+    assert_eq!(e.view.cursor_icon(), koru_ui::cursor::PRESS);
+    let done = rowlayout::diagram_done_rect(row(&e, node), 900.0);
+    let copy = rowlayout::copy_chip_rect(row(&e, node), 900.0);
+    assert!(done.x + done.w <= copy.x, "left of the copy icon");
+    assert_eq!(done.y, copy.y, "in the chip band");
+
+    assert!(e.mouse_down(&mut ws, x, y, false));
     assert_eq!(e.view.diagram_text_open, None, "closed");
     assert!(row(&e, node).diagram_shows_picture(), "a picture again");
     assert_eq!(e.body.focused_id(), Some(node), "still selected");
@@ -587,7 +656,7 @@ fn keyboard_selection_reveals_the_edit_control() {
 
     // The control is where the painter puts it, inside the panel's corner.
     let shown = row(&e, node);
-    let control = rowlayout::diagram_control_rect(shown, 900.0);
+    let control = rowlayout::diagram_control_rect(shown, 900.0, Control::Edit);
     assert_eq!(control.w, crate::table::CONTROL_SIZE);
     let panel = rowlayout::code_panel_rect(shown, 900.0, shown.y);
     assert!(control.x + control.w <= panel.x + panel.w && control.y >= panel.y);
@@ -595,6 +664,189 @@ fn keyboard_selection_reveals_the_edit_control() {
     // Enter opens the text and the control steps aside.
     assert!(press(&mut e, &mut ws, NamedKey::Enter));
     assert_eq!(e.view.table_controls_node, None);
+}
+
+/// The four controls — *Open*, *Copy image*, *Save as…*, *Edit text* —
+/// sit in a row inside the panel's corner, left to right, the pencil at
+/// the corner it always had. Each is its own hover, and each click asks
+/// for its own thing: the viewer; the clipboard, through the document app,
+/// with the check and the toast every copy shows; the save dialog; or the
+/// text. The asks carry the block's id and are taken once.
+#[test]
+fn the_controls_sit_in_the_corner_and_each_asks_for_its_own_thing() {
+    let (mut ws, mut e, node) = diagram_doc(TEXT);
+    e.take_diagram_requests();
+    assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
+    e.body.focus = 0;
+    e.view.active = true;
+    e.reflow();
+    assert!(press(&mut e, &mut ws, NamedKey::ArrowDown));
+    assert_eq!(
+        e.view.table_controls_node,
+        Some(node),
+        "the controls are on"
+    );
+
+    let shown = row(&e, node);
+    let rects = Control::ALL.map(|control| rowlayout::diagram_control_rect(shown, 900.0, control));
+    let panel = rowlayout::code_panel_rect(shown, 900.0, shown.y);
+    for rect in &rects {
+        assert_eq!(rect.w, crate::table::CONTROL_SIZE);
+        assert_eq!(rect.y, rects[0].y, "one row");
+        assert!(
+            rect.x >= panel.x && rect.x + rect.w <= panel.x + panel.w && rect.y >= panel.y,
+            "inside the panel"
+        );
+    }
+    for pair in rects.windows(2) {
+        assert!(pair[0].x + pair[0].w <= pair[1].x, "left to right, apart");
+    }
+    // All four sit on one bar, inside the panel's corner.
+    let bar = rowlayout::diagram_controls_bar(shown, 900.0);
+    for rect in &rects {
+        assert!(
+            rect.x >= bar.x
+                && rect.x + rect.w <= bar.x + bar.w
+                && rect.y >= bar.y
+                && rect.y + rect.h <= bar.y + bar.h,
+            "on the bar"
+        );
+    }
+    assert!(
+        bar.x > panel.x && bar.x + bar.w < panel.x + panel.w && bar.y > panel.y,
+        "the bar is inside the panel, off its edges"
+    );
+
+    // The pointer in window x is the content column plus the rect.
+    let content_x = e.view.content_x;
+    let scroll = e.view.scroll;
+    let centre = |rect: koru_draw::geometry::Rect| {
+        (
+            content_x + rect.x + rect.w * 0.5,
+            rect.y + rect.h * 0.5 - scroll,
+        )
+    };
+    let index = e.body.index_of(node).unwrap();
+    for (control, rect) in Control::ALL.into_iter().zip(rects) {
+        let (x, y) = centre(rect);
+        e.mouse_move(x, y);
+        assert_eq!(
+            e.view.hover,
+            Some(Hover::DiagramControl {
+                row: index,
+                control
+            })
+        );
+        assert_eq!(e.view.cursor_icon(), koru_ui::cursor::PRESS);
+    }
+
+    // Open asks for the viewer, for this block, and opens nothing here.
+    let (x, y) = centre(rects[0]);
+    e.mouse_move(x, y);
+    assert!(e.mouse_down(&mut ws, x, y, false));
+    assert_eq!(e.view.wants_open_diagram.take(), Some(node));
+    assert_eq!(e.body.focused_id(), Some(node));
+    assert_eq!(
+        e.view.diagram_text_open, None,
+        "the text stays closed: the viewer is a picture, not an edit"
+    );
+
+    // Copy asks for the picture, confirms with the check, raises the toast.
+    let (x, y) = centre(rects[1]);
+    e.mouse_move(x, y);
+    assert!(e.mouse_down(&mut ws, x, y, false));
+    assert_eq!(e.view.wants_copy_diagram.take(), Some(node));
+    assert_eq!(e.view.copy.glyph(), koru_draw::icons::CHECK);
+    assert_eq!(
+        e.view.wants_toast.take().as_deref(),
+        Some(koru_ui::CopyAffordance::TOAST)
+    );
+    assert_eq!(e.view.diagram_text_open, None);
+
+    // Save asks for the dialog on this block.
+    let (x, y) = centre(rects[2]);
+    e.mouse_move(x, y);
+    assert!(e.mouse_down(&mut ws, x, y, false));
+    assert_eq!(
+        e.view.wants_save_diagram_as.take().map(|ask| ask.node),
+        Some(node)
+    );
+
+    // The pencil still opens the text.
+    let (x, y) = centre(rects[3]);
+    e.mouse_move(x, y);
+    assert!(e.mouse_down(&mut ws, x, y, false));
+    assert_eq!(e.view.diagram_text_open, Some(node));
+    assert_eq!(e.view.wants_open_diagram, None);
+    assert_eq!(e.view.wants_copy_diagram, None);
+}
+
+/// A drawn block is a block like any other: the margin offers the `+` beside
+/// the grip, so a row can be added above or below it. It had the grip alone.
+#[test]
+fn a_drawn_block_offers_the_plus_beside_its_grip() {
+    let (_ws, mut e, node) = diagram_doc(TEXT);
+    e.take_diagram_requests();
+    assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
+    e.view.insert_button = true;
+    e.reflow();
+    let index = e.body.index_of(node).unwrap();
+    let shown = row(&e, node);
+    assert!(shown.diagram_shows_picture());
+    let (plus, grip) = rowlayout::gutter_affordances(shown, shown.y);
+    assert!(plus.x + plus.w <= grip.x, "the + is left of the grip");
+    let content_x = e.view.content_x;
+    let scroll = e.view.scroll;
+    e.mouse_move(
+        content_x + plus.x + plus.w * 0.5,
+        plus.y + plus.h * 0.5 - scroll,
+    );
+    assert_eq!(e.view.hover, Some(Hover::Plus(index)));
+    e.mouse_move(
+        content_x + grip.x + grip.w * 0.5,
+        grip.y + grip.h * 0.5 - scroll,
+    );
+    assert_eq!(e.view.hover, Some(Hover::Grip(index)));
+}
+
+/// A double click on the drawing asks for the viewer too; one on the
+/// panel beside the drawing, or on a block whose text is showing, does
+/// not.
+#[test]
+fn a_double_click_on_the_drawing_asks_for_the_viewer() {
+    let (ws, mut e, node) = diagram_doc(TEXT);
+    e.take_diagram_requests();
+    assert!(e.diagram_result(node, text_hash(TEXT), Ok(prepared(400.0, 300.0))));
+    e.view.active = true;
+    e.reflow();
+    let shown = row(&e, node);
+    let state = shown.diagram.as_ref().expect("a diagram row");
+    let drawing = rowlayout::diagram_layout(shown, state, shown.height, 900.0)
+        .drawing
+        .expect("a drawing");
+    let content_x = e.view.content_x;
+    let (x, y) = (
+        content_x + drawing.x + drawing.w * 0.5,
+        shown.y + drawing.y + drawing.h * 0.5,
+    );
+    let right = rowlayout::code_panel_rect(shown, 900.0, shown.y);
+    assert!(e.mouse_double_click(&ws, x, y));
+    assert_eq!(e.view.wants_open_diagram.take(), Some(node));
+
+    // Off the drawing, on the panel's right-hand air: nothing.
+    let (px, py) = (content_x + right.x + right.w - 2.0, y);
+    if px > content_x + drawing.x + drawing.w {
+        assert!(!e.mouse_double_click(&ws, px, py));
+        assert_eq!(e.view.wants_open_diagram, None);
+    }
+
+    // Open the text: the block shows its text now, so a double click
+    // selects a word there as in any code block.
+    assert!(e.open_diagram_text(node));
+    e.reflow();
+    assert!(!row(&e, node).diagram_shows_picture());
+    e.mouse_double_click(&ws, x, y);
+    assert_eq!(e.view.wants_open_diagram, None);
 }
 
 // ----------------------------------------------------------------- copy

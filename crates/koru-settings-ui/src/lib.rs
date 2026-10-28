@@ -887,6 +887,23 @@ impl SettingsSurface {
         false
     }
 
+    /// Put the keyboard in the search box with the query it holds selected,
+    /// so the next thing typed replaces the last search rather than
+    /// extending it. The chord's way in: `Ctrl+,` opens Settings to find
+    /// something, and a person who arrived by keyboard should not have to
+    /// reach for the mouse to say what. An open list closes; it was the
+    /// mouse's.
+    pub fn focus_search(&mut self) {
+        self.open = None;
+        self.search_focused = true;
+        self.search.select_all(&mut self.engine);
+    }
+
+    /// Whether the search box has the keyboard.
+    pub fn search_focused(&self) -> bool {
+        self.search_focused
+    }
+
     /// **A press, gated by what is actually drawn.**
     ///
     /// The hit test runs against the controls the last layout produced, so a

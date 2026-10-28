@@ -87,6 +87,12 @@ impl MainView {
         let TabView::Leaf(leaf) = &self.tabs().active_tab().view else {
             return None;
         };
+        // Painted after the pane's content, so they would sit over the
+        // diagram viewer's scrim; while it is up they are neither drawn nor
+        // pressable, like everything else under a modal.
+        if leaf.diagram_viewer_open() {
+            return None;
+        }
         let rect = leaf.title_action_rect()?;
         let rect = Rect::new(content.x + rect.x, content.y + rect.y, rect.w, rect.h);
         if rect.y < content.y || rect.y + rect.h > content.y + content.h {
@@ -109,6 +115,12 @@ impl MainView {
         let TabView::Leaf(leaf) = &self.tabs().active_tab().view else {
             return None;
         };
+        // Painted after the pane's content, so they would sit over the
+        // diagram viewer's scrim; while it is up they are neither drawn nor
+        // pressable, like everything else under a modal.
+        if leaf.diagram_viewer_open() {
+            return None;
+        }
         let rect = leaf.title_ai_action_rect()?;
         let rect = Rect::new(content.x + rect.x, content.y + rect.y, rect.w, rect.h);
         if rect.y < content.y || rect.y + rect.h > content.y + content.h {

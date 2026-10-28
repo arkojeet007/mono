@@ -749,6 +749,31 @@ impl std::fmt::Debug for SaveDiagram {
     }
 }
 
+/// *Copy image* asked on a drawn diagram: the drawing the shell rasterises
+/// for the clipboard, at [`SAVE_SCALE`] like a saved PNG, so what is pasted
+/// elsewhere is as crisp as what is saved. Compared and printed like
+/// [`SaveDiagram`], for the same reasons.
+#[derive(Clone)]
+pub struct CopyDiagram {
+    pub prepared: Arc<PreparedDiagram>,
+}
+
+impl PartialEq for CopyDiagram {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.prepared, &other.prepared)
+    }
+}
+
+impl Eq for CopyDiagram {}
+
+impl std::fmt::Debug for CopyDiagram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CopyDiagram")
+            .field("natural_size", &self.prepared.natural_size())
+            .finish()
+    }
+}
+
 /// The two files a diagram is saved as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveFormat {

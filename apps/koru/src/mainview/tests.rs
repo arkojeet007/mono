@@ -11361,6 +11361,74 @@ fn a_settings_tab_opened_later_starts_from_what_is_stored() {
     assert!(opened.pinned_show_title());
 }
 
+/// `Ctrl+,` is a keyboard's way into Settings, so it lands the keyboard in
+/// the search box: the next thing typed is what to find. Pressed again over
+/// an open Settings tab it returns there and focuses the box again, and
+/// opens no second tab.
+#[test]
+fn the_settings_chord_opens_the_tab_with_its_search_box_focused() {
+    let (mut view, mut workspace) = container();
+    assert!(view.key(&mut workspace.ws, &ch(","), Some(","), PRIMARY));
+    let focused = |view: &MainView| match &view.tabs().active_tab().view {
+        TabView::Settings(settings) => settings.search_focused(),
+        _ => panic!("the Settings tab is not active"),
+    };
+    assert!(focused(&view), "the search box has the keyboard");
+    assert!(view.key(&mut workspace.ws, &ch(","), Some(","), PRIMARY));
+    assert!(focused(&view));
+    assert_eq!(
+        view.tabs()
+            .iter()
+            .filter(|tab| matches!(tab.view, TabView::Settings(_)))
+            .count(),
+        1,
+        "one Settings tab"
+    );
+}
+
+/// A document's diagram viewer is modal over the whole window: the chrome
+/// around its pane is dimmed from the container, and a press on that chrome
+/// goes to the viewer as a press on its scrim — so it closes, and the strip
+/// under the press does nothing. The sidebar and the context column used to
+/// show through, bright and clickable, beside the dimmed page.
+#[test]
+fn a_documents_diagram_viewer_takes_the_whole_window() {
+    let (mut view, mut workspace) = container();
+    let (leaf, node) = crate::leaf::tests::leaf_with_a_drawing(&mut workspace.ws, (400.0, 300.0));
+    view.tabs_mut().push(Tab::document(leaf, "Diagrams"));
+    assert!(
+        view.diagram_viewer_pane().is_none(),
+        "nothing to dim while the viewer is down"
+    );
+    let TabView::Leaf(Leaf::Document(document)) = &mut view.tabs_mut().active_mut().view else {
+        panic!("the document is active");
+    };
+    assert!(document.open_diagram_viewer(node));
+    let pane = view.diagram_viewer_pane().expect("the viewer's pane");
+    assert!(
+        pane.y > 0.0,
+        "there is chrome above the pane to dim: {pane:?}"
+    );
+    // Lifted: the viewer lays itself out over the whole window.
+    view.sync_viewer_lift();
+    let TabView::Leaf(Leaf::Document(document)) = &view.tabs().active_tab().view else {
+        panic!("the document is active");
+    };
+    assert_eq!(document.diagram_viewer().unwrap().viewport(), view.viewport);
+    // The title row's Context and AI buttons are painted after the pane's
+    // content, which put them over the viewer's scrim; while the viewer is
+    // up there are none to paint or to press.
+    assert!(view.document_context_button().is_none());
+    assert!(view.document_ai_button().is_none());
+    // A press on that chrome reaches the viewer, not the strip, and closes
+    // it on release — the way a press on the dimmed page does.
+    let tabs_before = view.tabs().len();
+    assert!(view.mouse_down(&mut workspace.ws, pane.x + 10.0, pane.y - 1.0, false));
+    view.mouse_up(&mut workspace.ws);
+    assert_eq!(view.tabs().len(), tabs_before, "the strip was not pressed");
+    assert!(view.diagram_viewer_pane().is_none(), "the viewer closed");
+}
+
 /// The comment on `adopt_preferences` says it reaches every Settings tab. When
 /// Settings split out of Welcome, the fan-out still only named Welcome, so an
 /// already-open Settings tab kept showing the values it was minted with.

@@ -511,6 +511,7 @@ impl MainView {
         self.draw_workspace_rename(scene, root);
         // The rail's inline field, over the row the rail reserved for it.
         self.draw_new_list(scene, root);
+        self.draw_lifted_diagram_viewer(scene, root);
         self.draw_menu(scene, root);
         // After the menu, because a menu control's chip must not end up under
         // the panel it belongs to. See `draw_tooltip`.
@@ -622,6 +623,22 @@ impl MainView {
 
     /// The context menu, last of all — it is the one thing that paints over the
     /// caption row. `None` (the common case) is a fast return.
+    /// The focused document's diagram viewer, lifted to the window: drawn
+    /// here, after the chrome and outside the content clip, so its scrim
+    /// covers the sidebar and the strip and its drawing may grow past the
+    /// pane. Under the container's menus and modals, which still stand
+    /// above everything a tab owns. The pane's own `draw` skips a lifted
+    /// viewer; `sync_viewer_lift` keeps its window current.
+    fn draw_lifted_diagram_viewer(&mut self, scene: &mut Scene, root: Affine) {
+        self.sync_viewer_lift();
+        if self.diagram_viewer_pane().is_none() {
+            return;
+        }
+        if let TabView::Leaf(leaf) = self.active_view() {
+            leaf.draw_lifted_viewer(scene, root);
+        }
+    }
+
     fn draw_menu(&mut self, scene: &mut Scene, root: Affine) {
         if let Some(menu) = self.menu.clone() {
             let enabled = self.enabled_items(&menu);

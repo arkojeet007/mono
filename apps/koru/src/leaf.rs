@@ -323,7 +323,37 @@ impl Leaf {
     }
 
     pub fn scroll_by(&mut self, delta: MouseScrollDelta) {
-        Editing::scroll_by(self, delta)
+        match self {
+            // The document decides where a wheel goes: its diagram viewer
+            // takes it while it is up, and the page under the modal stays
+            // put. `Editing::scroll_by` reached the editor directly, past
+            // that override, and scrolled the page behind the viewer.
+            Self::Document(d) => View::scroll_by(d, delta),
+        }
+    }
+
+    /// Whether the document's diagram viewer is up — the one modal a leaf
+    /// owns, which the container lifts to the whole window.
+    pub fn diagram_viewer_open(&self) -> bool {
+        match self {
+            Self::Document(d) => d.diagram_viewer_open(),
+        }
+    }
+
+    /// Where this leaf's pane sits in the window, and the window's size, so
+    /// the document's diagram viewer can take the window; see
+    /// `BuiltInDocument::set_viewer_lift`.
+    pub fn set_viewer_lift(&mut self, lift: Option<koru_document::ViewerLift>) {
+        match self {
+            Self::Document(d) => d.set_viewer_lift(lift),
+        }
+    }
+
+    /// Paint the lifted viewer at the window's root, after the chrome.
+    pub fn draw_lifted_viewer(&mut self, scene: &mut Scene, root: Affine) {
+        match self {
+            Self::Document(d) => d.draw_lifted_viewer(scene, root),
+        }
     }
 
     pub fn set_viewport(&mut self, w: f32, h: f32) {
@@ -808,6 +838,26 @@ impl View for Leaf {
         }
     }
 
+    fn take_wants_copy_diagram(&mut self) -> Option<koru_workspace_host::CopyDiagram> {
+        match self {
+            Self::Document(d) => View::take_wants_copy_diagram(d),
+        }
+    }
+
+    // The zoom gestures, offered to the document for its diagram viewer; a
+    // plain page declines them and the display zoom moves.
+    fn zoom_wheel(&mut self, delta: MouseScrollDelta, x: f32, y: f32) -> bool {
+        match self {
+            Self::Document(d) => View::zoom_wheel(d, delta, x, y),
+        }
+    }
+
+    fn zoom_key(&mut self, intent: koru_workspace_host::ZoomIntent) -> bool {
+        match self {
+            Self::Document(d) => View::zoom_key(d, intent),
+        }
+    }
+
     fn take_wants_create_tag(&mut self) -> Option<(Vec<NodeId>, String)> {
         match self {
             Self::Document(d) => View::take_wants_create_tag(d),
@@ -937,12 +987,106 @@ impl View for Leaf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use koru_core::WorkspaceId;
 
     fn ch(value: &str) -> Key {
         Key::Character(value.into())
+    }
+
+    /// A prepared drawing of a given natural size with nothing in it — what
+    /// the shell's worker would hand back, as far as a leaf can tell.
+    pub(crate) fn prepared_drawing(
+        width: f64,
+        height: f64,
+    ) -> std::sync::Arc<koru_draw::diagram::PreparedDiagram> {
+        use koru_diagram::{Counts, DiagramScene, FlowchartScene, Kind as DiagramKind, SceneBody};
+        std::sync::Arc::new(koru_draw::diagram::PreparedDiagram::new(
+            std::sync::Arc::new(DiagramScene {
+                kind: DiagramKind::Flowchart,
+                bounds: vello::kurbo::Rect::new(0.0, 0.0, width, height),
+                counts: Counts::Flowchart {
+                    nodes: 0,
+                    edges: 0,
+                    groups: 0,
+                },
+                acc_title: None,
+                acc_descr: None,
+                body: SceneBody::Flowchart(FlowchartScene {
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                    clusters: Vec::new(),
+                }),
+            }),
+        ))
+    }
+
+    /// A leaf showing a long document with a drawn diagram at its end, and
+    /// the diagram's node. Long, so the page has somewhere to scroll to.
+    pub(crate) fn leaf_with_a_drawing(
+        ws: &mut WorkspaceDoc,
+        natural: (f64, f64),
+    ) -> (Leaf, NodeId) {
+        let root = koru_workspace::document(ws, "Diagrams").unwrap();
+        for i in 0..40 {
+            ws.insert(
+                koru_core::schema::Parent::Node(root),
+                koru_core::Node::paragraph(&format!("line {i}")).unwrap(),
+            )
+            .unwrap();
+        }
+        let node = ws
+            .insert(
+                koru_core::schema::Parent::Node(root),
+                koru_core::Node::code("flowchart LR\n  A --> B").unwrap(),
+            )
+            .unwrap();
+        ws.set_language(node, Some(koru_editor::diagram::LANGUAGE))
+            .unwrap();
+        let mut document = BuiltInDocument::open(ws, root);
+        document.editor.view.code_enabled = true;
+        document.editor.body.rebuild(ws);
+        View::set_viewport(&mut document, 800.0, 600.0);
+        let asked = document.take_diagram_requests();
+        assert_eq!(asked.len(), 1, "one drawing asked for");
+        assert!(document.diagram_result(
+            node,
+            asked[0].text_hash,
+            Ok(prepared_drawing(natural.0, natural.1))
+        ));
+        (Leaf::Document(document), node)
+    }
+
+    /// A drawn diagram's viewer takes the wheel while it is up, and the page
+    /// under it stays put. `scroll_by` went straight to the editor through
+    /// `Editing`, past the document's own `View::scroll_by`, so the page
+    /// scrolled behind the modal and the drawing never moved.
+    #[test]
+    fn the_wheel_over_an_open_viewer_scrolls_the_drawing_and_not_the_page() {
+        let mut ws = WorkspaceDoc::create(WorkspaceId::new(), "test").unwrap();
+        let (mut leaf, node) = leaf_with_a_drawing(&mut ws, (2000.0, 1000.0));
+        // With nothing over the page, the wheel scrolls it.
+        leaf.scroll_by(MouseScrollDelta::LineDelta(0.0, -1.0));
+        let Leaf::Document(document) = &mut leaf;
+        let scrolled = document.editor.view.scroll;
+        assert!(scrolled > 0.0, "the page scrolls when nothing is over it");
+        assert!(document.open_diagram_viewer(node));
+        // Opened fitted to the window; at its natural size it overflows,
+        // which is when there is something to scroll.
+        assert!(View::zoom_key(
+            document,
+            koru_workspace_host::ZoomIntent::ActualSize
+        ));
+        assert!(leaf.diagram_viewer_open());
+        leaf.scroll_by(MouseScrollDelta::LineDelta(0.0, -1.0));
+        let Leaf::Document(document) = &leaf;
+        assert_eq!(
+            document.editor.view.scroll, scrolled,
+            "the page under the viewer stays put"
+        );
+        let pan = document.diagram_viewer().expect("open").pan();
+        assert!(pan.1 < 0.0, "the drawing scrolled instead: {pan:?}");
     }
 
     /// The title action follows the selection chip, not the page edge. Measuring
@@ -985,7 +1129,12 @@ mod tests {
         let Leaf::Document(document) = &mut leaf;
         document.editor.view.scroll = 200.0;
         let after = leaf.title_action_rect().unwrap();
-        assert_eq!(after.y, before.y - 200.0);
+        // Within a float's rounding: the chip's y carries the line's ink
+        // shift, a fraction, and the scroll is subtracted from it.
+        assert!(
+            (after.y - (before.y - 200.0)).abs() < 0.01,
+            "{after:?} vs {before:?}"
+        );
         assert!(after.y < 0.0, "the action left with the title row");
     }
 

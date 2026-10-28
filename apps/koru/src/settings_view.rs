@@ -174,6 +174,17 @@ impl SettingsView {
         self.surface.scroll_to_voice()
     }
 
+    /// The keyboard into the search box, its query selected — where `Ctrl+,`
+    /// lands.
+    pub fn focus_search(&mut self) {
+        self.surface.focus_search();
+    }
+
+    /// Whether the search box has the keyboard.
+    pub fn search_focused(&self) -> bool {
+        self.surface.search_focused()
+    }
+
     /// Copy controller-owned reminder state into Koru's host section. This is
     /// presentation only; Store and Agent effects stay in `MainView`.
     pub(crate) fn set_reminder_preferences(

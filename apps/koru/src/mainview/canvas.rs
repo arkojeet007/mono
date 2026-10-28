@@ -230,6 +230,9 @@ impl MainView {
             Some(TabView::Canvas(canvas)) => {
                 View::zoom_wheel(canvas, delta, x - rect.x, y - rect.y)
             }
+            // A document claims it only while its diagram viewer is up, for
+            // the drawing; a plain page declines and the app zooms.
+            Some(TabView::Leaf(leaf)) => View::zoom_wheel(leaf, delta, x - rect.x, y - rect.y),
             _ => false,
         }
     }
@@ -250,6 +253,7 @@ impl MainView {
         }
         match self.active_view() {
             TabView::Canvas(canvas) => View::zoom_key(canvas, intent),
+            TabView::Leaf(leaf) => View::zoom_key(leaf, intent),
             _ => false,
         }
     }

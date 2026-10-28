@@ -6335,6 +6335,62 @@ impl MainView {
         true
     }
 
+    /// `Ctrl+,`: the Settings tab, with the keyboard in its search box. A
+    /// chord is a keyboard's way in, and the box is what a person who came
+    /// that way reaches for next — the query, not the mouse. The header's
+    /// gear opens the same tab and leaves the keyboard where it was.
+    fn open_settings_tab_to_search(&mut self) -> bool {
+        self.open_settings_tab();
+        if let TabView::Settings(view) = &mut self.tabs_mut().active_mut().view {
+            view.focus_search();
+        }
+        true
+    }
+
+    /// The focused pane's rect while its document's diagram viewer is up.
+    ///
+    /// The viewer is the one modal a tab owns rather than this container.
+    /// It is lifted to the whole window (`sync_viewer_lift`): its scrim
+    /// covers the sidebar and the strip, its drawing may grow past the
+    /// pane, and every press, move and wheel in the window is handed to it
+    /// in the pane's coordinates, the way the container's own modals take
+    /// the window.
+    pub(super) fn diagram_viewer_pane(&self) -> Option<Rect> {
+        let open = matches!(
+            &self.panes.focused().active_tab().view,
+            TabView::Leaf(leaf) if leaf.diagram_viewer_open()
+        );
+        open.then(|| self.focused_pane_rect()).flatten()
+    }
+
+    /// The focused pane's view rect, in window coordinates.
+    fn focused_pane_rect(&self) -> Option<Rect> {
+        let content = self.content();
+        let focused = self.panes.focused_path();
+        self.panes
+            .leaf_rects(content)
+            .into_iter()
+            .find(|(path, _)| path == focused)
+            .map(|(_, rect)| panes::PaneTree::view_rect_in(content, rect))
+    }
+
+    /// Tell the focused leaf where its pane sits and how big the window is,
+    /// so its diagram viewer lays itself out over the window. Before every
+    /// frame and every press: both are cheap, and a viewer opened by the
+    /// press itself must open at the window's size, not the pane's.
+    pub(super) fn sync_viewer_lift(&mut self) {
+        let Some(pane) = self.focused_pane_rect() else {
+            return;
+        };
+        let size = self.viewport;
+        if let TabView::Leaf(leaf) = self.tabs_mut().active_view() {
+            leaf.set_viewer_lift(Some(koru_document::ViewerLift {
+                origin: (pane.x, pane.y),
+                size,
+            }));
+        }
+    }
+
     fn open_voice_settings_tab(&mut self) -> bool {
         let opened = self.open_settings_tab();
         let moved = match &mut self.tabs_mut().active_mut().view {
@@ -8347,6 +8403,21 @@ impl MainView {
         if self.error.is_some() {
             return self.error_mouse_down(x, y);
         }
+        self.sync_viewer_lift();
+        // A document's diagram viewer is modal over the window, not only
+        // over its pane: a press on the dimmed chrome around that pane goes
+        // to the viewer, in the pane's coordinates, so the scrim there
+        // closes it the way the dimmed page does and a toolbar that has
+        // grown past the pane still answers; nothing underneath is pressed.
+        if let Some(pane) = self.diagram_viewer_pane()
+            && !pane.contains(x, y)
+        {
+            let (lx, ly) = (x - pane.x, y - pane.y);
+            let (view, doc) = self.tabs_mut().active_mut().doc(ws);
+            if let TabView::Leaf(leaf) = view {
+                return Leaf::mouse_down(leaf, doc, lx, ly, ctrl);
+            }
+        }
         // The delegation modal claims every press while it stands, and a press
         // outside its panel does **not** dismiss it: it holds an objective
         // somebody typed, and losing that to a stray click is the failure
@@ -9422,6 +9493,16 @@ impl View for MainView {
             self.tooltip.set_hover(None, Instant::now());
             return self.recording_mouse_move(x, y);
         }
+        // A document's lifted diagram viewer owns the pointer over the whole
+        // window, for the same reason: a drag of the drawing must follow
+        // the pointer past the pane, and chrome under its scrim stays quiet.
+        if let Some(pane) = self.diagram_viewer_pane() {
+            self.tooltip.set_hover(None, Instant::now());
+            let (lx, ly) = (x - pane.x, y - pane.y);
+            if let TabView::Leaf(leaf) = self.tabs_mut().active_view() {
+                return Leaf::mouse_move(leaf, lx, ly);
+            }
+        }
         // Modal: own the pointer so chrome under the scrim does not light up or
         // change the cursor (I-beam, sidebar ColResize).
         if self.move_to.is_some() {
@@ -9691,6 +9772,15 @@ impl View for MainView {
                 &self.tab_widths(),
                 self.tab_scroll() - dx,
             ));
+            return;
+        }
+        // The viewer takes the wheel wherever the pointer is: the window is
+        // its while it is up, and neither the pane beside it nor the sidebar
+        // scrolls under it.
+        if self.diagram_viewer_pane().is_some() {
+            if let TabView::Leaf(leaf) = self.tabs_mut().active_view() {
+                Leaf::scroll_by(leaf, delta);
+            }
             return;
         }
         if !self.content().contains(px, py) {
@@ -12106,6 +12196,17 @@ impl View for MainView {
         None
     }
 
+    fn take_wants_copy_diagram(&mut self) -> Option<koru_workspace_host::CopyDiagram> {
+        let request = match self.active_view() {
+            TabView::Leaf(l) => View::take_wants_copy_diagram(l),
+            _ => None,
+        }?;
+        // The save's route, for the same reason: this window's device
+        // rasterises the bitmap.
+        self.ask_pane(PaneRequest::CopyDiagram(request));
+        None
+    }
+
     fn take_wants_file_action(
         &mut self,
     ) -> Option<(koru_core::DocumentId, koru_workspace_host::FileAction)> {
@@ -13012,6 +13113,10 @@ impl MainView {
             }
             // Claimed by `View::key`, above; see `blockers_from`.
             Blockers::Prompt(PromptKind::MoveTo | PromptKind::Search) => {}
+            // A document's own modal, never a layer of this container's: the
+            // leaf answers it inside its own `key`, which the fall-through
+            // below reaches. Named so adding a kind stays a compile error.
+            Blockers::Modal(ModalKind::DiagramViewer) => {}
             Blockers::None => {}
         }
         // **Escape during the countdown aborts.** Every other key keeps
@@ -13143,7 +13248,7 @@ impl MainView {
                 Chord::ToggleSidebar => self.focus_or_toggle_sidebar(ws),
                 Chord::ToggleContext => self.toggle_context(),
                 Chord::ToggleAi => self.toggle_ai(),
-                Chord::OpenSettings => self.open_settings_tab(),
+                Chord::OpenSettings => self.open_settings_tab_to_search(),
                 Chord::Rename => self.rename_here(ws),
                 Chord::ShowNavigator(mode) => self.show_navigator(mode),
                 Chord::ManageWorkspaces => self.open_manage_workspaces(None),

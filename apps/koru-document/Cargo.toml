@@ -59,6 +59,9 @@ unicode-segmentation.workspace = true
 chrono.workspace = true
 
 [dev-dependencies]
+# A prepared drawing of a known size for the diagram viewer's tests: the
+# scene types live here, and the view never looks inside one.
+koru-diagram = { path = "../../crates/koru-diagram" }
 # Every surface on by default in tests; `koru_features::testing::with` opts
 # one test into the simplified product.
 koru-features = { path = "../../crates/koru-features", features = ["testing"] }

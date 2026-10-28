@@ -1716,6 +1716,18 @@ fn offer_rich_paste<E: Editing + ?Sized>(
     if !e.view().images_enabled || e.view().images_offline {
         return None;
     }
+    // A code block — a diagram's text included — takes text and nothing
+    // else: a picture has no place in it, so there is nothing for the shell
+    // to interleave. Pasted plainly, at the caret, the newlines read the way
+    // `paste_plain_text` reads them; deferred, the text came back by the
+    // rows path with its Windows line endings intact.
+    if !e.body().has_row_selection()
+        && e.body()
+            .focused()
+            .is_some_and(|row| row.kind.allows_newlines())
+    {
+        return None;
+    }
     deferred_block_paste_target(e, ws)
 }
 
@@ -1753,7 +1765,12 @@ pub fn paste_plain_text<E: Editing + ?Sized>(e: &mut E, ws: &mut WorkspaceDoc, t
     // often spans lines) goes in as one inline insert — newlines and all —
     // rather than becoming a paragraph per line.
     if e.body().focused().is_some_and(|r| r.kind.allows_newlines()) && !text.is_empty() {
-        return paste_inline(e, ws, &[plain_run(text.to_owned())], &[]);
+        // Read the newlines the way `split_lines` reads them for prose. A
+        // Windows clipboard brings `\r\n`, and a `\r` kept in the block is
+        // shaped as a line break of its own — every line of a pasted
+        // diagram double-spaced, with nothing on the blank lines to delete.
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        return paste_inline(e, ws, &[plain_run(text)], &[]);
     }
     let lines = split_lines(text);
     if lines.len() == 1 {
@@ -2498,6 +2515,31 @@ mod tests {
         assert!(offer_rich_paste(&mut e, &ws).is_none());
     }
 
+    /// Foreign text pasted into a code block is never deferred: the block
+    /// takes text only, so it pastes plainly, with its newlines read as
+    /// `paste_plain_text` reads them. Deferred, a Windows paste reached the
+    /// block with every line double-spaced, where paste-as-plain did not.
+    #[test]
+    fn foreign_text_into_a_code_block_is_pasted_plainly_not_deferred() {
+        fixture();
+        let (mut ws, mut e) = editor_over(&[("one", 0)]);
+        e.view_mut().images_enabled = true;
+        e.body.focus = 0;
+        assert!(
+            offer_rich_paste(&mut e, &ws).is_some(),
+            "a paragraph defers"
+        );
+
+        let id = e.body.rows[0].id;
+        ws.set_kind(id, Kind::Code).unwrap();
+        e.body.rebuild(&ws);
+        e.body.focus = 0;
+        assert!(
+            offer_rich_paste(&mut e, &ws).is_none(),
+            "a code block pastes plainly"
+        );
+    }
+
     /// Deferred rich/image decoding must retain the selection from the paste
     /// gesture. The focus is at the lower end here; replacement still lands at
     /// the first selected row and removes both roots.
@@ -2685,6 +2727,29 @@ mod tests {
                 .any(|a| matches!(&a.value, AttrValue::Url(_))),
             "no link was created inside a code block"
         );
+    }
+
+    /// Windows newlines pasted into a code block arrive as Unix ones. The
+    /// block kept the `\r`, and the shaper broke the line at it and again at
+    /// the `\n`: a diagram pasted from another app showed every line
+    /// double-spaced, with no blank line in the text to delete.
+    #[test]
+    fn windows_newlines_pasted_into_a_code_block_become_unix_ones() {
+        let (mut ws, mut e) = editor_over(&[("", 0)]);
+        let id = e.body.rows[0].id;
+        ws.set_kind(id, Kind::Code).unwrap();
+        e.body.rebuild(&ws);
+        e.body.focus = 0;
+        e.place_caret(0);
+        e.reflow();
+
+        assert!(paste_plain_text(
+            &mut e,
+            &mut ws,
+            "flowchart LR\r\n  A --> B\rC"
+        ));
+        let node = ws.read(id).unwrap();
+        assert_eq!(node.content.as_text(), Some("flowchart LR\n  A --> B\nC"));
     }
 
     /// Pasting formatted runs into a code block drops the marks — code is plain

@@ -285,6 +285,10 @@ pub enum Hover {
     Lang(usize),
     /// The copy icon left of the language chip.
     Copy(usize),
+    /// The *Done* check left of the copy icon, on a diagram block whose text
+    /// is open: it closes the text, as Escape does, and the drawing is a
+    /// picture again.
+    DiagramDone(usize),
     /// An attribute chip trailing a row's text. `chip` indexes `row.chips`,
     /// which is what decides *which* picker a click opens; the row is carried
     /// so the row still lights the way it does under a pill.
@@ -306,8 +310,12 @@ pub enum Hover {
     TableLayout(usize),
     /// A table's source/grid mode toggle.
     TableMode(usize),
-    /// A drawn diagram's one control, *Edit text*, at the block's top-right.
-    DiagramEdit(usize),
+    /// One of a drawn diagram's controls at the block's top-right: *Open*,
+    /// *Copy image*, *Save as…* or *Edit text*.
+    DiagramControl {
+        row: usize,
+        control: crate::diagram::Control,
+    },
     /// A row of an open overlay panel.
     PanelRow(usize),
     /// A text field inside an open panel.
@@ -345,10 +353,11 @@ impl Hover {
             | Self::Image(i)
             | Self::Lang(i)
             | Self::Copy(i)
+            | Self::DiagramDone(i)
             | Self::TaskWarning(i)
             | Self::TableLayout(i)
             | Self::TableMode(i)
-            | Self::DiagramEdit(i)
+            | Self::DiagramControl { row: i, .. }
             | Self::Pill { row: i, .. }
             | Self::Chip { row: i, .. }
             | Self::Reminder { row: i, .. } => Some(i),
@@ -392,9 +401,10 @@ impl Hover {
             | Self::Reminder { .. }
             | Self::Lang(_)
             | Self::Copy(_)
+            | Self::DiagramDone(_)
             | Self::TableLayout(_)
             | Self::TableMode(_)
-            | Self::DiagramEdit(_)
+            | Self::DiagramControl { .. }
             | Self::Plus(_)
             | Self::TitleMenu
             | Self::PanelRow(_)
@@ -1047,6 +1057,17 @@ pub struct ViewState {
     /// raster and the file, so the view only asks. Drained by the document
     /// app the way `wants_file_action` is.
     pub wants_save_diagram_as: Option<SaveDiagramAs>,
+    /// *Open* asked on a drawn diagram — its magnifier control, a double
+    /// click on the drawing, or the menu row: which block to show in the
+    /// document's viewer. The editor owns no modal, so it only asks; the
+    /// document app drains it after the press that set it and opens the
+    /// viewer over the page with the drawing from `diagrams`.
+    pub wants_open_diagram: Option<NodeId>,
+    /// *Copy image* asked on a drawn diagram from its own control: which
+    /// block's drawing to put on the clipboard. The picture is the shell's
+    /// to rasterise, so the editor only asks, the way it asks for *Open*;
+    /// the document app drains it after the press and hands the drawing on.
+    pub wants_copy_diagram: Option<NodeId>,
     /// Copy icon on a hovered code block — one clock, not per row.
     pub copy: koru_ui::CopyAffordance,
     /// The unfinished-items triangle's tooltip. One clock for the whole view:
@@ -1169,6 +1190,8 @@ impl Default for ViewState {
             diagram_text_open: None,
             diagram_requests: Vec::new(),
             wants_save_diagram_as: None,
+            wants_open_diagram: None,
+            wants_copy_diagram: None,
             task_warning: koru_ui::Tooltip::default(),
             copy: koru_ui::CopyAffordance::default(),
             tables_enabled: false,
@@ -1601,6 +1624,7 @@ mod tests {
             Hover::TitleMenu,
             Hover::Copy(0),
             Hover::Lang(0),
+            Hover::DiagramDone(0),
         ] {
             assert_eq!(hover.cursor_icon(), cursor::PRESS, "{hover:?}");
             assert_ne!(hover.cursor_icon(), CursorIcon::Pointer, "{hover:?}");

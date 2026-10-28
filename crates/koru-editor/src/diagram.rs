@@ -155,6 +155,37 @@ impl DiagramEntry {
     }
 }
 
+/// The controls a drawn diagram wears at its panel's top-right corner, in
+/// the order they read from left to right: *Open* (the magnifier), *Copy
+/// image*, *Save as…* and *Edit text* (the pencil). One control, one
+/// gesture each; the pencil keeps the corner it always had, and the others
+/// join beside it. `rowlayout::diagram_control_rect` places them, the
+/// painter draws them from the same rects, and `hover_at` and `mouse_down`
+/// ask the same rects — so a control is clicked exactly where it is seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Control {
+    Open,
+    Copy,
+    Save,
+    Edit,
+}
+
+impl Control {
+    /// Every control, left to right.
+    pub const ALL: [Self; 4] = [Self::Open, Self::Copy, Self::Save, Self::Edit];
+
+    /// How many controls sit between this one and the panel's corner: the
+    /// pencil is at the corner, the magnifier three slots in.
+    pub fn slots_from_corner(self) -> usize {
+        match self {
+            Self::Edit => 0,
+            Self::Save => 1,
+            Self::Copy => 2,
+            Self::Open => 3,
+        }
+    }
+}
+
 /// Whether `row` is a diagram row: a code block whose language is exactly
 /// [`LANGUAGE`]. Everything else about it is the code block it already is.
 pub fn is_diagram_row(row: &Paragraph) -> bool {

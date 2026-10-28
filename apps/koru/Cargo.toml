@@ -200,6 +200,8 @@ koru-winres = { path = "../../crates/koru-winres" }
 # one test into the simplified product.
 koru-features = { path = "../../crates/koru-features", features = ["testing"] }
 tempfile.workspace = true
+# A drawn diagram for the leaf and container tests to open their viewer on.
+koru-diagram = { path = "../../crates/koru-diagram" }
 koru-workspace-host = { path = "../../crates/koru-workspace-host", features = ["no-model-reader"] }
 koru-ai-core = { path = "../../crates/koru-ai-core" }
 koru-ai-ui = { path = "../../crates/koru-ai-ui", features = ["no-client"] }

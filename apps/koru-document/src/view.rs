@@ -225,6 +225,9 @@ impl View for BuiltInDocument {
     }
 
     fn mouse_up(&mut self, ws: &mut WorkspaceDoc) -> bool {
+        if let Some(out) = self.viewer.as_mut().map(|viewer| viewer.mouse_up()) {
+            return self.settle_viewer(out);
+        }
         self.search.mouse_up();
         if self.search.is_open() {
             return true;
@@ -254,6 +257,9 @@ impl View for BuiltInDocument {
         // Ahead of the search bar and the caption alike: a modal covers both.
         if let Some(cursor) = self.confirm_cursor() {
             return cursor;
+        }
+        if let Some(viewer) = &self.viewer {
+            return viewer.cursor();
         }
         if let Some(cursor) = self.search.cursor_icon(&self.editor) {
             return cursor;
@@ -310,11 +316,48 @@ impl View for BuiltInDocument {
         self.window_request.take()
     }
 
+    /// The wheel over the viewer scrolls the drawing where it overflows —
+    /// a tall drawing is read by wheeling down it, as a page is — with
+    /// `Shift`+wheel sideways and `Alt`+wheel up and down whichever way the
+    /// wheel turned; the page under the modal does not scroll. Zooming is
+    /// `Ctrl`+wheel's, through `zoom_wheel`.
     fn scroll_by(&mut self, delta: MouseScrollDelta) {
+        if let Some(viewer) = &mut self.viewer {
+            let axis = crate::diagram_viewer::WheelAxis::from_mods(self.editor.view.mods);
+            viewer.pan_wheel(delta, axis);
+            return;
+        }
         Editing::scroll_by(self, delta)
     }
 
+    /// `Ctrl`+wheel and a pinch, offered before they zoom the app: the
+    /// viewer claims them for the drawing while it is up.
+    fn zoom_wheel(&mut self, delta: MouseScrollDelta, x: f32, y: f32) -> bool {
+        let (x, y) = self.viewer_point(x, y);
+        let Some(viewer) = &mut self.viewer else {
+            return false;
+        };
+        viewer.zoom_wheel(delta, x, y);
+        true
+    }
+
+    /// `Ctrl+=`, `Ctrl+-` and `Ctrl+0`, likewise.
+    fn zoom_key(&mut self, intent: koru_workspace_host::ZoomIntent) -> bool {
+        let Some(viewer) = &mut self.viewer else {
+            return false;
+        };
+        viewer.zoom_key(intent);
+        true
+    }
+
     fn set_viewport(&mut self, w: f32, h: f32) {
+        // A lifted viewer has the window's size, which the container keeps
+        // current through `set_viewer_lift`; the pane's size is not its.
+        if self.viewer_lift.is_none()
+            && let Some(viewer) = &mut self.viewer
+        {
+            viewer.set_viewport(w, h);
+        }
         Editing::set_viewport(self, w, h)
     }
 
@@ -341,6 +384,10 @@ impl View for BuiltInDocument {
             || self.bubble_tooltip_animating()
             || self.editor.overlay_press_animating()
             || self.search.animating(now)
+            || self
+                .viewer
+                .as_ref()
+                .is_some_and(|viewer| viewer.animating(now))
     }
 
     fn maintenance_deadline(&self) -> Option<Instant> {
@@ -351,6 +398,9 @@ impl View for BuiltInDocument {
             self.editor.task_warning_maintenance_deadline(),
             self.search.maintenance_deadline(),
             self.spelling.maintenance_deadline(),
+            self.viewer
+                .as_ref()
+                .and_then(|viewer| viewer.maintenance_deadline()),
         ]
         .into_iter()
         .flatten()
@@ -363,6 +413,11 @@ impl View for BuiltInDocument {
         let copy = self.editor.maintain_copy_affordance(now);
         let warning = self.editor.maintain_task_warning(now);
         let local = self.search.maintain(now);
+        // The viewer's copy button morphing to the check and back.
+        let viewer = self
+            .viewer
+            .as_mut()
+            .is_some_and(|viewer| viewer.maintain(now));
         let spelling = self.spelling.maintain(&mut self.editor, ws, now);
         // The layouts the last reflow asked for go out; the drawings that
         // came back land, and the next frame takes its heights from them.
@@ -370,7 +425,7 @@ impl View for BuiltInDocument {
         // Suggestions that just landed belong in the open context menu's
         // placeholder, not behind a reopen.
         let filled = self.fill_context_suggestions();
-        search || table || copy || warning || local || spelling || diagrams || filled
+        search || table || copy || warning || local || viewer || spelling || diagrams || filled
     }
 
     fn adopt(&mut self, ws: &WorkspaceDoc) {
@@ -627,6 +682,11 @@ impl View for BuiltInDocument {
             prepared,
             title: self.page_name(ws),
         })
+    }
+
+    fn take_wants_copy_diagram(&mut self) -> Option<koru_workspace_host::CopyDiagram> {
+        let prepared = self.wants_copy_diagram.take()?;
+        Some(koru_workspace_host::CopyDiagram { prepared })
     }
 
     fn take_wants_copy_image(&mut self) -> Option<String> {
@@ -1077,11 +1137,21 @@ impl View for BuiltInDocument {
         // no other document-owned surface (opening it closes those surfaces).
         self.search.draw(scene, root, &mut self.editor);
 
+        // The diagram viewer covers the page and the search alike; only a
+        // confirm paints over it. Lifted, it is the container's to draw, at
+        // the window's root and outside this pane's clip.
+        if let (Some(viewer), None) = (&self.viewer, &self.viewer_lift) {
+            viewer.draw(scene, root, &mut self.editor.view.engine);
+        }
+
         // A modal question paints over everything, scrim included: while it is
         // up, nothing behind it is answerable. It is drawn from here rather
         // than inside `frame` because it is not document chrome.
         if self.confirm_open() {
             self.draw_confirm(scene, root);
+            return;
+        }
+        if self.viewer.is_some() {
             return;
         }
 

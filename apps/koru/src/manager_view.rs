@@ -289,6 +289,22 @@ impl View for DocumentPane {
         View::cursor_icon(&self.doc)
     }
 
+    // The zoom gestures reach the document for its diagram viewer; the
+    // close dialog, when it stands, lets nothing through.
+    fn zoom_wheel(&mut self, delta: MouseScrollDelta, x: f32, y: f32) -> bool {
+        if self.close.is_some() {
+            return false;
+        }
+        View::zoom_wheel(&mut self.doc, delta, x, y)
+    }
+
+    fn zoom_key(&mut self, intent: koru_workspace_host::ZoomIntent) -> bool {
+        if self.close.is_some() {
+            return false;
+        }
+        View::zoom_key(&mut self.doc, intent)
+    }
+
     fn scroll_by(&mut self, delta: MouseScrollDelta) {
         if self.close.is_some() {
             return;
@@ -441,6 +457,10 @@ impl View for DocumentPane {
         ws: &WorkspaceDoc,
     ) -> Option<koru_workspace_host::SaveDiagram> {
         View::take_wants_save_diagram_as(&mut self.doc, ws)
+    }
+
+    fn take_wants_copy_diagram(&mut self) -> Option<koru_workspace_host::CopyDiagram> {
+        View::take_wants_copy_diagram(&mut self.doc)
     }
 
     fn take_wants_create_tag(&mut self) -> Option<(Vec<NodeId>, String)> {
@@ -1875,6 +1895,13 @@ impl View for ManagerView {
         match self {
             Self::Container(v) => v.take_wants_save_diagram_as(ws),
             Self::Document(v) => v.take_wants_save_diagram_as(ws),
+        }
+    }
+
+    fn take_wants_copy_diagram(&mut self) -> Option<koru_workspace_host::CopyDiagram> {
+        match self {
+            Self::Container(v) => v.take_wants_copy_diagram(),
+            Self::Document(v) => v.take_wants_copy_diagram(),
         }
     }
 

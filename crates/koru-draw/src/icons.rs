@@ -227,6 +227,18 @@ pub const PANEL_LEFT: char = '\u{EC24}';
 pub const PANEL_RIGHT: char = '\u{EAB6}';
 /// Open search — `ph-magnifying-glass`.
 pub const SEARCH: char = '\u{E30C}';
+/// See a drawing larger — `ph-magnifying-glass-plus`, the glass with a `+`
+/// in its lens. A drawn diagram's *Open* control wears it: the glyph says
+/// "closer", which is what the viewer it opens is for, where [`SEARCH`]
+/// would say "find". Read from the pinned Phosphor web 2.1.2 regular
+/// stylesheet beside `ph-magnifying-glass` (U+E30C) and
+/// `ph-magnifying-glass-minus` (U+E30E).
+pub const MAGNIFYING_GLASS_PLUS: char = '\u{E310}';
+/// Fit a picture to the window — `ph-arrows-in-simple`, two diagonal arrows
+/// pointing at each other. The diagram viewer's *Fit* control: the inverse
+/// of zooming, so the glyph points inward. Not `ph-arrows-in` (U+E09A), the
+/// four-arrow form `ARROW_UP`'s note warns about.
+pub const ARROWS_IN_SIMPLE: char = '\u{E09E}';
 /// Search the web — `ph-globe`.
 pub const GLOBE: char = '\u{E288}';
 /// A minus — `ph-minus`. The shape three jobs share, named once so the other
@@ -274,6 +286,12 @@ pub const FOLD_ALL: char = '\u{E532}';
 pub const UNFOLD_ALL: char = '\u{E536}';
 /// Import content — `ph-download-simple`.
 pub const IMPORT: char = '\u{E20C}';
+/// Save a picture to disk — a drawn diagram's *Save as…* control and the
+/// diagram viewer's. The same tray-and-arrow as [`IMPORT`], read the other
+/// way: there it is content coming in, here it is a file going down to
+/// disk, which is the glyph every browser and viewer uses for the same
+/// verb. An alias, so not in [`ALL`].
+pub const DOWNLOAD: char = IMPORT;
 /// A node with children — `ph-folder-simple`
 pub const FOLDER: char = '\u{E25A}';
 /// Work still going on — `ph-circle-notch`. An open ring, and the one glyph in

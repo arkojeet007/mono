@@ -2219,6 +2219,15 @@ pub const CONTROL_BORDER_W: f64 = 0.5;
 /// each way, and `reflow` adds the same above and below so the paragraphs
 /// around it do not end up inside it.
 pub const CODE_PAD: f32 = 8.0;
+/// How far a code block's panel reaches past its glyphs sideways.
+///
+/// Less than [`CODE_PAD`]: the drag grip ends six pixels before the text,
+/// and a panel reaching the full pad to the left sat two pixels over it.
+/// Four puts the edge between the grip and the first glyph, with air on
+/// both sides; the right edge keeps the same reach so the panel is
+/// symmetric. Above and below, nothing sits that close, so the vertical pad
+/// stays `CODE_PAD`.
+pub const CODE_PAD_X: f32 = 4.0;
 /// Vertical air above and below an image block.
 ///
 /// An image is opaque, so without this it paints over anything that hangs past
@@ -2226,6 +2235,16 @@ pub const CODE_PAD: f32 = 8.0;
 /// `reflow` adds it the same way as [`CODE_PAD`]: once above the row and once
 /// after it, so neighbours never sit flush against the picture.
 pub const IMAGE_PAD: f32 = 8.0;
+/// Air between a diagram block's panel and the rows around it, outside the
+/// `CODE_PAD` the panel keeps inside its border.
+///
+/// A code block's neighbours sit `TASK_GAP` from its border, and its text
+/// starts another `CODE_PAD` in, so the border reads as part of the block.
+/// A drawn diagram is a figure, the way an image is: a bordered picture two
+/// pixels under a paragraph's descenders reads as pressed against it.
+/// `reflow` adds this the way it adds [`IMAGE_PAD`], once above and once
+/// below, so the block keeps the same distance from both neighbours.
+pub const DIAGRAM_AIR: f32 = 8.0;
 /// Quiet air on each vertical side of a rendered table.
 ///
 /// Four pixels per side keeps a table attached to the surrounding prose while

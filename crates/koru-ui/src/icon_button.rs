@@ -86,6 +86,12 @@ impl<Action> IconButton<Action> {
         self.slot
     }
 
+    /// The glyph the button shows — for a caller, or a test, reading back
+    /// what a toolbar is drawing.
+    pub const fn glyph(&self) -> char {
+        self.glyph
+    }
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         self.slot.contains(x, y)
     }

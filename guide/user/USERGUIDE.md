@@ -115,7 +115,8 @@ or mirror its layout for RTL languages.
 ## Koru Cloud
 
 Settings uses searchable Appearance, Editor, Reminders, Terminal and System
-pages. Page names, new labels/hints and search terms follow the app language.
+pages; `Ctrl+,` opens it with the keyboard already in the search box. Page
+names, new labels/hints and search terms follow the app language.
 Search also accepts the existing English technical terms. On Windows, the
 play button beside the reminder tone previews it without saving a preference.
 Terminal theme, font and zoom apply to terminal output independently of the
@@ -1811,7 +1812,9 @@ without that tag.
 
 Pasting into a **code block** brings the text alone: no marks, no pills and no
 attributes, because a code block holds plain text. Text copied from another
-application carries no attributes either — there are none to carry.
+application carries no attributes either — there are none to carry — and
+pastes as plain text whichever paste you use, with Windows line endings read
+as ordinary ones.
 
 **It reaches other applications.** What you copy goes to the system clipboard as
 plain text — one line per task, indented with tabs, each pill spelled out as the
@@ -4027,7 +4030,9 @@ start of an interior line joins it with the line above.
 Hover a code block and a small **language chip** appears at its corner —
 `rust`, `python`, or `Auto` when none is set — with a **copy** icon to its
 left. Click the icon to copy the block's source; a *Copied to Clipboard*
-toast confirms it. Click the chip to pick a grammar (or `Auto` to clear it).
+toast confirms it. Click the chip to pick a grammar (or `Auto` to clear it); the list ends
+with **Mermaid**, which turns the block into a diagram — and turns a
+diagram that was switched to a grammar back into one.
 The dropdown opens with the chip's current value already
 active, entries highlight as the pointer crosses them, and `Enter` confirms
 the active one. Syntax color is derived from the text and the language;
@@ -4066,16 +4071,38 @@ control, or choose *Edit text* from the right-click menu) and the text opens
 above the drawing, which follows every keystroke. When a line cannot be read,
 the block says which one — *Line 7: this line could not be read* — and keeps
 the last drawing that worked beneath, labelled as such, until the text draws
-again. `Esc` closes the text; `Ctrl+Enter` leaves to a paragraph below. A
+again. `Esc` closes the text, and so does the check at the block's corner,
+left of the copy icon; `Ctrl+Enter` leaves to a paragraph below. A
 block that does not draw shows its text with the reason under it, never a
 stale drawing. A very large diagram shows its text with *Too large to draw:
 N boxes* (or *N messages*) rather than slow the page. An empty block shows
 *Describe a flowchart or a sequence diagram here*.
 
+**Looking closer.** Rest the pointer on a drawing and a small bar appears
+at the block's corner with four controls: a magnifier, *Copy image*, *Save
+as…* and *Edit text*. Click the magnifier — or double-click the drawing, or choose *Open*
+from the right-click menu — and the drawing opens in its own view over the
+page, at its natural size when that fits and fitted to the window when it
+does not. Zoom with the `−` and `+` at the bottom, `Ctrl`+wheel, `Ctrl+=`
+and `Ctrl+-`, or a pinch; `Ctrl+0` returns to natural size and the fit
+control shows the whole drawing again. A drawing larger than the window is
+scrolled with the wheel — `Shift`+wheel sideways, `Alt`+wheel up and
+down, whichever way the wheel turned — stepped with the arrow keys, or
+dragged, and never hides under the toolbar. The view takes the whole
+window, sidebar and all, so a large drawing is seen as large as the window
+allows. The view's copy control puts a picture on the
+clipboard and its save control saves one; `Esc`, the `×`, or a click
+anywhere on the dimmed window closes it.
+
 **Copying and saving.** Copy on a selected drawing copies the whole block;
 it arrives as a diagram wherever it is pasted in Koru, and as a fenced
-`mermaid` block in other applications. Right-click a drawing and choose
-*Save as…* — or press `Ctrl+Shift+X` on it — to save the picture as **PNG**
+`mermaid` block in other applications. *Copy image* in the right-click
+menu — or the copy control that appears on the drawing, or `Ctrl+C` in the
+drawing's own view — puts a picture of the drawing on the clipboard
+instead, at twice the screen size, ready to paste into a slide or a chat;
+the control shows a check while it does, the way every copy in Koru does.
+Right-click a drawing and choose *Save as…* — or press `Ctrl+Shift+X` on
+it, or click the save control beside the copy one — to save the picture as **PNG**
 (at twice the screen size) or **SVG**; both look like the drawing on screen
 on any machine, and the SVG needs no font. On Windows the dialog offers the
 two types; on macOS the extension you type decides (`.svg` for SVG,

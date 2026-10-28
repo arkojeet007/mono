@@ -530,6 +530,39 @@ fn searching_narrows_the_sidebar_by_what_a_page_holds() {
     assert!(!PageId::Terminal.matches(koru_i18n::Lang::En, "dictionary"));
 }
 
+/// `focus_search` is the chord's way in: the box takes the keyboard with its
+/// query selected, so the next search replaces the last one instead of being
+/// typed onto its end.
+#[test]
+fn focusing_the_search_box_selects_its_query_for_the_next_one() {
+    let _guard = GLOBALS.lock().unwrap_or_else(|held| held.into_inner());
+    let mut surface = koru();
+    assert!(!surface.search_focused());
+    surface.focus_search();
+    assert!(surface.search_focused());
+    let type_in = |surface: &mut SettingsSurface, word: &str| {
+        for c in word.chars() {
+            let text = c.to_string();
+            assert!(surface.key(
+                &WinitKey::Character(text.clone().into()),
+                Some(&text),
+                ModifiersState::empty()
+            ));
+        }
+    };
+    type_in(&mut surface, "microphone");
+    assert_eq!(surface.listed(), vec![PageId::Editor]);
+    // Focused again, the old query is selected: the new one replaces it.
+    surface.focus_search();
+    assert!(surface.search_focused());
+    type_in(&mut surface, "vulkan");
+    assert_eq!(
+        surface.listed(),
+        vec![PageId::System],
+        "\"vulkan\", not \"microphonevulkan\""
+    );
+}
+
 /// Blank space is blank space: the margins beside the page column belong to
 /// nobody.
 #[test]

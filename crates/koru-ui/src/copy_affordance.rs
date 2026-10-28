@@ -5,6 +5,12 @@
 //! Click writes plain text through [`clipboard::put_plain`] and reports
 //! [`Outcome::Copied`]. The caller raises the app toast with [`TOAST`]. This
 //! widget does not draw a toast — the container already owns the one.
+//!
+//! A copy the widget cannot make itself — a picture, rasterised by the
+//! shell on its next pass — still confirms the same way through
+//! [`CopyAffordance::confirm`]: the glyph turns to the check, holds, and
+//! returns, so every copy in the app looks like every other whatever wrote
+//! the clipboard.
 
 use std::time::{Duration, Instant};
 
@@ -59,10 +65,23 @@ impl CopyAffordance {
 
     pub fn click(&mut self, text: &str, now: Instant) -> Outcome {
         clipboard::put_plain(text);
+        self.confirm(now);
+        Outcome::Copied
+    }
+
+    /// Show the confirmation without writing anything: the glyph morphs to
+    /// the check, holds, and morphs back. For a copy someone else makes —
+    /// the shell putting a picture on the clipboard after this press.
+    pub fn confirm(&mut self, now: Instant) {
         self.tooltip.clear();
         self.tween.set(true, now);
         self.hold_until = Some(now + MORPH + HOLD);
-        Outcome::Copied
+    }
+
+    /// Whether the check is showing or on its way in or out — the span the
+    /// icon is drawn pressed.
+    pub fn confirming(&self) -> bool {
+        self.tween.is_on() || self.tween.progress() > 0.0
     }
 
     pub fn glyph(&self) -> char {
@@ -110,7 +129,7 @@ impl CopyAffordance {
         slot: Rect,
         hovered: bool,
     ) {
-        let confirming = self.tween.is_on() || self.tween.progress() > 0.0;
+        let confirming = self.confirming();
         if !hovered && !confirming {
             scene::fill(
                 canvas,
@@ -163,6 +182,27 @@ mod tests {
         affordance.maintain(after_hold);
         affordance.maintain(after_hold + MORPH);
         assert_eq!(affordance.glyph(), icons::COPY);
+    }
+
+    /// A confirmation without a copy leaves the clipboard alone and runs
+    /// the same morph, hold and return.
+    #[test]
+    fn confirm_shows_the_check_without_touching_the_clipboard() {
+        clipboard::put_plain("before");
+        let mut affordance = CopyAffordance::default();
+        let now = Instant::now();
+        assert!(!affordance.confirming());
+        affordance.confirm(now);
+        assert_eq!(clipboard::one_line().as_deref(), Some("before"));
+        assert_eq!(affordance.glyph(), icons::CHECK);
+        assert!(affordance.confirming());
+        assert!(affordance.maintenance_deadline().is_some());
+
+        let after_hold = now + MORPH + HOLD + Duration::from_millis(1);
+        affordance.maintain(after_hold);
+        affordance.maintain(after_hold + MORPH);
+        assert_eq!(affordance.glyph(), icons::COPY);
+        assert!(!affordance.confirming());
     }
 
     #[test]

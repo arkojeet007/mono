@@ -382,9 +382,19 @@ impl Paragraph {
     /// `meta.heading`, which it does not have and must not gain: a title is
     /// already the document's name, and writing a heading onto it would be a
     /// presentation choice broadcast to every peer.
+    ///
+    /// A code block has no level, whatever heading the node carried before
+    /// it became code: a heading turned into a ``` fence or a diagram would
+    /// otherwise keep the heading's size and leading, and read as a code
+    /// block set larger than every other. The heading stays on the node for
+    /// the day the block is turned back; it just does not draw while the
+    /// block is code.
     fn level(&self) -> Option<u8> {
         if self.is_title {
             return Some(theme::TITLE_LEVEL);
+        }
+        if self.kind == Kind::Code {
+            return None;
         }
         self.heading.map(Heading::level)
     }
